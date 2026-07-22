@@ -38,7 +38,8 @@ def test_connect_registers_speak_handler_and_starts_thread():
 
     conn.connect()
 
-    fake_client.on.assert_called_once_with("speak", conn._on_speak)
+    fake_client.on.assert_any_call("speak", conn._on_speak)
+    fake_client.on.assert_any_call("message", conn._on_any_message)
     fake_client.run_in_thread.assert_called_once()
 
 
@@ -77,3 +78,43 @@ def test_on_speak_handles_missing_utterance_key_gracefully():
     conn._on_speak(fake_message)
 
     assert received == [""]
+
+
+def test_on_activity_receives_summarized_lines():
+    conn, _ = _make_connection()
+    received = []
+    conn.on_activity(lambda line: received.append(line))
+
+    fake_message = MagicMock()
+    fake_message.msg_type = "ovos.common_reading.ping"
+    fake_message.data = {}
+    conn._on_any_message(fake_message)
+
+    assert received == ["📡 pipeline: pinging providers (0 candidates so far)"]
+
+
+def test_on_activity_skips_unrecognized_message_types():
+    conn, _ = _make_connection()
+    received = []
+    conn.on_activity(lambda line: received.append(line))
+
+    fake_message = MagicMock()
+    fake_message.msg_type = "some.internal.noise"
+    fake_message.data = {}
+    conn._on_any_message(fake_message)
+
+    assert received == []
+
+
+def test_on_activity_supports_multiple_handlers():
+    conn, _ = _make_connection()
+    calls = {"a": 0, "b": 0}
+    conn.on_activity(lambda line: calls.__setitem__("a", calls["a"] + 1))
+    conn.on_activity(lambda line: calls.__setitem__("b", calls["b"] + 1))
+
+    fake_message = MagicMock()
+    fake_message.msg_type = "intent_failure"
+    fake_message.data = {}
+    conn._on_any_message(fake_message)
+
+    assert calls == {"a": 1, "b": 1}

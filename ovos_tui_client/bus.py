@@ -7,6 +7,8 @@ import uuid
 
 from ovos_bus_client import MessageBusClient, Message
 
+from ovos_tui_client.activity import summarize_message
+
 
 class OVOSBusConnection:
     def __init__(self, host="127.0.0.1", port=8181, lang="en-us", client=None):
@@ -15,9 +17,11 @@ class OVOSBusConnection:
         self.lang = lang
         self._client = client or MessageBusClient(host=host, port=port)
         self._speak_handlers = []
+        self._activity_handlers = []
 
     def connect(self):
         self._client.on("speak", self._on_speak)
+        self._client.on("message", self._on_any_message)
         self._client.run_in_thread()
 
     def _on_speak(self, message):
@@ -25,11 +29,27 @@ class OVOSBusConnection:
         for handler in self._speak_handlers:
             handler(utterance)
 
+    def _on_any_message(self, message):
+        """Routes every bus message through the activity summarizer -
+        most are skipped (summarize_message returns None), only the
+        curated subset worth showing reaches the activity handlers."""
+        line = summarize_message(message.msg_type, message.data)
+        if line is None:
+            return
+        for handler in self._activity_handlers:
+            handler(line)
+
     def on_speak(self, handler):
         """Registers a callback(utterance: str) called whenever OVOS
         speaks. Multiple handlers can be registered (e.g. the
         conversation pane AND a transcript logger)."""
         self._speak_handlers.append(handler)
+
+    def on_activity(self, handler):
+        """Registers a callback(summary_line: str) called for every
+        bus message the activity summarizer considers worth showing -
+        see activity.py for the curated list."""
+        self._activity_handlers.append(handler)
 
     def send_utterance(self, text):
         """Simulates what a real STT pipeline would emit after hearing
