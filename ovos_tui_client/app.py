@@ -174,14 +174,11 @@ class OVOSTUIApp(App):
         border: solid $accent;
     }
     #log-toggles, #level-toggles, #skill-toggles {
-        height: 1;
+        height: auto;
     }
     #log-toggles Checkbox, #level-toggles Checkbox, #skill-toggles Checkbox {
-        color: $text;
-        background: $panel;
-    }
-    #log-toggles Checkbox:focus, #level-toggles Checkbox:focus, #skill-toggles Checkbox:focus {
-        background: $accent;
+        width: auto;
+        margin-right: 1;
     }
     #log-filter {
         height: 1;

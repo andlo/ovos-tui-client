@@ -36,6 +36,21 @@ async def test_a_log_toggle_checkbox_exists_per_source(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_toggle_row_is_tall_enough_not_to_clip_checkbox_content(tmp_path):
+    """Regression guard for a real bug found via live testing: the
+    toggle rows were fixed at height:1, but Checkbox widgets in
+    Textual 8.x render at a natural height of 3 - the extra 2 rows
+    were silently clipped away, making every checkbox's actual
+    label/glyph invisible while only its border/background showed.
+    The container must be at least as tall as its tallest child."""
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        container = app.query_one("#log-toggles")
+        checkbox = app.query_one("#toggle-skills", Checkbox)
+        assert container.region.height >= checkbox.region.height
+
+
+@pytest.mark.asyncio
 async def test_submitting_input_sends_utterance_and_clears_field(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:

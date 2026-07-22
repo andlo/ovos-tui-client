@@ -1,2 +1,2 @@
-textual>=0.60
+textual>=8.0
 ovos-bus-client
