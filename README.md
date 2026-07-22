@@ -27,15 +27,17 @@ on modern Python/setuptools).
 
 - **Logs**: tails every recognized OVOS service log file it finds
   (`bus.log`, `skills.log`, `audio.log`/`media.log`, `voice.log`,
-  `gui.log`, `enclosure.log`, `phal.log`), with a checkbox per source to
-  toggle it on/off, scrollable.
-- **Conversation**: what you typed and what OVOS said back, in two
-  distinct colors.
+  `gui.log`, `enclosure.log`, `phal.log`), each with its own color, a
+  checkbox per source to toggle it on/off, scrollable. Lines containing
+  `ERROR` are bolded so they stand out.
+- **Conversation**: what you typed (green, full line) and what OVOS
+  said back (blue, full line), auto-scrolling to the newest message.
 - **Activity**: a curated, simplified feed of what's happening on the
   bus right now - which skill is handling the request, and for
   `ovos.common_reading.*` traffic specifically, which providers
   answered, at what confidence, and whether content fetch succeeded.
-- **Input**: type what you'd say to OVOS, press Enter.
+- **Input**: type what you'd say to OVOS, press Enter. Up/Down arrows
+  browse previously submitted utterances, shell-history style.
 
 ## Install
 

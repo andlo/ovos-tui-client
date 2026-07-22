@@ -21,13 +21,28 @@ class OVOSBusConnection:
 
     def connect(self):
         self._client.on("speak", self._on_speak)
-        self._client.on("message", self._on_any_message)
+        self._client.on("message", self._on_raw_message)
         self._client.run_in_thread()
 
     def _on_speak(self, message):
         utterance = message.data.get("utterance", "")
         for handler in self._speak_handlers:
             handler(utterance)
+
+    def _on_raw_message(self, raw):
+        """The bus's 'message' catch-all event emits the raw serialized
+        JSON string, NOT a parsed Message object (confirmed by reading
+        ovos_bus_client.client.MessageBusClient.on_message's source -
+        it does `self.emitter.emit('message', message)` with the raw
+        string, separately from `self.emitter.emit(parsed_message.msg_type,
+        parsed_message)` for the real object). Deserializing here was
+        the missing step that silently made the whole activity pane a
+        no-op."""
+        try:
+            message = Message.deserialize(raw)
+        except Exception:
+            return
+        self._on_any_message(message)
 
     def _on_any_message(self, message):
         """Routes every bus message through the activity summarizer -

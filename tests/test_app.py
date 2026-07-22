@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 from textual.widgets import RichLog, Input, Checkbox
 
-from ovos_tui_client.app import OVOSTUIApp
+from ovos_tui_client.app import OVOSTUIApp, format_log_line
 
 
 def _app_with_fake_bus(tmp_path):
@@ -80,3 +80,117 @@ async def test_no_log_sources_shows_a_helpful_message(tmp_path):
         # should not crash, and the logs view should have SOME content
         # (the "no logs found" notice) rather than being silently empty
         assert app.log_sources == []
+
+
+# --- format_log_line: per-source color + ERROR bolding ---
+
+def test_format_log_line_colors_by_known_source():
+    line = format_log_line("skills", "loaded ovos-skill-grimm-tales")
+    assert line == "[green]\\[skills] loaded ovos-skill-grimm-tales[/green]"
+
+
+def test_format_log_line_falls_back_to_default_color_for_unknown_source():
+    line = format_log_line("mystery-service", "hello")
+    assert line == "[white]\\[mystery-service] hello[/white]"
+
+
+def test_format_log_line_bolds_error_lines():
+    line = format_log_line("skills", "ERROR: could not load skill")
+    assert line == "[bold][green]\\[skills] ERROR: could not load skill[/green][/bold]"
+
+
+def test_format_log_line_does_not_bold_normal_lines():
+    line = format_log_line("skills", "handling intent normally")
+    assert "[bold]" not in line
+
+
+# --- conversation pane: full-line color, not just the label ---
+
+@pytest.mark.asyncio
+async def test_you_line_is_fully_green(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        conv = app.query_one("#conversation", RichLog)
+        conv.write = MagicMock(wraps=conv.write)
+
+        input_widget = app.query_one("#utterance-input", Input)
+        input_widget.value = "read me a grimm story"
+        await pilot.press("enter")
+
+        conv.write.assert_any_call("[green]You: read me a grimm story[/green]")
+
+
+@pytest.mark.asyncio
+async def test_ovos_line_is_fully_blue(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        conv = app.query_one("#conversation", RichLog)
+        conv.write = MagicMock(wraps=conv.write)
+
+        # _write_conversation is the part _handle_speak marshals onto the
+        # app's own thread via call_from_thread - testing it directly
+        # here, since call_from_thread itself refuses to run when called
+        # from the same thread as the app (which is exactly this test).
+        app._write_conversation("[blue]OVOS: Here is Cinderella, by the Brothers Grimm[/blue]")
+        await pilot.pause()
+
+        conv.write.assert_any_call("[blue]OVOS: Here is Cinderella, by the Brothers Grimm[/blue]")
+
+
+@pytest.mark.asyncio
+async def test_handle_speak_formats_the_line_correctly(tmp_path):
+    """Verifies _handle_speak itself builds the right string, without
+    actually crossing call_from_thread's same-thread guard - mocks
+    call_from_thread to inspect what it was asked to marshal."""
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        app.call_from_thread = MagicMock()
+
+        app._handle_speak("Here is Cinderella")
+
+        app.call_from_thread.assert_called_once_with(
+            app._write_conversation, "[blue]OVOS: Here is Cinderella[/blue]"
+        )
+
+
+# --- command history: up/down browses previously submitted utterances ---
+
+@pytest.mark.asyncio
+async def test_up_arrow_recalls_previous_utterance(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        input_widget = app.query_one("#utterance-input", Input)
+        input_widget.value = "first utterance"
+        await pilot.press("enter")
+        input_widget.value = "second utterance"
+        await pilot.press("enter")
+
+        await pilot.press("up")
+        assert input_widget.value == "second utterance"
+
+        await pilot.press("up")
+        assert input_widget.value == "first utterance"
+
+
+@pytest.mark.asyncio
+async def test_up_then_down_returns_towards_newest_then_clears(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        input_widget = app.query_one("#utterance-input", Input)
+        input_widget.value = "only utterance"
+        await pilot.press("enter")
+
+        await pilot.press("up")
+        assert input_widget.value == "only utterance"
+
+        await pilot.press("down")
+        assert input_widget.value == ""
+
+
+@pytest.mark.asyncio
+async def test_up_arrow_with_no_history_does_nothing(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        input_widget = app.query_one("#utterance-input", Input)
+        await pilot.press("up")
+        assert input_widget.value == ""

@@ -1,5 +1,6 @@
 """Tests for OVOSBusConnection using a fake MessageBusClient - no real
 network connection needed."""
+import json
 from unittest.mock import MagicMock
 
 from ovos_tui_client.bus import OVOSBusConnection
@@ -39,7 +40,7 @@ def test_connect_registers_speak_handler_and_starts_thread():
     conn.connect()
 
     fake_client.on.assert_any_call("speak", conn._on_speak)
-    fake_client.on.assert_any_call("message", conn._on_any_message)
+    fake_client.on.assert_any_call("message", conn._on_raw_message)
     fake_client.run_in_thread.assert_called_once()
 
 
@@ -118,3 +119,29 @@ def test_on_activity_supports_multiple_handlers():
     conn._on_any_message(fake_message)
 
     assert calls == {"a": 1, "b": 1}
+
+
+def test_on_raw_message_deserializes_before_summarizing():
+    """Regression guard for the actual bug found in testing: the bus's
+    'message' catch-all emits a raw JSON STRING, not a Message object
+    (confirmed by reading ovos_bus_client's source) - _on_raw_message
+    must deserialize it first, or the activity pane silently never
+    receives anything."""
+    conn, _ = _make_connection()
+    received = []
+    conn.on_activity(lambda line: received.append(line))
+
+    raw_json = json.dumps({"type": "ovos.common_reading.ping", "data": {}, "context": {}})
+    conn._on_raw_message(raw_json)
+
+    assert received == ["📡 pipeline: pinging providers (0 candidates so far)"]
+
+
+def test_on_raw_message_ignores_malformed_json_without_crashing():
+    conn, _ = _make_connection()
+    received = []
+    conn.on_activity(lambda line: received.append(line))
+
+    conn._on_raw_message("not valid json at all {{{")
+
+    assert received == []
