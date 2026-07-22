@@ -297,3 +297,67 @@ async def test_pressing_enter_in_filter_box_does_not_send_an_utterance(tmp_path)
         await pilot.press("enter")
 
         app.bus.send_utterance.assert_not_called()
+
+
+# --- log level filtering ---
+
+@pytest.mark.asyncio
+async def test_level_toggle_checkboxes_exist_for_all_known_levels(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        for level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+            assert app.query_one(f"#level-{level}", Checkbox) is not None
+
+
+@pytest.mark.asyncio
+async def test_unchecking_error_level_hides_error_lines_but_keeps_info(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        app.log_buffer.append(("skills", "module:func:1 - INFO - all good"))
+        app.log_buffer.append(("skills", "module:func:2 - ERROR - something broke"))
+
+        checkbox = app.query_one("#level-ERROR", Checkbox)
+        checkbox.value = False
+        await pilot.pause()
+
+        view = app.query_one("#logs-view", RichLog)
+        rendered = "\n".join(str(line) for line in view.lines)
+        assert "all good" in rendered
+        assert "something broke" not in rendered
+
+
+# --- skill-id filtering (dynamic checkboxes) ---
+
+@pytest.mark.asyncio
+async def test_a_new_skill_checkbox_appears_the_first_time_its_id_is_seen(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        src = app.log_sources[0]
+        src.read_new_lines = MagicMock(return_value=[
+            "IntentHandlerMatch(skill_id='ovos-skill-grimm-tales.andlo')"
+        ])
+        for s in app.log_sources[1:]:
+            s.read_new_lines = MagicMock(return_value=[])
+
+        app._poll_logs()
+        await pilot.pause()
+
+        assert app.query_one("#skillfilter-ovos-skill-grimm-tales-andlo", Checkbox) is not None
+
+
+@pytest.mark.asyncio
+async def test_unchecking_a_skill_hides_only_its_lines(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        app.log_buffer.append(("skills", "handling for skill_id=grimm-tales now"))
+        app.log_buffer.append(("skills", "handling for skill_id=andersen-tales now"))
+        app.skill_enabled = {"grimm-tales": True, "andersen-tales": True}
+
+        app.skill_enabled["grimm-tales"] = False
+        app._rerender_logs()
+        await pilot.pause()
+
+        view = app.query_one("#logs-view", RichLog)
+        rendered = "\n".join(str(line) for line in view.lines)
+        assert "grimm-tales" not in rendered
+        assert "andersen-tales" in rendered

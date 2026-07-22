@@ -28,14 +28,19 @@ on modern Python/setuptools).
 - **Logs**: tails every recognized OVOS service log file it finds
   (`bus.log`, `skills.log`, `audio.log`/`media.log`, `voice.log`,
   `gui.log`, `enclosure.log`, `phal.log`), each with its own color, a
-  checkbox per source to toggle it on/off, plus a free-text filter box
-  - both apply retroactively to already-received lines, not just new
-  ones. OVOS's own `TIMESTAMP - COMPONENT - ` prefix is stripped (both
-  are redundant with the live scroll position and the `[source]` tag
-  this UI already adds), and every `[source]` tag is padded to the
-  same width so message text lines up in one column regardless of
-  source name length. Lines containing `ERROR` are bolded so they
-  stand out.
+  checkbox per source to toggle it on/off, plus per-**log-level**
+  checkboxes (DEBUG/INFO/WARNING/ERROR/CRITICAL) and per-**skill**
+  checkboxes (dynamically added the first time a skill_id is seen in
+  the log text - best-effort, not every skill-related line mentions
+  its own skill_id explicitly), plus a free-text filter box - all of
+  these apply retroactively to already-received lines, not just new
+  ones. OVOS's own `TIMESTAMP - COMPONENT - ` prefix is stripped, and
+  every `[source]` tag is padded to the same width so message text
+  lines up in one column. Lines containing `ERROR` are bolded.
+- **F2**: opens a services panel listing discovered `ovos-*.service`
+  systemd --user units - select one and press Enter to restart it.
+- **F3**: opens a panel listing currently loaded skills (requested via
+  the bus).
 - **Conversation**: what you typed (green, full line) and what OVOS
   said back (blue, full line), auto-scrolling to the newest message.
 - **Activity**: a curated, simplified feed of what's happening on the

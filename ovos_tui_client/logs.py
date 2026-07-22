@@ -112,3 +112,40 @@ def strip_log_prefix(line: str) -> str:
     returns the line unchanged if it doesn't match (e.g. a continuation
     line of a multi-line traceback, which has no prefix of its own)."""
     return _LOG_PREFIX_RE.sub("", line, count=1)
+
+
+KNOWN_LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+# After strip_log_prefix, a normal line looks like
+#   MODULE:FUNC:LINE - LEVEL - MESSAGE
+# LEVEL is a reliable, structured field (standard Python logging
+# convention) - unlike skill identity below, this is a clean regex
+# match, not a heuristic.
+_LOG_LEVEL_RE = re.compile(r"-\s*(" + "|".join(KNOWN_LOG_LEVELS) + r")\s*-")
+
+
+def extract_log_level(line: str):
+    """Returns the log level (e.g. 'ERROR') found in a line already
+    passed through strip_log_prefix(), or None if no recognized level
+    token is present (e.g. a traceback continuation line)."""
+    match = _LOG_LEVEL_RE.search(line)
+    return match.group(1) if match else None
+
+
+# Best-effort only, unlike extract_log_level above: OVOS doesn't log a
+# structured "which skill" field on every skills.log line - many
+# skill-related lines come from shared base-class code (ovos_workshop.
+# skills.ovos:speak, etc) with no per-instance identity in the text at
+# all. This only catches lines that happen to mention a skill_id
+# explicitly (e.g. inside a dict repr like "'skill_id': 'x.andlo'", or
+# a bare "skill_id=x.andlo") - it will miss plenty of genuinely
+# skill-specific lines that don't happen to spell out their own
+# skill_id. Still useful as an opt-in filter, just not a complete one.
+_SKILL_ID_RE = re.compile(r"skill_id['\"]?\s*[:=]\s*['\"]?([\w.\-]+)['\"]?")
+
+
+def extract_skill_id(line: str):
+    """Returns a skill_id substring found in a line's text, or None.
+    Best-effort - see module note above."""
+    match = _SKILL_ID_RE.search(line)
+    return match.group(1) if match else None

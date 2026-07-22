@@ -3,7 +3,7 @@ worth being paranoid about, since the log directory location varies by
 OVOS install method and isn't reliably documented."""
 from ovos_tui_client.logs import (
     LogSource, find_log_dir, discover_log_sources, line_matches_filter,
-    strip_log_prefix, CANDIDATE_LOG_DIRS,
+    strip_log_prefix, extract_log_level, extract_skill_id, CANDIDATE_LOG_DIRS,
 )
 
 
@@ -118,3 +118,33 @@ def test_strip_log_prefix_handles_comma_millisecond_separator():
     milliseconds (the stdlib default asctime format)."""
     line = "2026-07-22 21:13:03,456 - skills - some_module:func:12 - INFO - hello"
     assert strip_log_prefix(line) == "some_module:func:12 - INFO - hello"
+
+
+def test_extract_log_level_finds_the_level_after_prefix_stripping():
+    line = "ovos_messagebus.__main__:main:46 - INFO - Starting..."
+    assert extract_log_level(line) == "INFO"
+
+
+def test_extract_log_level_finds_error():
+    line = "some_module:func:12 - ERROR - Failed to get audio"
+    assert extract_log_level(line) == "ERROR"
+
+
+def test_extract_log_level_returns_none_for_unrecognized_lines():
+    line = '    File "/home/ovos/skill.py", line 42, in handle_search'
+    assert extract_log_level(line) is None
+
+
+def test_extract_skill_id_finds_dict_style_reference():
+    line = "IntentHandlerMatch(match_type='stop:skill', match_data={'conf': 1.0, 'skill_id': 'stop.openvoiceos'}"
+    assert extract_skill_id(line) == "stop.openvoiceos"
+
+
+def test_extract_skill_id_finds_kwarg_style_reference():
+    line = "fetching content for skill_id=ovos-skill-grimm-tales.andlo now"
+    assert extract_skill_id(line) == "ovos-skill-grimm-tales.andlo"
+
+
+def test_extract_skill_id_returns_none_when_absent():
+    line = "ovos_core.intent_services.service:handle_utterance:450 - INFO - Parsing utterance: ['stop']"
+    assert extract_skill_id(line) is None

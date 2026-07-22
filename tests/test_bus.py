@@ -145,3 +145,91 @@ def test_on_raw_message_ignores_malformed_json_without_crashing():
     conn._on_raw_message("not valid json at all {{{")
 
     assert received == []
+
+
+def test_list_skills_sends_skillmanager_list_request():
+    conn, fake_client = _make_connection()
+    conn.list_skills(lambda skills: None, timer_factory=MagicMock())
+
+    fake_client.emit.assert_called_once()
+    sent = fake_client.emit.call_args[0][0]
+    assert sent.msg_type == "skillmanager.list"
+
+
+def test_list_skills_registers_a_once_handler():
+    conn, fake_client = _make_connection()
+    conn.list_skills(lambda skills: None, timer_factory=MagicMock())
+
+    fake_client.once.assert_called_once()
+    assert fake_client.once.call_args[0][0] == "mycroft.skills.list"
+
+
+def test_list_skills_calls_callback_with_skills_on_response():
+    conn, fake_client = _make_connection()
+    received = []
+    conn.list_skills(lambda skills: received.append(skills), timer_factory=MagicMock())
+
+    response_handler = fake_client.once.call_args[0][1]
+    fake_message = MagicMock()
+    fake_message.data = {"skills": ["ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"]}
+    response_handler(fake_message)
+
+    assert received == [["ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"]]
+
+
+def test_list_skills_falls_back_to_data_keys_if_no_skills_field():
+    """Defensive fallback for the case where the response format
+    differs from the assumed convention - see the honesty note in
+    list_skills()'s docstring about this being unverified."""
+    conn, fake_client = _make_connection()
+    received = []
+    conn.list_skills(lambda skills: received.append(skills), timer_factory=MagicMock())
+
+    response_handler = fake_client.once.call_args[0][1]
+    fake_message = MagicMock()
+    fake_message.data = {"ovos-skill-grimm-tales.andlo": {}, "ovos-skill-andersen-tales.andlo": {}}
+    response_handler(fake_message)
+
+    assert set(received[0]) == {"ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"}
+
+
+def test_list_skills_calls_callback_with_none_on_timeout():
+    conn, fake_client = _make_connection()
+    received = []
+
+    class ImmediateTimer:
+        def __init__(self, interval, function):
+            self.function = function
+
+        def start(self):
+            self.function()  # fire immediately, simulating timeout
+
+    conn.list_skills(lambda skills: received.append(skills), timer_factory=ImmediateTimer)
+
+    assert received == [None]
+
+
+def test_list_skills_timeout_does_not_fire_if_response_already_received():
+    conn, fake_client = _make_connection()
+    received = []
+    fired_timer = {}
+
+    class DeferredTimer:
+        def __init__(self, interval, function):
+            fired_timer["fn"] = function
+
+        def start(self):
+            pass  # deliberately doesn't fire yet - fired manually below
+
+    conn.list_skills(lambda skills: received.append(skills), timer_factory=DeferredTimer)
+    response_handler = fake_client.once.call_args[0][1]
+    fake_message = MagicMock()
+    fake_message.data = {"skills": ["ovos-skill-grimm-tales.andlo"]}
+
+    response_handler(fake_message)  # the real response arrives first
+    fired_timer["fn"]()  # then the timeout check runs afterward
+
+    # only the real response should have reached the callback - the
+    # timeout check must see state["received"] is already True and
+    # skip calling back with None
+    assert received == [["ovos-skill-grimm-tales.andlo"]]

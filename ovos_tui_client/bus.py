@@ -3,6 +3,7 @@ if it came from STT, and a callback-based interface for incoming
 'speak' events (OVOS's response) - decoupled from Textual itself so
 this module has no UI framework dependency and can be tested without
 spinning up a real App."""
+import threading
 import uuid
 
 from ovos_bus_client import MessageBusClient, Message
@@ -75,3 +76,37 @@ class OVOSBusConnection:
             "lang": self.lang,
             "utterance_id": str(uuid.uuid4()),
         }))
+
+    def list_skills(self, callback, timeout=5, timer_factory=None):
+        """Requests the list of currently loaded skills via the classic
+        mycroft-core 'skillmanager.list' -> 'mycroft.skills.list'
+        bus convention (OVOS maintains backward compatibility with
+        most mycroft-core bus messages). Calls callback(skill_ids) once
+        a response arrives, or callback(None) if nothing arrives within
+        `timeout` seconds.
+
+        This exact response event/format is based on the documented
+        mycroft-core convention, not verified against a live modern
+        OVOS instance - if your install responds on a different event
+        name, that's the one line to change.
+
+        `timer_factory` is injectable for testing (defaults to
+        threading.Timer) so tests don't have to sleep for real."""
+        state = {"received": False}
+
+        def _on_response(message):
+            state["received"] = True
+            skills = message.data.get("skills")
+            if skills is None:
+                skills = list(message.data.keys())
+            callback(skills)
+
+        self._client.once("mycroft.skills.list", _on_response)
+        self._client.emit(Message("skillmanager.list"))
+
+        def _timeout_check():
+            if not state["received"]:
+                callback(None)
+
+        timer_factory = timer_factory or threading.Timer
+        timer_factory(timeout, _timeout_check).start()
