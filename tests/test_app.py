@@ -82,26 +82,54 @@ async def test_no_log_sources_shows_a_helpful_message(tmp_path):
         assert app.log_sources == []
 
 
-# --- format_log_line: per-source color + ERROR bolding ---
+# --- format_log_line: per-source color + padding + ERROR bolding + timestamp/component stripping ---
 
 def test_format_log_line_colors_by_known_source():
     line = format_log_line("skills", "loaded ovos-skill-grimm-tales")
-    assert line == "[green]\\[skills] loaded ovos-skill-grimm-tales[/green]"
+    assert line == "[green]\\[skills   ][/green] loaded ovos-skill-grimm-tales"
 
 
 def test_format_log_line_falls_back_to_default_color_for_unknown_source():
     line = format_log_line("mystery-service", "hello")
-    assert line == "[white]\\[mystery-service] hello[/white]"
+    assert line == "[white]\\[mystery-service][/white] hello"
 
 
 def test_format_log_line_bolds_error_lines():
     line = format_log_line("skills", "ERROR: could not load skill")
-    assert line == "[bold][green]\\[skills] ERROR: could not load skill[/green][/bold]"
+    assert line == "[bold][green]\\[skills   ][/green] ERROR: could not load skill[/bold]"
 
 
 def test_format_log_line_does_not_bold_normal_lines():
     line = format_log_line("skills", "handling intent normally")
     assert "[bold]" not in line
+
+
+def test_format_log_line_pads_short_names_to_align_with_longest():
+    """'bus' (3 chars) and 'enclosure' (9 chars, the longest known
+    source) must produce tags of the same total width, so message text
+    starts at the same column regardless of which source it's from."""
+    import re
+    bus_line = format_log_line("bus", "short name")
+    enclosure_line = format_log_line("enclosure", "long name")
+
+    # extract the escaped-bracket tag content, e.g. 'bus      ' from
+    # '[magenta]\[bus      ][/magenta] ...' - not the first ']', which
+    # would be the color markup tag's own closer and differs in length
+    # between colors ('magenta' vs 'white') regardless of padding
+    bus_tag = re.search(r"\\\[(.*?)\]", bus_line).group(1)
+    enclosure_tag = re.search(r"\\\[(.*?)\]", enclosure_line).group(1)
+    assert len(bus_tag) == len(enclosure_tag)
+
+
+def test_format_log_line_strips_timestamp_and_component_prefix():
+    """Integration of format_log_line with strip_log_prefix - the raw
+    OVOS-formatted line's own timestamp/component fields shouldn't
+    appear in the final rendered text at all."""
+    raw = "2026-07-22 21:13:03.456 - skills - some_module:func:12 - INFO - handling intent"
+    line = format_log_line("skills", raw)
+
+    assert "2026-07-22" not in line
+    assert line == "[green]\\[skills   ][/green] some_module:func:12 - INFO - handling intent"
 
 
 # --- conversation pane: full-line color, not just the label ---

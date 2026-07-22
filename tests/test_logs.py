@@ -1,7 +1,10 @@
 """Tests for log discovery and tailing - the part of this tool most
 worth being paranoid about, since the log directory location varies by
 OVOS install method and isn't reliably documented."""
-from ovos_tui_client.logs import LogSource, find_log_dir, discover_log_sources, line_matches_filter, CANDIDATE_LOG_DIRS
+from ovos_tui_client.logs import (
+    LogSource, find_log_dir, discover_log_sources, line_matches_filter,
+    strip_log_prefix, CANDIDATE_LOG_DIRS,
+)
 
 
 def test_read_new_lines_returns_only_appended_content(tmp_path):
@@ -91,3 +94,27 @@ def test_line_matches_filter_case_insensitive_substring():
     assert line_matches_filter("Could not load ovos-skill-grimm-tales", "grimm") is True
     assert line_matches_filter("Could not load ovos-skill-grimm-tales", "GRIMM") is True
     assert line_matches_filter("Could not load ovos-skill-grimm-tales", "andersen") is False
+
+
+def test_strip_log_prefix_removes_timestamp_and_component():
+    line = "2024-12-07 07:51:04.662 - bus - ovos_messagebus.__main__:main:46 - INFO - Starting..."
+    assert strip_log_prefix(line) == "ovos_messagebus.__main__:main:46 - INFO - Starting..."
+
+
+def test_strip_log_prefix_works_for_any_component_name():
+    line = "2026-07-22 21:13:03.456 - PHAL - some_module:func:12 - WARNING - device not found"
+    assert strip_log_prefix(line) == "some_module:func:12 - WARNING - device not found"
+
+
+def test_strip_log_prefix_leaves_non_matching_lines_unchanged():
+    """Continuation lines of a multi-line traceback have no prefix of
+    their own - these must pass through untouched, not get mangled."""
+    line = "    File \"/home/ovos/skill.py\", line 42, in handle_search"
+    assert strip_log_prefix(line) == line
+
+
+def test_strip_log_prefix_handles_comma_millisecond_separator():
+    """Some Python logging configs use a comma instead of a dot before
+    milliseconds (the stdlib default asctime format)."""
+    line = "2026-07-22 21:13:03,456 - skills - some_module:func:12 - INFO - hello"
+    assert strip_log_prefix(line) == "some_module:func:12 - INFO - hello"

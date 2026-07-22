@@ -24,10 +24,16 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Header, Footer, Input, RichLog, Checkbox
 
 from ovos_tui_client.bus import OVOSBusConnection
-from ovos_tui_client.logs import find_log_dir, discover_log_sources, line_matches_filter
+from ovos_tui_client.logs import find_log_dir, discover_log_sources, line_matches_filter, strip_log_prefix, KNOWN_LOG_NAMES
 
 LOG_POLL_INTERVAL = 0.5  # seconds
 LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
+
+# All [source] tags are padded to this width so message text lines up
+# in the same column regardless of source name length ('bus' vs
+# 'enclosure'). Based on the full known list, not just currently active
+# sources, so toggling a source on/off doesn't shift alignment around.
+SOURCE_TAG_WIDTH = max(len(name) for name in KNOWN_LOG_NAMES)
 
 # One color per known log source (see logs.py's KNOWN_LOG_NAMES) - any
 # source not listed here falls back to DEFAULT_LOG_COLOR rather than
@@ -48,10 +54,19 @@ DEFAULT_LOG_COLOR = "white"
 def format_log_line(source_name: str, line: str) -> str:
     """Colors a log line by its source, bolding it if it contains
     'ERROR' - pulled out as a standalone function so it's testable
-    without a running App."""
+    without a running App.
+
+    Strips OVOS's own 'TIMESTAMP - COMPONENT - ' prefix first (see
+    logs.strip_log_prefix - both fields are redundant here: the
+    timestamp isn't useful in a live-scrolling view, and the component
+    name just repeats the [source] tag this function adds), and pads
+    the source tag to a fixed width so message text starts at the same
+    column regardless of source name length."""
+    clean_line = strip_log_prefix(line)
     color = LOG_SOURCE_COLORS.get(source_name, DEFAULT_LOG_COLOR)
-    text = f"[{color}]\\[{source_name}] {line}[/{color}]"
-    if "ERROR" in line:
+    padded_name = source_name.ljust(SOURCE_TAG_WIDTH)
+    text = f"[{color}]\\[{padded_name}][/{color}] {clean_line}"
+    if "ERROR" in clean_line:
         text = f"[bold]{text}[/bold]"
     return text
 

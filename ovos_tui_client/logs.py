@@ -10,6 +10,7 @@ list doesn't anticipate.
 """
 from pathlib import Path
 from dataclasses import dataclass, field
+import re
 
 # Ordered by how likely each is on a modern (2026) ovos-installer
 # venv-based install - see module docstring. Not exhaustive by design;
@@ -92,3 +93,22 @@ def line_matches_filter(line: str, filter_text: str) -> bool:
     if not filter_text:
         return True
     return filter_text.lower() in line.lower()
+
+
+# OVOS's own log lines look like:
+#   2024-12-07 07:51:04.662 - bus - ovos_messagebus.__main__:main:46 - INFO - Starting...
+# i.e. TIMESTAMP - COMPONENT - MODULE:FUNC:LINE - LEVEL - MESSAGE. Both
+# the timestamp and the component name duplicate information the TUI
+# already shows itself (live scroll position, and the [source] prefix
+# format_log_line() adds) - stripping them here declutters the display
+# without losing anything.
+_LOG_PREFIX_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\s*-\s*[^-]+\s*-\s*"
+)
+
+
+def strip_log_prefix(line: str) -> str:
+    """Removes the leading 'TIMESTAMP - COMPONENT - ' prefix if present;
+    returns the line unchanged if it doesn't match (e.g. a continuation
+    line of a multi-line traceback, which has no prefix of its own)."""
+    return _LOG_PREFIX_RE.sub("", line, count=1)

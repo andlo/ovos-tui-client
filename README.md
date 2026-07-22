@@ -30,7 +30,12 @@ on modern Python/setuptools).
   `gui.log`, `enclosure.log`, `phal.log`), each with its own color, a
   checkbox per source to toggle it on/off, plus a free-text filter box
   - both apply retroactively to already-received lines, not just new
-  ones. Lines containing `ERROR` are bolded so they stand out.
+  ones. OVOS's own `TIMESTAMP - COMPONENT - ` prefix is stripped (both
+  are redundant with the live scroll position and the `[source]` tag
+  this UI already adds), and every `[source]` tag is padded to the
+  same width so message text lines up in one column regardless of
+  source name length. Lines containing `ERROR` are bolded so they
+  stand out.
 - **Conversation**: what you typed (green, full line) and what OVOS
   said back (blue, full line), auto-scrolling to the newest message.
 - **Activity**: a curated, simplified feed of what's happening on the
