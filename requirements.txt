@@ -1,2 +1,9 @@
-textual>=8.0
+# NOTE: do not bump this floor to >=8.0 without checking co-installation
+# with ovos-core's own packages first - ovos-utils pins rich~=13.7, while
+# textual>=8.0 requires rich>=14.2.0. Since this tool is meant to run in
+# the SAME venv as OVOS itself, that combination is unresolvable and
+# will hang pip in endless backtracking. A wide floor here lets pip
+# resolve whatever version is actually compatible with the rest of the
+# OVOS install it's being added to.
+textual>=0.60
 ovos-bus-client

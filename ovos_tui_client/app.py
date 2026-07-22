@@ -24,6 +24,7 @@ from collections import deque
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Header, Footer, Input, RichLog, Checkbox, Label, ListView, ListItem
 
@@ -287,12 +288,25 @@ class OVOSTUIApp(App):
         if skill_id is None or skill_id in self.skill_enabled:
             return
         self.skill_enabled[skill_id] = True
-        container = self.query_one("#skill-toggles", Horizontal)
+        try:
+            container = self.query_one("#skill-toggles", Horizontal)
+        except NoMatches:
+            return  # app tearing down - see _poll_logs's docstring
         widget_id = "skillfilter-" + skill_id.replace(".", "-").replace("_", "-")
         container.mount(Checkbox(skill_id, value=True, id=widget_id))
 
     def _poll_logs(self) -> None:
-        view = self.query_one("#logs-view", RichLog)
+        """Runs on a recurring timer (set_interval) - can fire during
+        app teardown (e.g. right as a test's `async with app.run_test()`
+        block exits, before the timer itself has been cancelled),
+        which is a real, if intermittent, source of test flakiness:
+        the '#logs-view' widget can already be gone by the time this
+        callback runs. NoMatches here just means 'nothing to update
+        anymore', not a bug - skip this tick rather than crash."""
+        try:
+            view = self.query_one("#logs-view", RichLog)
+        except NoMatches:
+            return
         for src in self.log_sources:
             new_lines = src.read_new_lines()
             for line in new_lines:
