@@ -28,8 +28,9 @@ on modern Python/setuptools).
 - **Logs**: tails every recognized OVOS service log file it finds
   (`bus.log`, `skills.log`, `audio.log`/`media.log`, `voice.log`,
   `gui.log`, `enclosure.log`, `phal.log`), each with its own color, a
-  checkbox per source to toggle it on/off, scrollable. Lines containing
-  `ERROR` are bolded so they stand out.
+  checkbox per source to toggle it on/off, plus a free-text filter box
+  - both apply retroactively to already-received lines, not just new
+  ones. Lines containing `ERROR` are bolded so they stand out.
 - **Conversation**: what you typed (green, full line) and what OVOS
   said back (blue, full line), auto-scrolling to the newest message.
 - **Activity**: a curated, simplified feed of what's happening on the

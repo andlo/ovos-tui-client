@@ -194,3 +194,78 @@ async def test_up_arrow_with_no_history_does_nothing(tmp_path):
         input_widget = app.query_one("#utterance-input", Input)
         await pilot.press("up")
         assert input_widget.value == ""
+
+
+# --- log filtering: free text + source toggles, both retroactive ---
+
+@pytest.mark.asyncio
+async def test_log_filter_input_exists(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        assert app.query_one("#log-filter", Input) is not None
+
+
+@pytest.mark.asyncio
+async def test_typing_in_filter_hides_non_matching_lines(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        app.log_buffer.append(("skills", "loaded ovos-skill-grimm-tales"))
+        app.log_buffer.append(("skills", "loaded ovos-skill-andersen-tales"))
+
+        filter_input = app.query_one("#log-filter", Input)
+        filter_input.value = "grimm"
+        await pilot.pause()
+
+        view = app.query_one("#logs-view", RichLog)
+        rendered = "\n".join(str(line) for line in view.lines)
+        assert "grimm" in rendered.lower()
+        assert "andersen" not in rendered.lower()
+
+
+@pytest.mark.asyncio
+async def test_clearing_filter_shows_everything_again(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        app.log_buffer.append(("skills", "loaded ovos-skill-grimm-tales"))
+        app.log_buffer.append(("skills", "loaded ovos-skill-andersen-tales"))
+
+        filter_input = app.query_one("#log-filter", Input)
+        filter_input.value = "grimm"
+        await pilot.pause()
+        filter_input.value = ""
+        await pilot.pause()
+
+        view = app.query_one("#logs-view", RichLog)
+        rendered = "\n".join(str(line) for line in view.lines)
+        assert "grimm" in rendered.lower()
+        assert "andersen" in rendered.lower()
+
+
+@pytest.mark.asyncio
+async def test_toggling_source_off_retroactively_hides_its_lines(tmp_path):
+    """Regression guard: before the buffer+re-render architecture,
+    unchecking a source only stopped FUTURE lines, it didn't hide
+    already-written ones."""
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        app.log_buffer.append(("skills", "already here before toggling"))
+
+        checkbox = app.query_one("#toggle-skills", Checkbox)
+        checkbox.value = False
+        await pilot.pause()
+
+        view = app.query_one("#logs-view", RichLog)
+        rendered = "\n".join(str(line) for line in view.lines)
+        assert "already here" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_pressing_enter_in_filter_box_does_not_send_an_utterance(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        filter_input = app.query_one("#log-filter", Input)
+        filter_input.focus()
+        filter_input.value = "grimm"
+        await pilot.press("enter")
+
+        app.bus.send_utterance.assert_not_called()

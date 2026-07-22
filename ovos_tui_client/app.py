@@ -17,15 +17,17 @@ bus-client's background thread, so incoming lines are queued and
 drained on the UI's own event loop instead.
 """
 import argparse
+from collections import deque
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Header, Footer, Input, RichLog, Checkbox
 
 from ovos_tui_client.bus import OVOSBusConnection
-from ovos_tui_client.logs import find_log_dir, discover_log_sources
+from ovos_tui_client.logs import find_log_dir, discover_log_sources, line_matches_filter
 
 LOG_POLL_INTERVAL = 0.5  # seconds
+LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
 
 # One color per known log source (see logs.py's KNOWN_LOG_NAMES) - any
 # source not listed here falls back to DEFAULT_LOG_COLOR rather than
@@ -63,6 +65,10 @@ class OVOSTUIApp(App):
     #log-toggles {
         height: 1;
     }
+    #log-filter {
+        height: 1;
+        border: none;
+    }
     #middle-row {
         height: 1fr;
     }
@@ -88,6 +94,8 @@ class OVOSTUIApp(App):
         self.log_sources = discover_log_sources(self.log_dir)
         self.utterance_history = []
         self.history_index = None
+        self.log_buffer = deque(maxlen=LOG_BUFFER_SIZE)  # (source_name, line) pairs, for re-filtering
+        self.log_filter_text = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -95,6 +103,7 @@ class OVOSTUIApp(App):
             with Horizontal(id="log-toggles"):
                 for src in self.log_sources:
                     yield Checkbox(src.name, value=True, id=f"toggle-{src.name}")
+            yield Input(placeholder="Filter logs (free text)...", id="log-filter")
             yield RichLog(id="logs-view", wrap=False, markup=True, auto_scroll=True)
         with Horizontal(id="middle-row"):
             yield RichLog(id="conversation", wrap=True, markup=True, auto_scroll=True)
@@ -131,18 +140,39 @@ class OVOSTUIApp(App):
         view = self.query_one("#logs-view", RichLog)
         for src in self.log_sources:
             new_lines = src.read_new_lines()
-            if not src.enabled or not new_lines:
-                continue
             for line in new_lines:
-                view.write(format_log_line(src.name, line))
+                self.log_buffer.append((src.name, line))
+                if src.enabled and line_matches_filter(line, self.log_filter_text):
+                    view.write(format_log_line(src.name, line))
+
+    def _rerender_logs(self) -> None:
+        """Re-draws the whole logs pane from self.log_buffer against
+        the current filter text and per-source enabled state - needed
+        because RichLog is append-only, so a filter/toggle change has
+        to replay history rather than just affecting future lines."""
+        enabled = {src.name for src in self.log_sources if src.enabled}
+        view = self.query_one("#logs-view", RichLog)
+        view.clear()
+        for source_name, line in self.log_buffer:
+            if source_name in enabled and line_matches_filter(line, self.log_filter_text):
+                view.write(format_log_line(source_name, line))
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         name = event.checkbox.id.removeprefix("toggle-")
         for src in self.log_sources:
             if src.name == name:
                 src.enabled = event.value
+        self._rerender_logs()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "log-filter":
+            return
+        self.log_filter_text = event.value
+        self._rerender_logs()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "utterance-input":
+            return
         text = event.value.strip()
         if not text:
             return

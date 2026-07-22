@@ -84,3 +84,11 @@ def discover_log_sources(log_dir):
         if path.exists():
             sources.append(LogSource(name=name, path=path))
     return sources
+
+
+def line_matches_filter(line: str, filter_text: str) -> bool:
+    """Case-insensitive free-text substring match. An empty filter
+    matches everything - this is the 'no filter applied' state."""
+    if not filter_text:
+        return True
+    return filter_text.lower() in line.lower()

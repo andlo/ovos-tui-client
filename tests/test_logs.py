@@ -1,7 +1,7 @@
 """Tests for log discovery and tailing - the part of this tool most
 worth being paranoid about, since the log directory location varies by
 OVOS install method and isn't reliably documented."""
-from ovos_tui_client.logs import LogSource, find_log_dir, discover_log_sources, CANDIDATE_LOG_DIRS
+from ovos_tui_client.logs import LogSource, find_log_dir, discover_log_sources, line_matches_filter, CANDIDATE_LOG_DIRS
 
 
 def test_read_new_lines_returns_only_appended_content(tmp_path):
@@ -81,3 +81,13 @@ def test_discover_log_sources_only_includes_existing_files(tmp_path):
 
 def test_discover_log_sources_handles_none_dir():
     assert discover_log_sources(None) == []
+
+
+def test_line_matches_filter_empty_filter_matches_everything():
+    assert line_matches_filter("anything at all", "") is True
+
+
+def test_line_matches_filter_case_insensitive_substring():
+    assert line_matches_filter("Could not load ovos-skill-grimm-tales", "grimm") is True
+    assert line_matches_filter("Could not load ovos-skill-grimm-tales", "GRIMM") is True
+    assert line_matches_filter("Could not load ovos-skill-grimm-tales", "andersen") is False
