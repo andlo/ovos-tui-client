@@ -219,3 +219,14 @@ async def test_get_system_commands_still_includes_textuals_own_defaults(tmp_path
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
         assert len(titles) > 8  # our 8 + at least one Textual default
+
+
+# --- Ctrl+Q quits, Ctrl+C no longer does (issue #1) ---
+
+@pytest.mark.asyncio
+async def test_ctrl_q_is_bound_to_quit(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        keys = [b[0] for b in app.BINDINGS]
+        assert "ctrl+q" in keys
+        assert "ctrl+c" not in keys

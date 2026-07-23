@@ -1,5 +1,10 @@
 # ovos-tui-client
 
+**🚧 Actively under development - expect frequent changes.** This is a
+young project with ongoing design iteration (see git history/tags for
+the pace of change); pin a specific version if you need stability, or
+just `pip install --upgrade` regularly to stay current.
+
 A split-pane terminal UI for testing OVOS without a mic/speaker - a
 lightweight replacement for the unmaintained `ovos-cli-client` and the
 broken `neon-cli-client` (whose `pyyaml~=5.4` dependency fails to build
@@ -7,6 +12,7 @@ on modern Python/setuptools).
 
 [![Tests](https://github.com/andlo/ovos-tui-client/actions/workflows/test.yml/badge.svg)](https://github.com/andlo/ovos-tui-client/actions/workflows/test.yml)
 [![PyPI version](https://img.shields.io/pypi/v/ovos-tui-client.svg)](https://pypi.org/project/ovos-tui-client/)
+[![ovos-cli-client](https://img.shields.io/pypi/v/ovos-cli-client.svg?label=ovos-cli-client)](https://pypi.org/project/ovos-cli-client/)
 
 ## Layout
 
@@ -52,7 +58,8 @@ on modern Python/setuptools).
   shows. Checking one or more boxes restricts that category to only
   the checked ones - independently per category, applying
   retroactively to already-received lines too, same as the free-text
-  filter.
+  filter. Choices persist across sessions (`~/.config/ovos-tui-client/
+  state.json`), saved on quit.
 - **F1**: keybinding reference. **F2**: services panel (restart an
   `ovos-*.service` unit). **F3**: currently loaded skills (from the
   bus). **F5-F8**: jump focus straight to Logs / Conversation /
@@ -99,15 +106,30 @@ ovos-tui --host 192.168.1.50 --port 8181 --lang da-dk --log-dir ~/.local/state/m
   is found, the logs pane says so - pass this to point at the right
   directory explicitly.
 
-## Why not just fix neon-cli-client?
+## Why not just fix ovos-cli-client / neon-cli-client?
+
+`ovos-cli-client` (last released March 2022) installs cleanly via pip,
+but crashes immediately on launch on a fresh install:
+`ModuleNotFoundError: No module named 'ovos_utils.configuration'` -
+its `ovos_utils` dependency is unpinned, and the module it imports
+from has since been removed/relocated in current `ovos_utils`
+releases. It was never updated to match. Confirmed directly (`pip
+install ovos-cli-client && ovos-cli-client`) rather than assumed.
 
 `neon-cli-client` pulls in `neon-utils`, which pins `pyyaml~=5.4` - a
 version with no prebuilt wheel for modern Python and a build script
 incompatible with current `setuptools` (workaround: pin
-`setuptools<58` first). Building this tool instead avoids that whole
-dependency chain (just `textual` + `ovos-bus-client`, both actively
-maintained), and adds genuinely useful features - toggleable logs and
-a simplified activity feed - `neon-cli-client` doesn't have.
+`setuptools<58` first).
+
+Building this tool instead avoids both dependency chains (just
+`textual` + `ovos-bus-client`, both actively maintained), and adds
+genuinely useful features - toggleable/filterable logs, service
+restart, a simplified activity feed - neither of the above has.
+
+No existing project fills this specific niche as of writing (checked
+the OpenVoiceOS GitHub org's repositories and general TUI project
+listings) - if that's changed by the time you're reading this, please
+open an issue and point at it.
 
 ## Category
 **Development Tools**

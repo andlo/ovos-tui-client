@@ -60,6 +60,7 @@ from ovos_tui_client.logs import (
     extract_log_level, extract_skill_id, KNOWN_LOG_NAMES, KNOWN_LOG_LEVELS,
 )
 from ovos_tui_client.services import discover_services, restart_service
+from ovos_tui_client.state import load_filter_state, save_filter_state
 
 LOG_POLL_INTERVAL = 0.5  # seconds
 LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
@@ -119,6 +120,7 @@ class HelpScreen(ModalScreen):
             yield Label("F7   Jump focus to Activity")
             yield Label("F8   Jump focus to the utterance input")
             yield Label("Ctrl+P   Command palette (all actions, searchable)")
+            yield Label("Ctrl+Q   Quit")
             yield Label("Tab / Shift+Tab   Cycle focus")
             yield Label("Space / Enter   Toggle a focused checkbox")
             yield Label("Up / Down   Browse utterance history (in the input)")
@@ -350,7 +352,7 @@ class OVOSTUIApp(App):
     """
 
     BINDINGS = [
-        ("ctrl+c", "quit", "Quit"),
+        ("ctrl+q", "quit", "Quit"),
         ("f1", "show_help", "Help"),
         ("f2", "show_services", "Services"),
         ("f3", "show_skills", "Skills"),
@@ -375,6 +377,21 @@ class OVOSTUIApp(App):
         # reads naturally - see module docstring's FILTER SEMANTICS.
         self.level_enabled = {level: True for level in KNOWN_LOG_LEVELS}
         self.skill_enabled = {}  # skill_id -> bool, unchecked by default as discovered
+
+        # Restores filter choices from a previous session (state.py) -
+        # only for sources/levels that still exist on THIS run (a
+        # saved 'phal: False' is meaningless if phal.log doesn't exist
+        # here), applied on top of the defaults above rather than
+        # replacing them, so anything not covered by the save just
+        # keeps its normal default.
+        saved = load_filter_state()
+        for src in self.log_sources:
+            if src.name in saved["sources"]:
+                src.enabled = saved["sources"][src.name]
+        for level in self.level_enabled:
+            if level in saved["levels"]:
+                self.level_enabled[level] = saved["levels"][level]
+        self.skill_enabled.update(saved["skills"])
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -608,6 +625,15 @@ class OVOSTUIApp(App):
 
     def action_focus_input(self) -> None:
         self.query_one("#utterance-input", Input).focus()
+
+    async def action_quit(self) -> None:
+        """Overrides Textual's default just to save filter state first
+        (state.py) - so Sources/Levels/Skills choices survive to the
+        next session. save_filter_state() never raises, so this can't
+        turn a normal quit into a crash."""
+        checked_sources = {s.name: s.enabled for s in self.log_sources}
+        save_filter_state(checked_sources, dict(self.level_enabled), dict(self.skill_enabled))
+        await super().action_quit()
 
     def on_key(self, event) -> None:
         input_widget = self.query_one("#utterance-input", Input)
