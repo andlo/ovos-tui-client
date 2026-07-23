@@ -51,11 +51,10 @@ def summarize_message(msg_type, data=None):
         n = len(data.get("paragraphs", []))
         return f"✓ received {n} paragraph(s)" if n else "✗ empty response (fetch failed)"
 
-    # A small, deliberately curated set of core lifecycle events, added
-    # after user feedback asking for a bit more activity-pane coverage
-    # without turning it into a second log feed. Picked for being both
-    # common and meaningful on their own (you don't need surrounding
-    # context to understand "wake word heard" or "still speaking").
+    # A small, deliberately curated set of core lifecycle events -
+    # picked for being both common and meaningful on their own (no
+    # surrounding context needed to understand "wake word heard" or
+    # "still speaking"), without turning this into a second log feed.
     if msg_type == "recognizer_loop:wakeword":
         return "👂 wake word detected"
 

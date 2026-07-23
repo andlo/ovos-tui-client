@@ -1,6 +1,6 @@
 """Tests for the Command Palette's in-place-filtered Service:/Skill:
-entries (issue #3 follow-up, second iteration) - per feedback, NO
-popup windows: selecting a hit runs the action immediately and writes
+entries (issue #3 follow-up, second iteration) - NO popup windows:
+selecting a hit runs the action immediately and writes
 the result to the conversation pane (dim/grey text) via
 App._write_status(), instead of opening a screen. services.py's and
 bus.py's own functions are mocked throughout; this file tests the
@@ -435,12 +435,11 @@ async def test_startup_narrates_reading_logs(tmp_path):
 @pytest.mark.asyncio
 async def test_startup_narrates_service_states(tmp_path):
     """discover_services_with_state() runs on a background worker
-    thread (see on_mount's docstring on why) - real bug found via
-    testing: checking conversation text immediately after run_test()
-    yields is a genuine race, since the worker hasn't necessarily
-    finished a real subprocess call yet. app.workers.wait_for_complete()
-    actually waits for it, rather than guessing at timing with
-    pilot.pause()."""
+    thread (see on_mount's docstring on why) - checking conversation
+    text immediately after run_test() yields is a genuine race, since
+    the worker hasn't necessarily finished a real subprocess call yet.
+    app.workers.wait_for_complete() actually waits for it, rather than
+    guessing at timing with pilot.pause()."""
     app = _app_with_fake_bus(tmp_path)
     with patch("ovos_tui_client.app.discover_services_with_state", return_value=[("ovos-core.service", True)]):
         async with app.run_test() as pilot:

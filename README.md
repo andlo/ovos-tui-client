@@ -68,9 +68,8 @@ on modern Python/setuptools).
   service management, installed-skill listing/activation, AND the
   log-display skill filter all moved entirely into the Command
   Palette (below), with results written to the **conversation pane**
-  (dim/grey text) instead of a popup - per feedback that this tool
-  should avoid modal windows wherever an action doesn't inherently
-  need its own screen.
+  (dim/grey text) instead of a popup - this tool avoids modal windows
+  wherever an action doesn't inherently need its own screen.
 - **Ctrl+P**: Textual's command palette - meant as a way to talk to/
   control OVOS directly ("bagom"/behind the scenes), not just a
   launcher for this tool's own popup screens. Every F1/F5-F8 action is

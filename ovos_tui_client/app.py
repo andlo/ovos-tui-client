@@ -174,8 +174,8 @@ class SkillFilterCommandProvider(Provider):
     which activates/deactivates installed skills in OVOS itself - this
     one only affects what's shown in the Logs pane here, same concept
     as the Source/Level toggles). Replaces the old F4/SkillFilterScreen
-    modal entirely, per feedback that this should live in the palette
-    like everything else, not its own screen.
+    modal - the log-display skill filter lives in the palette like
+    everything else now, not its own screen.
 
     Hits share the "Log: " prefix with the Source/Level toggle
     SystemCommand entries (see get_system_commands()) so typing "log"
@@ -241,17 +241,17 @@ class ServiceCommandProvider(Provider):
     services.discover_services_with_state() at search time, not a
     fixed list.
 
-    Only offers actions that make sense for each unit's CURRENT state
-    (per feedback): a running service offers Stop/Restart but not
-    Start; a stopped one offers only Start. Determined from
+    Only offers actions that make sense for each unit's CURRENT state:
+    a running service offers Stop/Restart but not Start; a stopped one
+    offers only Start. Determined from
     systemctl's own ACTIVE column - see discover_services_with_state()
     in services.py.
 
     Selecting a hit runs the action immediately and writes the result
     to the conversation pane (dim/grey, via App._write_status()) -
-    deliberately not a popup, per feedback that this tool should
-    prefer palette + conversation-pane output over modal windows
-    wherever the action doesn't inherently need its own screen."""
+    deliberately not a popup: this tool prefers palette +
+    conversation-pane output over modal windows wherever the action
+    doesn't inherently need its own screen."""
 
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
@@ -378,11 +378,11 @@ class OVOSTUIApp(App):
     # Command Palette (type "service", "skill", or "log", see
     # get_system_commands()/ServiceCommandProvider/SkillCommandProvider/
     # SkillFilterCommandProvider), with results written to the
-    # conversation pane instead of a popup window - per feedback that
-    # this tool should prefer palette + conversation-pane output over
-    # modal windows wherever an action doesn't inherently need its own
-    # screen. Not renumbering F5+ to fill the gap - no benefit to
-    # disrupting keys that already work.
+    # conversation pane instead of a popup window - this tool prefers
+    # palette + conversation-pane output over modal windows wherever
+    # an action doesn't inherently need its own screen. Not
+    # renumbering F5+ to fill the gap - no benefit to disrupting keys
+    # that already work.
 
     COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider}
 
@@ -440,23 +440,21 @@ class OVOSTUIApp(App):
 
     def on_mount(self) -> None:
         """A small, deliberately retro boot-sequence narration in the
-        conversation pane (per feedback: "i samme stil som gamle dage
-        når man startede sin computer") - each line corresponds to a
-        REAL step actually happening at that point (not just
-        decorative filler).
+        conversation pane, old-school computer-boot style - each line
+        corresponds to a REAL step actually happening at that point
+        (not just decorative filler).
 
-        Two real bugs found via testing, both fixed here:
+        Two real bugs fixed here, both worth remembering:
 
         1. discover_services_with_state() makes a genuine, blocking
            subprocess call (systemctl). Calling it directly here froze
            the WHOLE UI (Textual's event loop is single-threaded) until
-           it returned - "man ikke kan noget før den har åbnet noget i
-           loggen" (nothing responds until something appears in the
-           log). Moved to _check_services_worker(), a @work(thread=True)
-           background worker, so on_mount itself returns immediately
-           and the UI is interactive from the start - set_interval()
-           and focusing the input now happen BEFORE kicking off either
-           async step below, not after.
+           it returned - nothing responded until something appeared in
+           the log. Moved to _check_services_worker(), a
+           @work(thread=True) background worker, so on_mount itself
+           returns immediately and the UI is interactive from the
+           start - set_interval() and focusing the input now happen
+           BEFORE kicking off either async step below, not after.
 
         2. 'OK ready.' was written unconditionally right after
            KICKING OFF the skill lookup, not after it actually
@@ -534,10 +532,10 @@ class OVOSTUIApp(App):
         """Guards against NoMatches - a background worker's delayed
         call_from_thread callback (e.g. _check_services_worker,
         _refresh_installed_skills's bus callback) can arrive after the
-        app has torn down (real bug found via testing: app teardown
-        racing a still-running systemctl subprocess call in a
-        background thread). Same 'nothing to update anymore, not a
-        bug' reasoning as _poll_logs's existing NoMatches guard."""
+        app has torn down (app teardown can race a still-running
+        systemctl subprocess call in a background thread). Same
+        'nothing to update anymore, not a bug' reasoning as
+        _poll_logs's existing NoMatches guard."""
         try:
             widget = self.query_one("#conversation", RichLog)
         except NoMatches:
@@ -555,12 +553,11 @@ class OVOSTUIApp(App):
         """Dim/grey status lines in the conversation pane - startup
         connection info, service restart/stop/start results, skill
         activate/deactivate/list results. Distinct from the green
-        'You:'/blue 'OVOS:' lines so it doesn't compete for attention,
-        per feedback that this tool should prefer writing action
-        results here over popping up a separate result window. `ok`
-        picks dim (normal) vs red (failure) styling - still muted, not
-        alarming, since this is background/informational, not a modal
-        error."""
+        'You:'/blue 'OVOS:' lines so it doesn't compete for attention -
+        action results belong here rather than in a separate popup
+        result window. `ok` picks dim (normal) vs red (failure)
+        styling - still muted, not alarming, since this is
+        background/informational, not a modal error."""
         style = "dim" if ok else "red"
         self._write_conversation(f"[{style}]{text}[/{style}]")
 
@@ -781,20 +778,19 @@ class OVOSTUIApp(App):
         SkillCommandProvider). All three Provider classes filter IN
         PLACE as you type, no popup.
 
-        NO POPUP WINDOWS for any of these, per feedback: results are
-        written to the conversation pane (_write_status(), dim/grey
-        text) instead of a modal result screen or Textual's toast
-        notifications - this is also why the old standalone Services
-        (F2), Skills-list (F3), and Skill-filter (F4) modals are gone
-        entirely, replaced by palette entries + conversation-pane
-        output.
+        NO POPUP WINDOWS for any of these: results are written to the
+        conversation pane (_write_status(), dim/grey text) instead of
+        a modal result screen or Textual's toast notifications - this
+        is also why the old standalone Services (F2), Skills-list
+        (F3), and Skill-filter (F4) modals are gone entirely, replaced
+        by palette entries + conversation-pane output.
 
         Textual's own default 'Screenshot' and 'Keys' commands are
         filtered out (see the loop below). Screenshot isn't useful for
-        this tool. Keys is filtered specifically per feedback that
-        having both Textual's own keybinding list AND this project's
-        own, more detailed F1/HelpScreen was two different places
-        saying similar things - HelpScreen is the richer one (filter
+        this tool. Keys is filtered because having both Textual's own
+        keybinding list AND this project's own, more detailed
+        F1/HelpScreen was two different places saying similar
+        things - HelpScreen is the richer one (filter
         semantics, scroll behavior, not just keys), so it's kept as
         the canonical source and Keys is removed to avoid the
         duplication/confusion."""
@@ -915,7 +911,7 @@ class OVOSTUIApp(App):
             input_widget.focus()
             # insert_text_at_cursor(), not a manual `.value +=` - the
             # latter leaves Input's internal selection/cursor state
-            # inconsistent. Real bug found via testing: Input's own
+            # inconsistent. A subtler bug: Input's own
             # _on_focus() has a built-in "select all on focus" default
             # (select_on_focus=True), which fired AFTER this method's
             # own code ran (the Focus message is processed on a later
