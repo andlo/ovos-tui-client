@@ -4,7 +4,7 @@ with a fake bus connection so no real messagebus is needed."""
 from unittest.mock import MagicMock
 
 import pytest
-from textual.widgets import RichLog, Input, Label
+from textual.widgets import RichLog, Input, Label, Checkbox
 
 from ovos_tui_client.app import OVOSTUIApp, format_log_line
 
@@ -28,17 +28,19 @@ async def test_app_composes_all_four_panes(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_filter_status_line_exists_and_shows_counts(tmp_path):
-    """The compact status line that replaced the always-visible
-    checkbox rows, after real user feedback that those rows ate too
-    much screen space."""
+async def test_source_and_level_checkboxes_are_inline_and_unchecked_by_default(tmp_path):
+    """Sources and Log Levels are compact inline checkboxes directly in
+    the main view (not a modal) - unchecked by default, per the
+    unchecked-narrows-nothing filter semantics (see app.py's module
+    docstring)."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
-        label = app.query_one("#filter-status", Label)
-        text = str(label.content)
-        assert "Sources:" in text
-        assert "Levels:" in text
-        assert "F4" in text
+        skills_cb = app.query_one("#toggle-source-skills", Checkbox)
+        assert skills_cb.value is False
+        debug_cb = app.query_one("#toggle-level-DEBUG", Checkbox)
+        assert debug_cb.value is False
+        label = app.query_one("#skills-status", Label)
+        assert "Skills" in str(label.content)
 
 
 @pytest.mark.asyncio
@@ -245,32 +247,49 @@ async def test_pressing_enter_in_filter_box_does_not_send_an_utterance(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_disabling_a_source_via_rerender_retroactively_hides_its_lines(tmp_path):
+async def test_nothing_checked_shows_everything_regardless_of_source_or_level(tmp_path):
+    """The core new-semantics invariant: with no source/level checked,
+    nothing is restricted - the unfiltered, default state."""
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        app.log_buffer.append(("skills", "module:func:1 - INFO - all good"))
+        app.log_buffer.append(("bus", "module:func:2 - ERROR - something broke"))
+        app._rerender_logs()
+        await pilot.pause()
+        view = app.query_one("#logs-view", RichLog)
+        rendered = "\n".join(str(line) for line in view.lines)
+        assert "all good" in rendered
+        assert "something broke" in rendered
+
+
+@pytest.mark.asyncio
+async def test_checking_one_source_narrows_to_only_that_source(tmp_path):
     """Regression guard: before the buffer+re-render architecture,
-    disabling a source only stopped FUTURE lines, it didn't hide
-    already-written ones. Source toggling itself now lives in the F4
-    filter modal (see test_screens.py) - this tests the underlying
-    _rerender_logs() behavior directly."""
+    toggling a source only affected FUTURE lines, not already-written
+    ones. Checking 'bus' should restrict to bus lines only - skills
+    lines disappear even though they were never touched."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         app.log_buffer.append(("skills", "already here before toggling"))
+        app.log_buffer.append(("bus", "a bus line"))
         for src in app.log_sources:
-            if src.name == "skills":
-                src.enabled = False
+            if src.name == "bus":
+                src.enabled = True
         app._rerender_logs()
         await pilot.pause()
         view = app.query_one("#logs-view", RichLog)
         rendered = "\n".join(str(line) for line in view.lines)
         assert "already here" not in rendered
+        assert "a bus line" in rendered
 
 
 @pytest.mark.asyncio
-async def test_disabling_error_level_hides_error_lines_but_keeps_info(tmp_path):
+async def test_checking_info_level_narrows_to_only_info(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         app.log_buffer.append(("skills", "module:func:1 - INFO - all good"))
         app.log_buffer.append(("skills", "module:func:2 - ERROR - something broke"))
-        app.level_enabled["ERROR"] = False
+        app.level_enabled["INFO"] = True
         app._rerender_logs()
         await pilot.pause()
         view = app.query_one("#logs-view", RichLog)
@@ -280,7 +299,7 @@ async def test_disabling_error_level_hides_error_lines_but_keeps_info(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_new_skill_is_tracked_the_first_time_its_id_is_seen(tmp_path):
+async def test_a_new_skill_is_tracked_unchecked_the_first_time_its_id_is_seen(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         src = app.log_sources[0]
@@ -293,22 +312,21 @@ async def test_a_new_skill_is_tracked_the_first_time_its_id_is_seen(tmp_path):
         app._poll_logs()
         await pilot.pause()
 
-        assert app.skill_enabled == {"ovos-skill-grimm-tales.andlo": True}
+        assert app.skill_enabled == {"ovos-skill-grimm-tales.andlo": False}
 
 
 @pytest.mark.asyncio
-async def test_unchecking_a_skill_hides_only_its_lines(tmp_path):
+async def test_checking_one_skill_narrows_to_only_that_skill(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         app.log_buffer.append(("skills", "handling for skill_id=grimm-tales now"))
         app.log_buffer.append(("skills", "handling for skill_id=andersen-tales now"))
-        app.skill_enabled = {"grimm-tales": True, "andersen-tales": True}
+        app.skill_enabled = {"grimm-tales": True, "andersen-tales": False}
 
-        app.skill_enabled["grimm-tales"] = False
         app._rerender_logs()
         await pilot.pause()
 
         view = app.query_one("#logs-view", RichLog)
         rendered = "\n".join(str(line) for line in view.lines)
-        assert "grimm-tales" not in rendered
-        assert "andersen-tales" in rendered
+        assert "grimm-tales" in rendered
+        assert "andersen-tales" not in rendered

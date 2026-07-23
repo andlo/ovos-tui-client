@@ -12,7 +12,8 @@ on modern Python/setuptools).
 
 ```
 ┌──────────────────────────────────────────┐
-│ Sources: 4/4   Levels: 5/5   (F4 to filter)│
+│ Sources: [ ]bus [ ]skills [ ]audio ...    │
+│ Log Levels: [ ]DEBUG [ ]INFO ... Skills:0/0│
 │ Filter logs (free text)...                │
 │ LOGS                              scroll↕ │
 ├───────────────────────────┬───────────────┤
@@ -31,25 +32,29 @@ on modern Python/setuptools).
   `gui.log`, `enclosure.log`, `phal.log`), each with its own color.
   OVOS's own `TIMESTAMP - COMPONENT - ` prefix is stripped, and every
   `[source]` tag is padded to the same width so message text lines up
-  in one column. Lines containing `ERROR` are bolded. A compact status
-  line above the free-text filter box shows current filter counts.
-- **F4**: opens one combined filter panel - **sources** (log files)
-  and **log levels** (DEBUG/INFO/WARNING/ERROR/CRITICAL) each on a
-  single compact line of checkboxes, plus **skills** (dynamically
-  discovered the first time a skill_id is seen in the log text -
-  best-effort, not every skill-related line mentions its own skill_id
-  explicitly) stacked one per line below, since that list can grow
-  long. All of these, including the free-text filter, apply
-  retroactively to already-received lines, not just new ones.
+  in one column. Lines containing `ERROR` are bolded.
+- **Sources** and **Log Levels** (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+  are compact checkboxes directly in the main view, no modal needed -
+  each category on its own single line.
+- **F4**: opens a panel to filter by **skill** (dynamically discovered
+  the first time a skill_id is seen in the log text - best-effort, not
+  every skill-related line mentions its own skill_id explicitly). Kept
+  in a modal rather than inline since this list can grow arbitrarily
+  long as more skills are discovered, unlike sources/levels which are
+  short and fixed.
 
-  This filtering UI has been through three designs based on real user
-  feedback: permanently-visible checkbox rows under the log pane
-  (dropped - ate a lot of space once Checkbox's real multi-row
-  rendering height was correctly accounted for); two separate F4/F5
-  modals with each list as a full-height vertical stack (dropped - too
-  tall, and each checkbox rendered as an oversized box since Checkbox
-  needs explicit CSS to render compact); the current single F4 panel
-  with compact, appropriately-packed rows.
+  **Filter semantics - unchecked-by-default, checking narrows:**
+  an unchecked box does NOT mean "hidden" - it means "not specifically
+  filtered to". With nothing checked in a category, nothing in that
+  category is restricted and everything shows (the default, fully-open
+  state). Checking one or more boxes restricts that category to only
+  the checked ones. Applies independently per category (source/level/
+  skill), and applies retroactively to already-received lines, not
+  just new ones, same as the free-text filter.
+
+  This filtering UI has gone through several designs based on real
+  user feedback - see git history for the always-checked full rows,
+  then oversized-checkbox modals, then the checked=shown inversion.
 - **F2**: opens a services panel listing discovered `ovos-*.service`
   systemd --user units - select one and press Enter to restart it.
 - **F3**: opens a panel listing currently loaded skills (requested via

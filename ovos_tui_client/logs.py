@@ -32,10 +32,15 @@ KNOWN_LOG_NAMES = [
 
 @dataclass
 class LogSource:
-    """A single tailable log file with a toggleable visibility state."""
+    """A single tailable log file with a toggleable INCLUDE-filter
+    state. `enabled` semantics: unchecked (the default, False) means
+    'not specifically filtered to' - if NO source is enabled, nothing
+    is restricted and every source shows. Enabling one or more sources
+    restricts the view to only those. Same semantics as level/skill
+    filtering in app.py - checking narrows, it doesn't widen."""
     name: str
     path: Path
-    enabled: bool = True
+    enabled: bool = False
     _offset: int = field(default=0, repr=False)
 
     def read_new_lines(self):
