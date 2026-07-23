@@ -86,6 +86,27 @@ def test_discover_log_sources_handles_none_dir():
     assert discover_log_sources(None) == []
 
 
+def test_discover_log_sources_starts_offset_at_end_of_file_not_zero(tmp_path):
+    """Real bug found via testing: starting _offset at 0 meant the
+    first _poll_logs() tick read an entire pre-existing log file
+    (potentially thousands of lines on a long-running OVOS install)
+    and wrote every one of them to the UI synchronously on the main
+    thread - a genuine, noticeable freeze at startup, not just a
+    perception issue. Pre-existing content must be skipped; only lines
+    appended after discovery should ever surface, same as `tail -f`."""
+    log_path = tmp_path / "skills.log"
+    log_path.write_text("line one (pre-existing)\nline two (pre-existing)\n")
+
+    sources = discover_log_sources(tmp_path)
+    skills_source = next(s for s in sources if s.name == "skills")
+
+    assert skills_source.read_new_lines() == []
+
+    with open(log_path, "a") as f:
+        f.write("line three (genuinely new)\n")
+    assert skills_source.read_new_lines() == ["line three (genuinely new)"]
+
+
 def test_line_matches_filter_empty_filter_matches_everything():
     assert line_matches_filter("anything at all", "") is True
 

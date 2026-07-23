@@ -260,10 +260,19 @@ class SkillCommandProvider(Provider):
     installed_skills maps skill_id -> active (True/False/None -
     confirmed directly against a live OVOS instance: 'skillmanager.
     list' really does report per-skill active state, not just names).
-    Only the relevant action is offered per skill, same reasoning as
-    ServiceCommandProvider: Activate if inactive, Deactivate if
-    active. An unknown state (None) shows both, since we genuinely
-    don't know which applies.
+
+    For a KNOWN state (True/False), one entry is shown - "Skill:
+    skill_id (Active)" or "Skill: skill_id (Inactive)" - matching the
+    same "current state shown in the title, selecting it toggles"
+    convention already used for Log: Source/Level/Skill. Only the
+    resulting action differs internally (deactivate_skill if currently
+    Active, activate_skill if currently Inactive).
+
+    For an unknown state (None), BOTH Activate and Deactivate are
+    still shown explicitly - unlike the known-state case, there's no
+    "current state" to display and toggle from, and this project's own
+    principle elsewhere (see OCP/common-query's "no answer still
+    shown") is to not silently guess when genuinely unsure.
 
     Activate/deactivate themselves go through bus.py's
     activate_skill()/deactivate_skill(), which use the classic
@@ -275,21 +284,28 @@ class SkillCommandProvider(Provider):
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
         for skill_id, active in self.app.installed_skills.items():
-            actions = (
-                [("Activate", "activate_skill"), ("Deactivate", "deactivate_skill")]
-                if active is None
-                else [("Deactivate", "deactivate_skill")] if active
-                else [("Activate", "activate_skill")]
-            )
-            for label, method_name in actions:
-                command_text = f"Skill: {label} {skill_id}"
-                score = matcher.match(command_text)
-                if score > 0:
-                    yield Hit(
-                        score,
-                        matcher.highlight(command_text),
-                        partial(self._run, method_name, skill_id, label),
-                    )
+            if active is None:
+                for label, method_name in (("Activate", "activate_skill"), ("Deactivate", "deactivate_skill")):
+                    command_text = f"Skill: {label} {skill_id}"
+                    score = matcher.match(command_text)
+                    if score > 0:
+                        yield Hit(
+                            score,
+                            matcher.highlight(command_text),
+                            partial(self._run, method_name, skill_id, label),
+                        )
+                continue
+            state_label = "Active" if active else "Inactive"
+            method_name = "deactivate_skill" if active else "activate_skill"
+            action_label = "Deactivate" if active else "Activate"
+            command_text = f"Skill: {skill_id} ({state_label})"
+            score = matcher.match(command_text)
+            if score > 0:
+                yield Hit(
+                    score,
+                    matcher.highlight(command_text),
+                    partial(self._run, method_name, skill_id, action_label),
+                )
 
     def _run(self, method_name: str, skill_id: str, label: str) -> None:
         getattr(self.app.bus, method_name)(skill_id)
@@ -509,13 +525,27 @@ class OVOSTUIApp(App):
         followed by one indented line per unit, matching the boot
         style the rest of the app now uses - not just a count, since
         which specific services are up/down is exactly what's useful
-        to see at a glance during startup."""
+        to see at a glance during startup.
+
+        The whole block is built as ONE multi-line string and written
+        via a SINGLE call_from_thread() call - a real bug found via
+        testing: writing the header and each service line as separate
+        call_from_thread() calls let this worker's own writes get
+        interleaved with the concurrent skill-lookup's write (both
+        running on different threads, both landing on the same
+        conversation pane) - e.g. "Services:" would appear, then
+        "Skills found: ...", then the service lines, because
+        call_from_thread() only guarantees THIS call finishes before
+        returning, not that no other thread's call can be scheduled in
+        between two of THIS thread's separate calls. One call = one
+        atomic write, no other thread's output can land inside it."""
         services = discover_services_with_state()
         if services:
-            self.call_from_thread(self._write_status, "Services:")
+            lines = ["Services:"]
             for name, is_active in services:
                 state = "Active" if is_active else "Inactive"
-                self.call_from_thread(self._write_status, f"    {name} {state}")
+                lines.append(f"    {name} {state}")
+            self.call_from_thread(self._write_status, "\n".join(lines))
         else:
             self.call_from_thread(self._write_status, "Services: none found")
         self.call_from_thread(self._finish_startup)

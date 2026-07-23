@@ -120,15 +120,17 @@ async def test_failed_service_action_still_writes_to_conversation(tmp_path):
 
 @pytest.mark.asyncio
 async def test_inactive_skill_offers_only_activate(tmp_path):
+    """A known state shows ONE entry with current state in the title
+    ("Skill: X (Inactive)") - same convention as Log: Source/Level/
+    Skill - not separate "Activate"/"Deactivate" verb entries."""
     app = _app_with_fake_bus(tmp_path)
     app.installed_skills = {"ovos-skill-grimm-tales.andlo": False}
     async with app.run_test() as pilot:
         provider = SkillCommandProvider(app.screen)
         hits = await _collect_hits(provider, "grimm")
 
-        texts = [str(h.match_display) for h in hits]
-        assert any("Activate" in t for t in texts)
-        assert not any("Deactivate" in t for t in texts)
+        assert len(hits) == 1
+        assert "Skill: ovos-skill-grimm-tales.andlo (Inactive)" in str(hits[0].match_display)
 
 
 @pytest.mark.asyncio
@@ -139,16 +141,18 @@ async def test_active_skill_offers_only_deactivate(tmp_path):
         provider = SkillCommandProvider(app.screen)
         hits = await _collect_hits(provider, "grimm")
 
-        texts = [str(h.match_display) for h in hits]
-        assert any("Deactivate" in t for t in texts)
-        assert not any("Activate" in t for t in texts)
+        assert len(hits) == 1
+        assert "Skill: ovos-skill-grimm-tales.andlo (Active)" in str(hits[0].match_display)
 
 
 @pytest.mark.asyncio
 async def test_unknown_state_skill_offers_both(tmp_path):
     """active: None (a real, confirmed OVOS response value - unknown/
-    unset state) shows both actions, since we genuinely don't know
-    which applies."""
+    unset state) is the one exception that still shows both explicit
+    Activate/Deactivate entries, since there's no "current state" to
+    show and toggle from - this project's own principle elsewhere
+    (OCP/common-query's "no answer still shown") is to not silently
+    guess when genuinely unsure."""
     app = _app_with_fake_bus(tmp_path)
     app.installed_skills = {"ovos-skill-pyradios.openvoiceos": None}
     async with app.run_test() as pilot:
@@ -177,9 +181,8 @@ async def test_selecting_activate_calls_bus_activate_skill_no_popup(tmp_path):
     app.installed_skills = {"ovos-skill-grimm-tales.andlo": False}
     async with app.run_test() as pilot:
         provider = SkillCommandProvider(app.screen)
-        hits = await _collect_hits(provider, "Activate grimm")
-        hit = next(h for h in hits if "Activate" in str(h.match_display))
-        hit.command()
+        hits = await _collect_hits(provider, "grimm")
+        hits[0].command()
         await pilot.pause()
 
         app.bus.activate_skill.assert_called_once_with("ovos-skill-grimm-tales.andlo")
@@ -192,7 +195,7 @@ async def test_selecting_activate_optimistically_updates_the_local_cache(tmp_pat
     app.installed_skills = {"ovos-skill-grimm-tales.andlo": False}
     async with app.run_test() as pilot:
         provider = SkillCommandProvider(app.screen)
-        hits = await _collect_hits(provider, "Activate grimm")
+        hits = await _collect_hits(provider, "grimm")
         hits[0].command()
         await pilot.pause()
 
@@ -205,9 +208,8 @@ async def test_selecting_deactivate_calls_bus_deactivate_skill_no_popup(tmp_path
     app.installed_skills = {"ovos-skill-grimm-tales.andlo": True}
     async with app.run_test() as pilot:
         provider = SkillCommandProvider(app.screen)
-        hits = await _collect_hits(provider, "Deactivate grimm")
-        hit = next(h for h in hits if "Deactivate" in str(h.match_display))
-        hit.command()
+        hits = await _collect_hits(provider, "grimm")
+        hits[0].command()
         await pilot.pause()
 
         app.bus.deactivate_skill.assert_called_once_with("ovos-skill-grimm-tales.andlo")

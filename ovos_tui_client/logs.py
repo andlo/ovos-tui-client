@@ -84,14 +84,26 @@ def discover_log_sources(log_dir):
     """Builds a LogSource for every KNOWN_LOG_NAMES file that actually
     exists in log_dir. Returns [] if log_dir is None or contains none
     of them - callers should treat that as 'no logs found, ask the
-    user for --log-dir' rather than crashing."""
+    user for --log-dir' rather than crashing.
+
+    Each LogSource starts its _offset at the file's CURRENT size (end
+    of file), not 0 - a real bug found via testing: starting at 0
+    meant the very first _poll_logs() tick read the entire pre-existing
+    log file (potentially thousands of lines on a long-running OVOS
+    install) and wrote every one of them to the RichLog widget
+    synchronously on the main thread, genuinely freezing the UI for a
+    noticeable stretch at startup - not just a perception issue.
+    Seeking to the end first means only lines appended AFTER this tool
+    starts are ever shown, same as `tail -f`'s default behavior - the
+    UI is responsive immediately instead of only once that backlog
+    finishes draining."""
     if log_dir is None:
         return []
     sources = []
     for name in KNOWN_LOG_NAMES:
         path = log_dir / f"{name}.log"
         if path.exists():
-            sources.append(LogSource(name=name, path=path))
+            sources.append(LogSource(name=name, path=path, _offset=path.stat().st_size))
     return sources
 
 
