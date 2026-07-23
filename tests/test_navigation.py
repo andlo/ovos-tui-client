@@ -230,3 +230,56 @@ async def test_ctrl_q_is_bound_to_quit(tmp_path):
         keys = [b[0] for b in app.BINDINGS]
         assert "ctrl+q" in keys
         assert "ctrl+c" not in keys
+
+
+# --- Command Palette: filter toggle commands (issue #3) ---
+
+@pytest.mark.asyncio
+async def test_get_system_commands_includes_source_and_level_toggles(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+        assert "Toggle source: skills" in titles
+        assert "Toggle source: bus" in titles
+        assert "Toggle level: ERROR" in titles
+
+
+@pytest.mark.asyncio
+async def test_toggle_source_command_flips_state_and_syncs_checkbox(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        before = next(s.enabled for s in app.log_sources if s.name == "skills")
+
+        app._toggle_source("skills")
+        await pilot.pause()
+
+        after = next(s.enabled for s in app.log_sources if s.name == "skills")
+        assert after is not before
+        checkbox = app.query_one("#toggle-source-skills", Checkbox)
+        assert checkbox.value == after
+
+
+@pytest.mark.asyncio
+async def test_toggle_level_command_flips_state_and_syncs_checkbox(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        before = app.level_enabled["ERROR"]
+
+        app._toggle_level("ERROR")
+        await pilot.pause()
+
+        assert app.level_enabled["ERROR"] is not before
+        checkbox = app.query_one("#toggle-level-ERROR", Checkbox)
+        assert checkbox.value == app.level_enabled["ERROR"]
+
+
+@pytest.mark.asyncio
+async def test_toggle_source_via_command_rerenders_the_log_view(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        app.log_buffer.append(("skills", "a skills line"))
+        app._toggle_source("skills")  # skills was checked by default -> now unchecked
+        await pilot.pause()
+
+        rendered = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
+        assert "a skills line" not in rendered

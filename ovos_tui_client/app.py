@@ -47,8 +47,10 @@ _write_to_log().
 """
 import argparse
 from collections import deque
+from functools import partial
 
 from textual.app import App, ComposeResult, SystemCommand
+from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
@@ -59,7 +61,7 @@ from ovos_tui_client.logs import (
     find_log_dir, discover_log_sources, line_matches_filter, strip_log_prefix,
     extract_log_level, extract_skill_id, KNOWN_LOG_NAMES, KNOWN_LOG_LEVELS,
 )
-from ovos_tui_client.services import discover_services, restart_service
+from ovos_tui_client.services import discover_services, restart_service, stop_service, start_service
 from ovos_tui_client.state import load_filter_state, save_filter_state
 
 LOG_POLL_INTERVAL = 0.5  # seconds
@@ -304,6 +306,46 @@ class ClickableLabel(Label):
             event.stop()
 
 
+class ServiceCommandProvider(Provider):
+    """Command Palette provider (Ctrl+P) for restart/stop/start against
+    any discovered ovos-*.service unit - registered via OVOSTUIApp's
+    COMMANDS class var. Unlike the static SystemCommand entries in
+    get_system_commands(), a Provider's search() runs fresh on every
+    keystroke, which is what makes real autocomplete-as-you-type
+    possible: typing 'restart co' matches 'Restart service:
+    ovos-core.service' without needing to know the exact unit name
+    upfront. Service names come from services.discover_services() at
+    search time, not a fixed list - reflects whatever's actually
+    running right now.
+
+    Issue #3: the underlying idea is that the Command Palette is a way
+    to talk to/control OVOS "bagom" (behind the scenes) directly, not
+    just a launcher for this tool's own popup screens - service
+    management belongs here for the same reason filter toggles do
+    (see get_system_commands())."""
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        for unit_name in discover_services():
+            for label, action_fn in (
+                ("Restart", restart_service),
+                ("Stop", stop_service),
+                ("Start", start_service),
+            ):
+                command_text = f"{label} service: {unit_name}"
+                score = matcher.match(command_text)
+                if score > 0:
+                    yield Hit(
+                        score,
+                        matcher.highlight(command_text),
+                        partial(self._run, action_fn, unit_name),
+                    )
+
+    def _run(self, action_fn, unit_name: str) -> None:
+        ok, msg = action_fn(unit_name)
+        self.app.notify(msg, severity="information" if ok else "error")
+
+
 class OVOSTUIApp(App):
     CSS = """
     #logs-container {
@@ -362,6 +404,12 @@ class OVOSTUIApp(App):
         ("f7", "focus_activity", "Activity"),
         ("f8", "focus_input", "Input"),
     ]
+
+    # ServiceCommandProvider gives the Command Palette real
+    # autocomplete-as-you-type over discovered service names (see its
+    # own docstring) - App.COMMANDS is the base set (Textual's own
+    # built-ins); this adds ours alongside, not instead of.
+    COMMANDS = App.COMMANDS | {ServiceCommandProvider}
 
     def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None):
         super().__init__()
@@ -589,7 +637,19 @@ class OVOSTUIApp(App):
         built-in command palette (Ctrl+P) too, so they're discoverable
         by fuzzy search as well as by key - added after user feedback
         asking whether F-key functionality could also live in the
-        palette."""
+        palette.
+
+        Also surfaces every Source/Level toggle directly (issue #3) -
+        the underlying idea, per feedback: the palette is meant as a
+        way to talk to/control OVOS "bagom" (behind the scenes)
+        directly, not just a launcher for this tool's own popup
+        screens - so filter toggling belongs here too, not only
+        reachable via the inline checkboxes. Service start/stop/
+        restart with autocomplete lives in ServiceCommandProvider
+        instead (registered via COMMANDS below) - that needs a real
+        Provider.search(), since service names are discovered at
+        runtime and a static SystemCommand list can't filter/complete
+        as you type the way a Provider can."""
         yield from super().get_system_commands(screen)
         yield SystemCommand("Help: show keybindings", "Lists every keybinding (same as F1)", self.action_show_help)
         yield SystemCommand("Services: list & restart", "Restart an ovos-*.service unit (same as F2)", self.action_show_services)
@@ -599,6 +659,36 @@ class OVOSTUIApp(App):
         yield SystemCommand("Focus: Conversation", "Jump focus to the conversation pane (same as F6)", self.action_focus_conversation)
         yield SystemCommand("Focus: Activity", "Jump focus to the activity pane (same as F7)", self.action_focus_activity)
         yield SystemCommand("Focus: Utterance input", "Jump focus to the input box (same as F8)", self.action_focus_input)
+        for src in self.log_sources:
+            state = "checked" if src.enabled else "unchecked"
+            yield SystemCommand(f"Toggle source: {src.name}", f"Currently {state}", partial(self._toggle_source, src.name))
+        for level in KNOWN_LOG_LEVELS:
+            state = "checked" if self.level_enabled.get(level, True) else "unchecked"
+            yield SystemCommand(f"Toggle level: {level}", f"Currently {state}", partial(self._toggle_level, level))
+
+    def _toggle_source(self, name: str) -> None:
+        """Flips a source's enabled state and syncs the visible
+        checkbox + re-renders - shared by both the palette command
+        above and could be reused anywhere else that needs to toggle a
+        source programmatically."""
+        for src in self.log_sources:
+            if src.name == name:
+                src.enabled = not src.enabled
+        try:
+            self.query_one(f"#toggle-source-{name}", Checkbox).value = next(
+                s.enabled for s in self.log_sources if s.name == name
+            )
+        except NoMatches:
+            pass
+        self._rerender_logs()
+
+    def _toggle_level(self, level: str) -> None:
+        self.level_enabled[level] = not self.level_enabled.get(level, True)
+        try:
+            self.query_one(f"#toggle-level-{level}", Checkbox).value = self.level_enabled[level]
+        except NoMatches:
+            pass
+        self._rerender_logs()
 
     def action_show_help(self) -> None:
         self.push_screen(HelpScreen())

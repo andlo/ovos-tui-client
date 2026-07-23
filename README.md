@@ -63,9 +63,18 @@ on modern Python/setuptools).
 - **F1**: keybinding reference. **F2**: services panel (restart an
   `ovos-*.service` unit). **F3**: currently loaded skills (from the
   bus). **F5-F8**: jump focus straight to Logs / Conversation /
-  Activity / the utterance input. **Ctrl+P**: Textual's built-in
-  command palette - every action above is also there, fuzzy-searchable,
-  for anyone who'd rather type a command than remember an F-key.
+  Activity / the utterance input.
+- **Ctrl+P**: Textual's command palette - meant as a way to talk to/
+  control OVOS directly ("bagom"/behind the scenes), not just a
+  launcher for this tool's own popup screens. Every F1-F8 action is
+  there too, fuzzy-searchable, but it also goes further:
+  - **Toggle source/level**: e.g. "Toggle source: skills", "Toggle
+    level: ERROR" - same effect as clicking the checkbox, without
+    leaving the palette.
+  - **Restart/Stop/Start service**: type e.g. "restart co" and it
+    autocompletes against whatever `ovos-*.service` units are
+    currently discovered (`services.py`) - real fuzzy matching as you
+    type, not a fixed list.
   **Tab/Shift+Tab**: cycle focus across everything (checkboxes, panes,
   input) - a Textual built-in, no custom code needed. **Escape**:
   closes whatever modal is open.

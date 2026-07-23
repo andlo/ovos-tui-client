@@ -37,19 +37,41 @@ def discover_services():
     return sorted(names)
 
 
+def _systemctl_action(action: str, unit_name: str, timeout: int = 30):
+    """Shared implementation for restart/stop/start - all three are the
+    same shape (run systemctl --user <action> <unit>, never raise,
+    return (success, message)), so this avoids repeating the
+    try/except three times. `action` is a systemctl verb: 'restart',
+    'stop', or 'start'."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", action, unit_name],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"{unit_name}: {action} timed out after {timeout}s"
+    except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+        return False, f"{unit_name}: {e}"
+    if result.returncode == 0:
+        past_tense = {"restart": "restarted", "stop": "stopped", "start": "started"}[action]
+        return True, f"{unit_name}: {past_tense}"
+    return False, f"{unit_name}: {result.stderr.strip() or (action + ' failed')}"
+
+
 def restart_service(unit_name):
     """Restarts a single systemd --user unit. Returns (success: bool,
     message: str) rather than raising, so the UI can show the result
     without a try/except at every call site."""
-    try:
-        result = subprocess.run(
-            ["systemctl", "--user", "restart", unit_name],
-            capture_output=True, text=True, timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        return False, f"{unit_name}: restart timed out after 30s"
-    except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
-        return False, f"{unit_name}: {e}"
-    if result.returncode == 0:
-        return True, f"{unit_name}: restarted"
-    return False, f"{unit_name}: {result.stderr.strip() or 'restart failed'}"
+    return _systemctl_action("restart", unit_name)
+
+
+def stop_service(unit_name):
+    """Stops a single systemd --user unit. Same (success, message)
+    contract as restart_service()."""
+    return _systemctl_action("stop", unit_name)
+
+
+def start_service(unit_name):
+    """Starts a single systemd --user unit. Same (success, message)
+    contract as restart_service()."""
+    return _systemctl_action("start", unit_name)

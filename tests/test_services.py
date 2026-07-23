@@ -2,7 +2,7 @@
 real service management is exercised here."""
 from unittest.mock import MagicMock, patch
 
-from ovos_tui_client.services import discover_services, restart_service
+from ovos_tui_client.services import discover_services, restart_service, stop_service, start_service
 
 
 def _fake_completed(stdout="", stderr="", returncode=0):
@@ -69,5 +69,47 @@ def test_restart_service_timeout_reported_not_raised():
 def test_restart_service_missing_systemctl_reported_not_raised():
     with patch("subprocess.run", side_effect=FileNotFoundError("no systemctl")):
         ok, msg = restart_service("ovos-core.service")
+
+    assert ok is False
+
+
+def test_stop_service_success():
+    with patch("subprocess.run", return_value=_fake_completed(returncode=0)) as mock_run:
+        ok, msg = stop_service("ovos-core.service")
+
+    assert ok is True
+    assert "stopped" in msg
+    assert mock_run.call_args[0][0] == ["systemctl", "--user", "stop", "ovos-core.service"]
+
+
+def test_stop_service_failure_includes_stderr():
+    with patch("subprocess.run", return_value=_fake_completed(returncode=1, stderr="Permission denied.")):
+        ok, msg = stop_service("ovos-core.service")
+
+    assert ok is False
+    assert "Permission denied." in msg
+
+
+def test_start_service_success():
+    with patch("subprocess.run", return_value=_fake_completed(returncode=0)) as mock_run:
+        ok, msg = start_service("ovos-core.service")
+
+    assert ok is True
+    assert "started" in msg
+    assert mock_run.call_args[0][0] == ["systemctl", "--user", "start", "ovos-core.service"]
+
+
+def test_start_service_timeout_reported_not_raised():
+    import subprocess as sp
+    with patch("subprocess.run", side_effect=sp.TimeoutExpired(cmd="systemctl", timeout=30)):
+        ok, msg = start_service("ovos-core.service")
+
+    assert ok is False
+    assert "timed out" in msg
+
+
+def test_stop_service_missing_systemctl_reported_not_raised():
+    with patch("subprocess.run", side_effect=FileNotFoundError("no systemctl")):
+        ok, msg = stop_service("ovos-core.service")
 
     assert ok is False
