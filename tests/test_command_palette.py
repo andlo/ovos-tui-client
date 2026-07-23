@@ -411,3 +411,117 @@ async def test_keys_command_is_filtered_out(tmp_path):
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
         assert "Keys" not in titles
         assert "Screenshot" not in titles
+
+
+# --- retro boot-sequence narration + version number ---
+
+@pytest.mark.asyncio
+async def test_startup_writes_version_number(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        text = _conversation_text(app)
+        assert "ovos-tui-client v" in text
+        assert "starting" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_startup_narrates_reading_logs(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        text = _conversation_text(app)
+        assert "reading logs" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_startup_narrates_service_states(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        text = _conversation_text(app)
+        assert "service state" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_startup_narrates_finding_skills_count_only_not_full_list(tmp_path):
+    """Startup should be terse (count only) - the full one-skill-per-
+    line listing is reserved for the explicit 'Skill: List installed'
+    palette command, not startup noise."""
+    app = _app_with_fake_bus(tmp_path)
+    # on_mount's skill-list callback fires synchronously here (the
+    # fake bus.list_skills calls back immediately), so both mocks must
+    # be in place BEFORE run_test() starts mounting - by the time the
+    # `async with` block below yields control, on_mount has already
+    # run to completion.
+    app.bus.list_skills = MagicMock(
+        side_effect=lambda cb: cb(["ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"])
+    )
+    app.call_from_thread = MagicMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))
+    async with app.run_test() as pilot:
+        text = _conversation_text(app)
+
+    assert "finding skills" in text.lower()
+    assert "2 found" in text
+    assert "ovos-skill-grimm-tales.andlo" not in text
+
+
+@pytest.mark.asyncio
+async def test_startup_ends_with_ok_ready(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        view = app.query_one("#conversation", RichLog)
+        last_line = str(view.lines[-1])
+        assert "ok ready" in last_line.lower()
+
+
+# --- Log: Select all / Deselect all skills ---
+
+@pytest.mark.asyncio
+async def test_select_all_deselect_all_not_offered_when_no_skills_seen_yet(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+        assert "Log: Select all skills" not in titles
+        assert "Log: Deselect all skills" not in titles
+
+
+@pytest.mark.asyncio
+async def test_select_all_deselect_all_offered_once_skills_are_known(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_enabled = {"ovos-skill-grimm-tales.andlo": False}
+    async with app.run_test() as pilot:
+        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+        assert "Log: Select all skills" in titles
+        assert "Log: Deselect all skills" in titles
+
+
+@pytest.mark.asyncio
+async def test_select_all_skills_checks_every_known_skill(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_enabled = {"ovos-skill-grimm-tales.andlo": False, "ovos-skill-andersen-tales.andlo": False}
+    async with app.run_test() as pilot:
+        app._select_all_skills()
+        await pilot.pause()
+        assert all(app.skill_enabled.values())
+
+
+@pytest.mark.asyncio
+async def test_deselect_all_skills_unchecks_every_known_skill(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_enabled = {"ovos-skill-grimm-tales.andlo": True, "ovos-skill-andersen-tales.andlo": True}
+    async with app.run_test() as pilot:
+        app._deselect_all_skills()
+        await pilot.pause()
+        assert not any(app.skill_enabled.values())
+
+
+@pytest.mark.asyncio
+async def test_select_all_skills_narrows_the_log_view_to_that_set(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_enabled = {"ovos-skill-grimm-tales.andlo": False}
+    async with app.run_test() as pilot:
+        app.log_buffer.append(("skills", "handling for skill_id=ovos-skill-grimm-tales.andlo now"))
+        app.log_buffer.append(("skills", "an unrelated line with no skill_id"))
+        app._select_all_skills()
+        await pilot.pause()
+
+        rendered = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
+        assert "grimm-tales" in rendered

@@ -84,7 +84,9 @@ on modern Python/setuptools).
   - **`Log: `** - toggle any source/level/skill directly, e.g. "Log:
     Toggle source: skills", "Log: Toggle level: ERROR", "Log: Toggle
     skill: ovos-skill-horoscope..." - same effect as clicking the
-    checkbox, without leaving the palette.
+    checkbox, without leaving the palette. Once at least one skill_id
+    has been seen, "Log: Select all skills" / "Log: Deselect all
+    skills" are also available for bulk toggling.
   - **`Service: `** - "Service: Restart ovos-core.service", "Service:
     Stop ...", "Service: Start ..." - one hit per discovered
     `ovos-*.service` unit, but **only for actions that make sense for
@@ -128,7 +130,11 @@ on modern Python/setuptools).
   (blue), and dim/grey status lines for everything above (startup
   connection info, service actions, skill list/activate/deactivate
   results) - distinct styling so status lines don't compete for
-  attention with the actual conversation.
+  attention with the actual conversation. Startup itself narrates as
+  a small, deliberately old-school boot sequence - version number,
+  "Reading logs...", "Getting service states...", "Finding skills...
+  N found" (count only - not the full listing, see "Skill: List
+  installed" above for that), ending in "OK ready."
 - **Activity**: a curated, simplified feed of what's happening on the
   bus right now - which skill is handling the request, wake word/
   speech start-stop, global stop, and for `ovos.common_reading.*`

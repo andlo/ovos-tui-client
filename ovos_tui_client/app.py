@@ -48,6 +48,7 @@ copy something is never yanked back down by incoming content. See
 _write_to_log().
 """
 import argparse
+import importlib.metadata
 from collections import deque
 from functools import partial
 
@@ -76,6 +77,22 @@ LOG_SOURCE_COLORS = {
     "voice": "cyan", "gui": "blue", "enclosure": "white", "phal": "red",
 }
 DEFAULT_LOG_COLOR = "white"
+
+
+def _ovos_tui_version() -> str:
+    """Reads the installed package version via importlib.metadata, not
+    a direct import of version.py - that file lives at the repo root,
+    outside the ovos_tui_client package itself (setup.py reads it
+    directly at BUILD time to populate the installed package's own
+    metadata; it isn't shipped inside the package for import at
+    runtime). Falls back to 'unknown' rather than raising if the
+    package isn't actually installed (e.g. running from a raw source
+    checkout without `pip install -e .`)."""
+    try:
+        return importlib.metadata.version("ovos-tui-client")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
 
 # Widgets where typing a plain character should redirect focus to the
 # utterance input rather than doing nothing - see on_key().
@@ -421,6 +438,17 @@ class OVOSTUIApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        """A small, deliberately retro boot-sequence narration in the
+        conversation pane (per feedback: "i samme stil som gamle dage
+        når man startede sin computer") - each line corresponds to a
+        REAL step actually happening at that point (not just
+        decorative filler), ending in 'OK ready.' once the UI is
+        interactive. installed-skill listing is intentionally terse
+        here (count only) - the full one-skill-per-line listing (see
+        _refresh_installed_skills()) is for the explicit "Skill: List
+        installed" palette command, not startup noise."""
+        self._write_status(f"ovos-tui-client v{_ovos_tui_version()} starting...")
+
         if not self.log_sources:
             self._write_to_log(
                 self.query_one("#logs-view", RichLog),
@@ -428,14 +456,23 @@ class OVOSTUIApp(App):
                 + (f" in {self.log_dir}" if self.log_dir else " in any candidate directory")
                 + ". Pass --log-dir to point at the right one.[/yellow]"
             )
+        self._write_status(f"Reading logs... {len(self.log_sources)} source(s) found")
         self._update_skills_status()
+
         self.bus.on_speak(self._handle_speak)
         self.bus.on_activity(self._handle_activity)
         self.bus.connect()
         self._write_status(f"Connected to OVOS messagebus at {self.host}:{self.port}")
-        self._refresh_installed_skills()
+
+        n_services = len(discover_services_with_state())
+        self._write_status(f"Getting service states... {n_services} ovos-*.service unit(s) found")
+
+        self._write_status("Finding skills...")
+        self._refresh_installed_skills(verbose=False)
+
         self.set_interval(LOG_POLL_INTERVAL, self._poll_logs)
         self.query_one("#utterance-input", Input).focus()
+        self._write_status("OK ready.")
 
     def _write_to_log(self, widget: RichLog, content) -> None:
         """The one place every RichLog write goes through, for all
@@ -473,24 +510,29 @@ class OVOSTUIApp(App):
         style = "dim" if ok else "red"
         self._write_conversation(f"[{style}]{text}[/{style}]")
 
-    def _refresh_installed_skills(self) -> None:
+    def _refresh_installed_skills(self, verbose: bool = True) -> None:
         """Populates self.installed_skills (SkillCommandProvider's
         autocomplete source) via bus.list_skills(). Called once at
-        startup and again whenever 'Skill: List installed' runs (see
-        get_system_commands()) - not on every palette keystroke, since
-        each call is a real bus round-trip with a timeout.
+        startup (verbose=False - see on_mount's boot-narration
+        docstring, count only, not a full listing) and again whenever
+        'Skill: List installed' runs (see get_system_commands(),
+        verbose=True by default) - not on every palette keystroke,
+        since each call is a real bus round-trip with a timeout.
 
-        Writes one skill per line to the conversation pane (not a
-        single comma-joined line) - readability, especially as the
-        list grows. See issue #15 for the not-yet-implemented idea of
-        grouping/categorizing by skill type (skill/ocp/reading/
-        pipeline etc) - deferred pending research into whether that's
-        reliably detectable from skill_id alone."""
+        verbose=True writes one skill per line to the conversation
+        pane (not a single comma-joined line) - readability, especially
+        as the list grows. See issue #15 for the not-yet-implemented
+        idea of grouping/categorizing by skill type (skill/ocp/
+        reading/pipeline etc) - deferred pending research into whether
+        that's reliably detectable from skill_id alone."""
         def _on_result(skills):
             if skills is None:
                 self.call_from_thread(self._write_status, "Skill list: no response (timed out)", ok=False)
                 return
             self.installed_skills = sorted(skills)
+            if not verbose:
+                self.call_from_thread(self._write_status, f"Finding skills... {len(self.installed_skills)} found")
+                return
             self.call_from_thread(self._write_status, f"Skills: {len(self.installed_skills)} installed:")
             for skill_id in self.installed_skills:
                 self.call_from_thread(self._write_status, f"  {skill_id}")
@@ -707,6 +749,9 @@ class OVOSTUIApp(App):
         for level in KNOWN_LOG_LEVELS:
             state = "checked" if self.level_enabled.get(level, True) else "unchecked"
             yield SystemCommand(f"Log: Toggle level: {level}", f"Currently {state}", partial(self._toggle_level, level))
+        if self.skill_enabled:
+            yield SystemCommand("Log: Select all skills", "Check every discovered skill_id (narrows to exactly the current set)", self._select_all_skills)
+            yield SystemCommand("Log: Deselect all skills", "Uncheck every skill_id (back to the default: unrestricted)", self._deselect_all_skills)
 
     def _toggle_source(self, name: str) -> None:
         """Flips a source's enabled state and syncs the visible
@@ -740,6 +785,29 @@ class OVOSTUIApp(App):
         filter dimension never had inline checkboxes - it was always
         behind F4/a modal before this)."""
         self.skill_enabled[skill_id] = not self.skill_enabled.get(skill_id, False)
+        self._rerender_logs()
+
+    def _select_all_skills(self) -> None:
+        """Checks every currently-known skill_id, so the log display
+        narrows to exactly that set. Note this is a real, distinct
+        state from 'nothing checked' (see _deselect_all_skills) even
+        though both currently show the same lines: a skill_id
+        discovered AFTER this runs would NOT be included (its entry
+        gets added unchecked, per _maybe_register_skill()), whereas
+        'nothing checked' means unrestricted regardless of what's
+        discovered later. Per feedback requesting a quick select-all/
+        select-none for the skill filter."""
+        for skill_id in self.skill_enabled:
+            self.skill_enabled[skill_id] = True
+        self._rerender_logs()
+
+    def _deselect_all_skills(self) -> None:
+        """Unchecks every known skill_id - returns to the default,
+        unrestricted state (see FILTER SEMANTICS in the module
+        docstring): nothing checked means nothing in this category is
+        restricted, including skills discovered afterward."""
+        for skill_id in self.skill_enabled:
+            self.skill_enabled[skill_id] = False
         self._rerender_logs()
 
     def action_show_help(self) -> None:
