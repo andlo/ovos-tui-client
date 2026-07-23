@@ -260,15 +260,20 @@ async def test_refresh_installed_skills_handles_timeout_gracefully(tmp_path):
         assert "no response" in _conversation_text(app).lower() or "timed out" in _conversation_text(app).lower()
 
 
-# --- startup status + _write_status formatting ---
-
 @pytest.mark.asyncio
 async def test_startup_writes_connection_status_to_conversation(tmp_path):
+    """'Connected to messagebus' is now written from _finish_startup(),
+    once both async startup steps report in - needs both properly
+    mocked to resolve, same pattern as test_startup_ends_with_ok_ready."""
     app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        text = _conversation_text(app)
-        assert "127.0.0.1" in text
-        assert "8181" in text
+    app.bus.list_skills = MagicMock(side_effect=lambda cb: cb({}))
+    app.call_from_thread = MagicMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))
+    with patch("ovos_tui_client.app.discover_services_with_state", return_value=[]):
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            text = _conversation_text(app)
+            assert "127.0.0.1" in text
+            assert "8181" in text
 
 
 def test_write_status_uses_dim_style_on_success(tmp_path):
@@ -293,8 +298,8 @@ async def test_log_toggle_titles_share_a_common_prefix_for_palette_grouping(tmp_
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
         log_titles = [t for t in titles if t.startswith("Log: ")]
-        assert any("Toggle source" in t for t in log_titles)
-        assert any("Toggle level" in t for t in log_titles)
+        assert any("Source" in t for t in log_titles)
+        assert any("Level" in t for t in log_titles)
 
 
 # --- Screenshot command filtered out ---
@@ -401,7 +406,7 @@ async def test_skill_filter_search_yields_a_hit_per_discovered_skill(tmp_path):
         provider = SkillFilterCommandProvider(app.screen)
         hits = await _collect_hits(provider, "grimm")
         assert len(hits) == 1
-        assert "Log: Toggle skill: ovos-skill-grimm-tales.andlo" in str(hits[0].match_display)
+        assert "Log: Skill: ovos-skill-grimm-tales.andlo" in str(hits[0].match_display)
 
 
 @pytest.mark.asyncio
@@ -456,7 +461,7 @@ async def test_keys_command_is_filtered_out(tmp_path):
         assert "Screenshot" not in titles
 
 
-# --- retro boot-sequence narration + version number ---
+# --- boot-sequence narration + version number ---
 
 @pytest.mark.asyncio
 async def test_startup_writes_version_number(tmp_path):
@@ -464,15 +469,15 @@ async def test_startup_writes_version_number(tmp_path):
     async with app.run_test() as pilot:
         text = _conversation_text(app)
         assert "ovos-tui-client v" in text
-        assert "starting" in text.lower()
 
 
 @pytest.mark.asyncio
-async def test_startup_narrates_reading_logs(tmp_path):
+async def test_startup_narrates_logs_loaded(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         text = _conversation_text(app)
-        assert "reading logs" in text.lower()
+        assert "logs found and loaded" in text.lower()
+        assert "skills" in text.lower()
 
 
 @pytest.mark.asyncio
@@ -488,14 +493,15 @@ async def test_startup_narrates_service_states(tmp_path):
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()
             text = _conversation_text(app)
-            assert "service state" in text.lower()
+            assert "services:" in text.lower()
+            assert "ovos-core.service active" in text.lower()
 
 
 @pytest.mark.asyncio
 async def test_startup_narrates_finding_skills_count_only_not_full_list(tmp_path):
-    """Startup should be terse (count only) - the full one-skill-per-
-    line listing is reserved for the explicit 'Skill: List installed'
-    palette command, not startup noise."""
+    """Startup should be terse (active/inactive counts) - the full
+    one-skill-per-line listing is reserved for the explicit 'Skill:
+    List installed' palette command, not startup noise."""
     app = _app_with_fake_bus(tmp_path)
     # on_mount's skill-list callback fires synchronously here (the
     # fake bus.list_skills calls back immediately), so both mocks must
@@ -509,8 +515,9 @@ async def test_startup_narrates_finding_skills_count_only_not_full_list(tmp_path
     async with app.run_test() as pilot:
         text = _conversation_text(app)
 
-    assert "finding skills" in text.lower()
-    assert "2 found" in text
+    assert "skills found" in text.lower()
+    assert "1 active" in text.lower()
+    assert "1 inactive" in text.lower()
     assert "ovos-skill-grimm-tales.andlo" not in text
 
 

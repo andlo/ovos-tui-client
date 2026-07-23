@@ -128,21 +128,12 @@ def format_log_line(source_name: str, line: str) -> str:
 APP_HELP = """\
 # ovos-tui-client
 
-No popup windows for services, skill activation, or the skill
-log-filter - type "service", "skill", or "log" in the Command Palette
-(Ctrl+P) instead (clicking "Skills:" opens the palette too). Results
-appear as dim text in the Conversation pane.
+Services/skills/log-filter: use the Command Palette (Ctrl+P) - type
+"service", "skill", or "log". Results appear in the Conversation pane.
 
-Typing anywhere in Logs/Conversation/Activity switches focus to the
-utterance input automatically - that's almost always what you meant
-to do.
+Typing in Logs/Conversation/Activity jumps focus to the input.
 
-**Filter checkboxes:** unchecked = show everything in that category.
-Checking one or more narrows to only the checked ones. Sources/Levels
-start checked; Skills start unchecked (it's an open-ended list).
-
-Scrolled-up panes never get yanked back to the bottom by new lines -
-only auto-scrolls while already at the bottom.
+Checkboxes: unchecked = show all. Checked = narrow to only those.
 """
 
 
@@ -173,7 +164,7 @@ class SkillFilterCommandProvider(Provider):
         matcher = self.matcher(query)
         for skill_id, enabled in self.app.skill_enabled.items():
             state = "checked" if enabled else "unchecked"
-            command_text = f"Log: Toggle skill: {skill_id} ({state})"
+            command_text = f"Log: Skill: {skill_id} ({state})"
             score = matcher.match(command_text)
             if score > 0:
                 yield Hit(
@@ -188,7 +179,7 @@ class ClickableLabel(Label):
     """A Label that also responds to being clicked, so it can double
     as a lightweight button without separate Button styling - used
     for the 'Skills: N/M' status text, which opens the Command Palette
-    (type "Log: Toggle skill" from there - no F4/modal anymore, that
+    (type "Log: Skill" from there - no F4/modal anymore, that
     filter now lives in SkillFilterCommandProvider like everything
     else) when clicked. `can_focus = True` so it also picks
     up a visible focus outline and participates in the normal Tab
@@ -325,6 +316,9 @@ class OVOSTUIApp(App):
         border: none;
         margin-right: 2;
     }
+    #filter-row Checkbox .toggle--label {
+        color: $text-muted;
+    }
     .filter-label {
         margin-right: 1;
         color: $text-muted;
@@ -332,7 +326,6 @@ class OVOSTUIApp(App):
     #skills-status {
         margin-right: 1;
         color: $text-muted;
-        text-style: underline;
     }
     #skills-status:focus {
         color: $accent;
@@ -442,10 +435,9 @@ class OVOSTUIApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        """A small, deliberately retro boot-sequence narration in the
-        conversation pane, old-school computer-boot style - each line
-        corresponds to a REAL step actually happening at that point
-        (not just decorative filler).
+        """A compact boot-sequence narration in the conversation pane -
+        each line corresponds to a REAL step actually happening at
+        that point (not just decorative filler).
 
         Two real bugs fixed here, both worth remembering:
 
@@ -461,16 +453,14 @@ class OVOSTUIApp(App):
 
         2. 'OK ready.' was written unconditionally right after
            KICKING OFF the skill lookup, not after it actually
-           finished - so it could appear before the result did (e.g.
-           'Finding skills...' / 'OK ready.' / 'Finding skills... N
-           found', which looked exactly like a bug, because it was
-           one). Fixed with _finish_startup(): both the service-state
-           worker and the skill lookup call it on completion (success
-           OR failure/timeout - both have their own timeouts, so this
-           always eventually fires), and only once BOTH have reported
-           in does 'OK ready.' get written - genuinely accurate now,
-           not just well-intentioned."""
-        self._write_status(f"ovos-tui-client v{_ovos_tui_version()} starting...")
+           finished - so it could appear before the result did. Fixed
+           with _finish_startup(): both the service-state worker and
+           the skill lookup call it on completion (success OR failure/
+           timeout - both have their own timeouts, so this always
+           eventually fires), and only once BOTH have reported in does
+           'OK ready.' get written - genuinely accurate now, not just
+           well-intentioned."""
+        self._write_status(f"ovos-tui-client v{_ovos_tui_version()}")
 
         if not self.log_sources:
             self._write_to_log(
@@ -479,29 +469,35 @@ class OVOSTUIApp(App):
                 + (f" in {self.log_dir}" if self.log_dir else " in any candidate directory")
                 + ". Pass --log-dir to point at the right one.[/yellow]"
             )
-        self._write_status(f"Reading logs... {len(self.log_sources)} source(s) found")
+            self._write_status("Logs found and loaded: none")
+        else:
+            names = ", ".join(src.name for src in self.log_sources)
+            self._write_status(f"Logs found and loaded: {names}")
         self._update_skills_status()
 
         self.bus.on_speak(self._handle_speak)
         self.bus.on_activity(self._handle_activity)
         self.bus.connect()
-        self._write_status(f"Connected to OVOS messagebus at {self.host}:{self.port}")
 
         self.set_interval(LOG_POLL_INTERVAL, self._poll_logs)
         self.query_one("#utterance-input", Input).focus()
 
         self._startup_steps_remaining = 2
         self._check_services_worker()
-        self._write_status("Finding skills...")
         self._refresh_installed_skills(verbose=False, on_complete=self._finish_startup)
 
     def _finish_startup(self) -> None:
         """Called once each of the two async/off-thread startup steps
         (service-state check, skill lookup) has actually completed, in
-        whichever order - only then is 'OK ready.' written. See
-        on_mount()'s docstring for the bug this fixes."""
+        whichever order - only then is 'Connected to messagebus' and
+        'OK ready.' written. See on_mount()'s docstring for the
+        ordering bug this fixes. Connection status is deliberately the
+        second-to-last line (not printed at connect() time) so it
+        settles near 'OK ready.' rather than appearing ahead of the
+        service/skill summaries, which now take a moment to gather."""
         self._startup_steps_remaining -= 1
         if self._startup_steps_remaining <= 0:
+            self._write_status(f"Connected to messagebus at {self.host}:{self.port}")
             self._write_status("OK ready.")
 
     @work(thread=True)
@@ -509,9 +505,19 @@ class OVOSTUIApp(App):
         """Runs discover_services_with_state() off the main thread -
         see on_mount()'s docstring for the UI-freeze bug this fixes.
         call_from_thread() is required for every UI touch from here,
-        per Textual's thread-worker rules."""
-        n_services = len(discover_services_with_state())
-        self.call_from_thread(self._write_status, f"Getting service states... {n_services} ovos-*.service unit(s) found")
+        per Textual's thread-worker rules. Writes a "Services:" header
+        followed by one indented line per unit, matching the boot
+        style the rest of the app now uses - not just a count, since
+        which specific services are up/down is exactly what's useful
+        to see at a glance during startup."""
+        services = discover_services_with_state()
+        if services:
+            self.call_from_thread(self._write_status, "Services:")
+            for name, is_active in services:
+                state = "Active" if is_active else "Inactive"
+                self.call_from_thread(self._write_status, f"    {name} {state}")
+        else:
+            self.call_from_thread(self._write_status, "Services: none found")
         self.call_from_thread(self._finish_startup)
 
     def _write_to_log(self, widget: RichLog, content) -> None:
@@ -567,11 +573,12 @@ class OVOSTUIApp(App):
     def _refresh_installed_skills(self, verbose: bool = True, on_complete=None) -> None:
         """Populates self.installed_skills (SkillCommandProvider's
         autocomplete source) via bus.list_skills(). Called once at
-        startup (verbose=False - see on_mount's boot-narration
-        docstring, count only, not a full listing) and again whenever
-        'Skill: List installed' runs (see get_system_commands(),
-        verbose=True by default) - not on every palette keystroke,
-        since each call is a real bus round-trip with a timeout.
+        startup (verbose=False - active/inactive counts only, not a
+        full listing - see on_mount's boot-narration docstring) and
+        again whenever 'Skill: List installed' runs (see
+        get_system_commands(), verbose=True by default) - not on every
+        palette keystroke, since each call is a real bus round-trip
+        with a timeout.
 
         verbose=True writes one skill per line, with its active/
         inactive/unknown state, to the conversation pane (not a single
@@ -601,7 +608,13 @@ class OVOSTUIApp(App):
                         state = "active" if active else "inactive" if active is False else "unknown"
                         self.call_from_thread(self._write_status, f"  {skill_id} ({state})")
                 else:
-                    self.call_from_thread(self._write_status, f"Finding skills... {len(self.installed_skills)} found")
+                    n_active = sum(1 for v in self.installed_skills.values() if v)
+                    n_inactive = sum(1 for v in self.installed_skills.values() if v is False)
+                    n_unknown = sum(1 for v in self.installed_skills.values() if v is None)
+                    summary = f"Skills found: {n_active} active {n_inactive} inactive"
+                    if n_unknown:
+                        summary += f" {n_unknown} unknown"
+                    self.call_from_thread(self._write_status, summary)
             if on_complete is not None:
                 self.call_from_thread(on_complete)
         self.bus.list_skills(_on_result)
@@ -633,20 +646,22 @@ class OVOSTUIApp(App):
 
     def _update_skills_status(self) -> None:
         """Sources/Levels are now directly visible as checkboxes, so
-        they need no separate status text. Skills stays behind an F4
-        modal (its list can grow long), so a small trailing count +
-        hint is all that's shown for it here. The label itself is
-        clickable (ClickableLabel) as an alternative to F4."""
+        they need no separate status text. Skills stays behind the
+        Command Palette (its list can grow long) - a small trailing
+        count is shown here, clickable (ClickableLabel) to open the
+        palette directly. No F4 mention - that binding doesn't exist
+        anymore (moved entirely into the palette, see
+        SkillFilterCommandProvider)."""
         try:
             label = self.query_one("#skills-status", ClickableLabel)
         except NoMatches:
             return
         if not self.skill_enabled:
-            label.update("Skills: none seen yet (F4)")
+            label.update("Skills: none seen yet")
             return
         n_sk = len(self.skill_enabled)
         n_sk_on = sum(1 for v in self.skill_enabled.values() if v)
-        label.update(f"Skills: {n_sk_on}/{n_sk} filtered (click or F4)")
+        label.update(f"Skills: {n_sk_on}/{n_sk} filtered (click)")
 
     def _line_passes_all_filters(self, source_name: str, line: str) -> bool:
         """The full filter chain a line must pass to be shown - see
@@ -800,7 +815,7 @@ class OVOSTUIApp(App):
 
         No separate description/help line under any entry - state
         (checked/unchecked, active/inactive) is embedded directly in
-        the title text instead (e.g. "Log: Toggle source: skills
+        the title text instead (e.g. "Log: Source: skills
         (checked)"), matching how the dynamic Provider-based entries
         already work. One line per command everywhere, nothing more
         than necessary shown."""
@@ -816,10 +831,10 @@ class OVOSTUIApp(App):
         yield SystemCommand("Focus: Utterance input", "", self.action_focus_input)
         for src in self.log_sources:
             state = "checked" if src.enabled else "unchecked"
-            yield SystemCommand(f"Log: Toggle source: {src.name} ({state})", "", partial(self._toggle_source, src.name))
+            yield SystemCommand(f"Log: Source: {src.name} ({state})", "", partial(self._toggle_source, src.name))
         for level in KNOWN_LOG_LEVELS:
             state = "checked" if self.level_enabled.get(level, True) else "unchecked"
-            yield SystemCommand(f"Log: Toggle level: {level} ({state})", "", partial(self._toggle_level, level))
+            yield SystemCommand(f"Log: Level: {level} ({state})", "", partial(self._toggle_level, level))
         if self.skill_enabled:
             yield SystemCommand("Log: Select all skills", "", self._select_all_skills)
             yield SystemCommand("Log: Deselect all skills", "", self._deselect_all_skills)

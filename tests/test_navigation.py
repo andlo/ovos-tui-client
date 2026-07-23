@@ -255,9 +255,9 @@ async def test_get_system_commands_includes_source_and_level_toggles(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
-        assert any(t.startswith("Log: Toggle source: skills (") for t in titles)
-        assert any(t.startswith("Log: Toggle source: bus (") for t in titles)
-        assert any(t.startswith("Log: Toggle level: ERROR (") for t in titles)
+        assert any(t.startswith("Log: Source: skills (") for t in titles)
+        assert any(t.startswith("Log: Source: bus (") for t in titles)
+        assert any(t.startswith("Log: Level: ERROR (") for t in titles)
 
 
 @pytest.mark.asyncio

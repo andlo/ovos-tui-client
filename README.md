@@ -46,7 +46,7 @@ on modern Python/setuptools).
   are compact checkboxes directly in the main view, checked by
   default, no modal needed - each category on its own single line.
 - **Skills:** - click it, or press Enter when it's focused - opens the
-  Command Palette, where "Log: Toggle skill" filters the log display
+  Command Palette, where "Log: Skill" filters the log display
   by skill_id (dynamically discovered the first time a skill_id is
   seen in the log text - best-effort, not every skill-related line
   mentions its own skill_id explicitly; unchecked by default, unlike
@@ -86,8 +86,8 @@ on modern Python/setuptools).
   runs immediately, filtered in place as you type, with its result
   written to the conversation pane - **no popup windows**:
   - **`Log: `** - toggle any source/level/skill directly, e.g. "Log:
-    Toggle source: skills", "Log: Toggle level: ERROR", "Log: Toggle
-    skill: ovos-skill-horoscope..." - same effect as clicking the
+    Source: skills", "Log: Level: ERROR", "Log:
+    Skill: ovos-skill-horoscope..." - same effect as clicking the
     checkbox, without leaving the palette. Once at least one skill_id
     has been seen, "Log: Select all skills" / "Log: Deselect all
     skills" are also available for bulk toggling.
@@ -141,13 +141,13 @@ on modern Python/setuptools).
   connection info, service actions, skill list/activate/deactivate
   results) - distinct styling so status lines don't compete for
   attention with the actual conversation. Startup itself narrates as
-  a small, deliberately old-school boot sequence - version number,
-  "Reading logs...", "Getting service states...", "Finding skills...
-  N found" (count only - not the full listing, see "Skill: List
-  installed" above for that), ending in "OK ready." - only once both
-  of the async/background startup steps (service-state check, skill
-  lookup) have genuinely finished, not just been kicked off, so it
-  doesn't appear before its own result does. The UI itself is
+  a compact boot sequence - version number, which log sources were
+  found, a "Services:" block listing each `ovos-*.service` unit and
+  whether it's Active/Inactive, and a skill count split into
+  active/inactive - ending in "OK ready." only once both of the
+  async/background startup steps (service-state check, skill lookup)
+  have genuinely finished, not just been kicked off, so it doesn't
+  appear before its own result does. The UI itself is
   interactive from the moment those steps are kicked off, not after -
   the service-state check in particular runs on a background thread
   precisely so a slow `systemctl` call can never freeze the whole app.
