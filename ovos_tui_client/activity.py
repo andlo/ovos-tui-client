@@ -120,10 +120,17 @@ def summarize_message(msg_type, data=None):
 
     # question:action - the actual "this one won" signal, fired once
     # the winning answer among all the candidates above has been
-    # selected. Confirmed against the official OVOS message
-    # specification (openvoiceos.github.io/message_spec/ovos_core/,
-    # CommonQAService): "'phrase': str, 'skill_id': str, 'callback_data':
-    # dict - Trigger skill callback after answer was selected".
+    # selected. Documented in the official OVOS message specification
+    # (openvoiceos.github.io/message_spec/ovos_core/, CommonQAService):
+    # "'phrase': str, 'skill_id': str, 'callback_data': dict - Trigger
+    # skill callback after answer was selected". Handling it here is
+    # correct if/when it fires, but honesty note: it did NOT actually
+    # appear in live testing (several real questions asked, full
+    # activity buffer checked, several second wait) - unlike the other
+    # additions in this file, this one is implemented from the
+    # documented spec alone, not confirmed by observing it happen. May
+    # be version-dependent, or only fire under conditions not
+    # triggered by the questions tried so far.
     if msg_type == "question:action":
         return f"🏆 {data.get('skill_id', '?')} selected to answer"
 
