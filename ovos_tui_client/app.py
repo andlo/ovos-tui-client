@@ -18,7 +18,7 @@ Textual widgets aren't thread-safe to update directly from the
 bus-client's background thread, so incoming lines are queued and
 drained on the UI's own event loop instead.
 
-KEYBINDINGS - F1 help, F3 installed skills, F4 filter by skill, F5-F8
+KEYBINDINGS - F1 help, F4 filter by skill, F5-F8
 jump focus to Logs/Conversation/Activity/Input, Ctrl+P opens Textual's
 built-in command palette (all the F-key actions are
 also available there, fuzzy-searchable), Escape closes any open modal.
@@ -51,6 +51,7 @@ from collections import deque
 from functools import partial
 
 from textual.app import App, ComposeResult, SystemCommand
+from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
@@ -114,7 +115,6 @@ class HelpScreen(ModalScreen):
             yield Label("Keybindings (Esc to close)")
             yield Label("")
             yield Label("F1   Show this help")
-            yield Label("F3   Installed skills (from the bus)")
             yield Label("F4   Filter by skill (click 'Skills:' works too)")
             yield Label("F5   Jump focus to Logs")
             yield Label("F6   Jump focus to Conversation")
@@ -126,9 +126,9 @@ class HelpScreen(ModalScreen):
             yield Label("Space / Enter   Toggle a focused checkbox")
             yield Label("Up / Down   Browse utterance history (in the input)")
             yield Label("")
-            yield Label("Service restart/stop/start lives in the Command")
-            yield Label("Palette only (type 'service') - pick an action,")
-            yield Label("then pick which ovos-*.service unit.")
+            yield Label("No popup windows for services or skill activation -")
+            yield Label("type 'service' or 'skill' in the palette instead.")
+            yield Label("Results appear as dim text in the Conversation pane.")
             yield Label("")
             yield Label("Typing anywhere in Logs/Conversation/Activity")
             yield Label("switches focus to the utterance input automatically -")
@@ -142,108 +142,6 @@ class HelpScreen(ModalScreen):
             yield Label("Scrolled-up panes never get yanked back to the")
             yield Label("bottom by new lines - only auto-scrolls while")
             yield Label("already at the bottom.")
-
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            self.dismiss()
-
-
-class ServicePickerScreen(ModalScreen):
-    """The 'then choose which service' half of the two-step Command
-    Palette flow (issue #3 follow-up): typing 'service' in the palette
-    groups 'Service: Restart...' / 'Service: Stop...' / 'Service:
-    Start...' together (see get_system_commands()); selecting one of
-    those opens THIS screen with the matching action already bound,
-    listing every discovered ovos-*.service unit to pick from.
-
-    Replaces the old standalone ServicesScreen/F2 binding, which only
-    ever did restart and is now redundant - this covers restart, stop,
-    and start, all reachable from the palette instead of a dedicated
-    keybinding.
-
-    Discovery/action both go through services.py, which never
-    raises - failures are shown as a result line instead of crashing
-    the screen."""
-
-    CSS = """
-    ServicePickerScreen { align: center middle; }
-    #service-picker-dialog {
-        width: 60; height: auto; max-height: 20;
-        border: solid $accent; background: $panel; padding: 1 2;
-    }
-    #service-picker-result { height: auto; color: $text-muted; }
-    """
-
-    def __init__(self, action_label: str, action_fn):
-        super().__init__()
-        self.action_label = action_label
-        self.action_fn = action_fn
-        self.services = discover_services()
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="service-picker-dialog"):
-            yield Label(f"{self.action_label} which service? (Enter to confirm, Esc to close)")
-            if not self.services:
-                yield Label("No ovos-*.service units found via systemctl --user.")
-            else:
-                yield ListView(*[ListItem(Label(s)) for s in self.services], id="service-picker-list")
-            yield Label("", id="service-picker-result")
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        index = event.list_view.index
-        if index is None or index >= len(self.services):
-            return
-        unit_name = self.services[index]
-        ok, msg = self.action_fn(unit_name)
-        prefix = "OK: " if ok else "FAILED: "
-        self.query_one("#service-picker-result", Label).update(prefix + msg)
-
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            self.dismiss()
-
-
-class SkillsScreen(ModalScreen):
-    """F3 - shows the list of currently loaded skills, requested from
-    OVOS via bus.list_skills() (see bus.py's docstring on that method
-    for the honesty note about its response format being unverified
-    against a live modern instance). Not to be confused with
-    SkillFilterScreen (F4) below - this one is a read-only list of
-    what's actually installed; that one is a filter over skill_ids
-    seen so far in the log stream."""
-
-    CSS = """
-    SkillsScreen { align: center middle; }
-    #skills-dialog {
-        width: 70; height: auto; max-height: 25;
-        border: solid $accent; background: $panel; padding: 1 2;
-    }
-    """
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="skills-dialog"):
-            yield Label("Installed skills (Esc to close)", id="skills-title")
-            yield RichLog(id="skills-list-view", wrap=False, markup=False)
-
-    def on_mount(self) -> None:
-        self.query_one("#skills-list-view", RichLog).write("Requesting skill list...")
-
-    def show_skills(self, skills) -> None:
-        """Called from the main app once bus.list_skills()'s callback
-        fires - may arrive from the bus-client's background thread, so
-        callers must marshal onto the app thread first (see
-        OVOSTUIApp.action_show_skills)."""
-        view = self.query_one("#skills-list-view", RichLog)
-        view.clear()
-        if skills is None:
-            view.write("No response received (timed out) - see bus.py's")
-            view.write("list_skills() docstring: the response event name")
-            view.write("may differ on your OVOS version.")
-        elif not skills:
-            view.write("(no skills reported)")
-        else:
-            for skill_id in sorted(skills):
-                view.write(skill_id)
 
     def on_key(self, event) -> None:
         if event.key == "escape":
@@ -322,6 +220,87 @@ class ClickableLabel(Label):
             event.stop()
 
 
+class ServiceCommandProvider(Provider):
+    """Command Palette provider (Ctrl+P) for restart/stop/start against
+    any discovered ovos-*.service unit, filtered in place as you type
+    - no modal window. Every hit's text starts with "Service: " so
+    typing "service" clusters all of them together (the palette has
+    no native grouping/submenus - a shared literal prefix is the
+    practical way to get that effect out of what's fundamentally a
+    flat fuzzy-matched list); typing "service restart" narrows further
+    to just restart actions; "service restart core" narrows to the
+    specific unit. Service names come from services.discover_services()
+    at search time, not a fixed list.
+
+    Selecting a hit runs the action immediately and writes the result
+    to the conversation pane (dim/grey, via App._write_status()) -
+    deliberately not a popup, per feedback that this tool should
+    prefer palette + conversation-pane output over modal windows
+    wherever the action doesn't inherently need its own screen."""
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        for unit_name in discover_services():
+            for label, action_fn in (
+                ("Restart", restart_service),
+                ("Stop", stop_service),
+                ("Start", start_service),
+            ):
+                command_text = f"Service: {label} {unit_name}"
+                score = matcher.match(command_text)
+                if score > 0:
+                    yield Hit(
+                        score,
+                        matcher.highlight(command_text),
+                        partial(self._run, action_fn, unit_name),
+                    )
+
+    def _run(self, action_fn, unit_name: str) -> None:
+        ok, msg = action_fn(unit_name)
+        self.app._write_status(msg, ok=ok)
+
+
+class SkillCommandProvider(Provider):
+    """Command Palette provider (Ctrl+P) for activating/deactivating
+    any known installed skill, same in-place filtering as
+    ServiceCommandProvider above - no modal window. Hits read from
+    OVOSTUIApp.installed_skills, a cache populated by
+    _refresh_installed_skills() (called once at startup, and again
+    whenever "Skill: List installed" runs - see get_system_commands())
+    rather than fetched fresh on every keystroke, since that would
+    mean a bus round-trip per character typed. If the cache is still
+    empty (nothing successfully fetched yet), this simply has no hits
+    to offer yet - not an error, just nothing to show.
+
+    Activate/deactivate themselves go through bus.py's
+    activate_skill()/deactivate_skill(), which use the classic
+    mycroft-core 'skillmanager.activate'/'skillmanager.deactivate'
+    convention - unverified against a live modern OVOS instance, same
+    honesty caveat as list_skills() (see bus.py). Fire-and-forget, so
+    the conversation-pane line this writes confirms the REQUEST was
+    sent, not that OVOS actually applied it."""
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        for skill_id in self.app.installed_skills:
+            for label, method_name in (
+                ("Activate", "activate_skill"),
+                ("Deactivate", "deactivate_skill"),
+            ):
+                command_text = f"Skill: {label} {skill_id}"
+                score = matcher.match(command_text)
+                if score > 0:
+                    yield Hit(
+                        score,
+                        matcher.highlight(command_text),
+                        partial(self._run, method_name, skill_id, label),
+                    )
+
+    def _run(self, method_name: str, skill_id: str, label: str) -> None:
+        getattr(self.app.bus, method_name)(skill_id)
+        self.app._write_status(f"{skill_id}: {label.lower()} requested")
+
+
 class OVOSTUIApp(App):
     CSS = """
     #logs-container {
@@ -372,21 +351,32 @@ class OVOSTUIApp(App):
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
         ("f1", "show_help", "Help"),
-        ("f3", "show_skills", "Skills"),
         ("f4", "show_skill_filter", "Skill Filter"),
         ("f5", "focus_logs", "Logs"),
         ("f6", "focus_conversation", "Conversation"),
         ("f7", "focus_activity", "Activity"),
         ("f8", "focus_input", "Input"),
     ]
-    # No F2/Services binding anymore - service management (restart/
-    # stop/start) moved entirely into the Command Palette (type
-    # "service", see get_system_commands() below), which replaced the
-    # old standalone Services modal. Not renumbering F3+ to fill the
-    # gap - no benefit to disrupting keys that already work.
+    # No F2/Services or F3/Skills bindings anymore - service and skill
+    # management (restart/stop/start, list/activate/deactivate) moved
+    # entirely into the Command Palette (type "service" or "skill",
+    # see get_system_commands()/ServiceCommandProvider/
+    # SkillCommandProvider below), with results written to the
+    # conversation pane instead of a popup window - per feedback that
+    # this tool should prefer palette + conversation-pane output over
+    # modal windows wherever an action doesn't inherently need its own
+    # screen. F4/SkillFilterScreen is unrelated and stays - that's
+    # filtering the LOG DISPLAY by skill_ids seen in the log stream, a
+    # different concept from activating/deactivating installed skills.
+    # Not renumbering F4+ to fill the gap - no benefit to disrupting
+    # keys that already work.
+
+    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider}
 
     def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None):
         super().__init__()
+        self.host = host
+        self.port = port
         self.bus = OVOSBusConnection(host=host, port=port, lang=lang)
         self.log_dir = find_log_dir(override=log_dir_override)
         self.log_sources = discover_log_sources(self.log_dir)
@@ -399,6 +389,7 @@ class OVOSTUIApp(App):
         # reads naturally - see module docstring's FILTER SEMANTICS.
         self.level_enabled = {level: True for level in KNOWN_LOG_LEVELS}
         self.skill_enabled = {}  # skill_id -> bool, unchecked by default as discovered
+        self.installed_skills = []  # cache for SkillCommandProvider - see _refresh_installed_skills()
 
         # Restores filter choices from a previous session (state.py) -
         # only for sources/levels that still exist on THIS run (a
@@ -446,6 +437,8 @@ class OVOSTUIApp(App):
         self.bus.on_speak(self._handle_speak)
         self.bus.on_activity(self._handle_activity)
         self.bus.connect()
+        self._write_status(f"Connected to OVOS messagebus at {self.host}:{self.port}")
+        self._refresh_installed_skills()
         self.set_interval(LOG_POLL_INTERVAL, self._poll_logs)
         self.query_one("#utterance-input", Input).focus()
 
@@ -471,6 +464,35 @@ class OVOSTUIApp(App):
 
     def _write_activity(self, line: str) -> None:
         self._write_to_log(self.query_one("#activity", RichLog), line)
+
+    def _write_status(self, text: str, ok: bool = True) -> None:
+        """Dim/grey status lines in the conversation pane - startup
+        connection info, service restart/stop/start results, skill
+        activate/deactivate/list results. Distinct from the green
+        'You:'/blue 'OVOS:' lines so it doesn't compete for attention,
+        per feedback that this tool should prefer writing action
+        results here over popping up a separate result window. `ok`
+        picks dim (normal) vs red (failure) styling - still muted, not
+        alarming, since this is background/informational, not a modal
+        error."""
+        style = "dim" if ok else "red"
+        self._write_conversation(f"[{style}]{text}[/{style}]")
+
+    def _refresh_installed_skills(self) -> None:
+        """Populates self.installed_skills (SkillCommandProvider's
+        autocomplete source) via bus.list_skills(). Called once at
+        startup and again whenever 'Skill: List installed' runs (see
+        get_system_commands()) - not on every palette keystroke, since
+        each call is a real bus round-trip with a timeout."""
+        def _on_result(skills):
+            if skills is None:
+                self.call_from_thread(self._write_status, "Skill list: no response (timed out)", ok=False)
+                return
+            self.installed_skills = sorted(skills)
+            self.call_from_thread(self._write_status, f"Skills: {len(skills)} installed - " + ", ".join(sorted(skills)))
+        self.bus.list_skills(_on_result)
+
+
 
     def _update_skills_status(self) -> None:
         """Sources/Levels are now directly visible as checkboxes, so
@@ -607,52 +629,42 @@ class OVOSTUIApp(App):
         event.input.value = ""
 
     def get_system_commands(self, screen: Screen):
-        """Surfaces the same actions available via F1/F3/F4-F8 in
+        """Surfaces the same actions available via F1/F4-F8 in
         Textual's built-in command palette (Ctrl+P) too, so they're
         discoverable by fuzzy search as well as by key.
 
-        GROUPING BY PREFIX (issue #3 follow-up): the palette has no
-        native submenu/nested-selection support (confirmed - it's a
-        flat fuzzy-matched list, same as every other command-palette
-        implementation), so "typing a category, then narrowing" is
-        achieved by giving related commands a shared literal prefix.
-        Typing "log" clusters every Source/Level toggle together
-        ("Log: Toggle source: ..." / "Log: Toggle level: ..."); typing
-        "service" clusters the three service actions together
-        ("Service: Restart..." / "Service: Stop..." / "Service:
-        Start..."). The service actions go one step further: since
-        picking e.g. "Service: Restart..." still needs a SPECIFIC unit
-        chosen afterward (unlike a toggle, which is already atomic),
-        selecting one opens ServicePickerScreen with that action
-        pre-bound, listing discovered services to choose from - a
-        genuine two-step flow, just implemented as 'command opens a
-        small follow-up screen' rather than a nested palette, since
-        the palette itself doesn't support that.
+        GROUPING BY PREFIX: the palette has no native submenu/nested-
+        selection support (confirmed - it's a flat fuzzy-matched list,
+        same as every other command-palette implementation), so
+        "typing a category, then narrowing" is achieved by giving
+        related commands a shared literal prefix. Typing "log"
+        clusters every Source/Level toggle together; typing "service"
+        clusters restart/stop/start (handled by ServiceCommandProvider,
+        registered via COMMANDS - filters IN PLACE as you type, no
+        popup); typing "skill" clusters List/Activate/Deactivate
+        (List is the one static entry below; Activate/Deactivate are
+        SkillCommandProvider, same in-place-filtering pattern).
 
-        This is also why the old standalone Services modal (F2) is
-        gone: it's now entirely subsumed by these three palette
-        entries + ServicePickerScreen, redundant to keep as a separate
-        keybinding."""
+        NO POPUP WINDOWS for any of these, per feedback: results are
+        written to the conversation pane (_write_status(), dim/grey
+        text) instead of a modal result screen or Textual's toast
+        notifications - this is also why the old standalone Services
+        (F2) and Skills-list (F3) modals are gone entirely, replaced
+        by palette entries + conversation-pane output."""
         yield from super().get_system_commands(screen)
         yield SystemCommand("Help: show keybindings", "Lists every keybinding (same as F1)", self.action_show_help)
-        yield SystemCommand("Skills: show installed", "Lists currently loaded skills (same as F3)", self.action_show_skills)
+        yield SystemCommand("Skill: List installed", "Refreshes and writes the installed-skill list to the conversation pane", self._refresh_installed_skills)
         yield SystemCommand("Skills: filter logs by skill", "Opens the skill-filter panel (same as F4)", self.action_show_skill_filter)
         yield SystemCommand("Focus: Logs", "Jump focus to the logs pane (same as F5)", self.action_focus_logs)
         yield SystemCommand("Focus: Conversation", "Jump focus to the conversation pane (same as F6)", self.action_focus_conversation)
         yield SystemCommand("Focus: Activity", "Jump focus to the activity pane (same as F7)", self.action_focus_activity)
         yield SystemCommand("Focus: Utterance input", "Jump focus to the input box (same as F8)", self.action_focus_input)
-        yield SystemCommand("Service: Restart...", "Choose a service to restart", partial(self._pick_service, "Restart", restart_service))
-        yield SystemCommand("Service: Stop...", "Choose a service to stop", partial(self._pick_service, "Stop", stop_service))
-        yield SystemCommand("Service: Start...", "Choose a service to start", partial(self._pick_service, "Start", start_service))
         for src in self.log_sources:
             state = "checked" if src.enabled else "unchecked"
             yield SystemCommand(f"Log: Toggle source: {src.name}", f"Currently {state}", partial(self._toggle_source, src.name))
         for level in KNOWN_LOG_LEVELS:
             state = "checked" if self.level_enabled.get(level, True) else "unchecked"
             yield SystemCommand(f"Log: Toggle level: {level}", f"Currently {state}", partial(self._toggle_level, level))
-
-    def _pick_service(self, action_label: str, action_fn) -> None:
-        self.push_screen(ServicePickerScreen(action_label, action_fn))
 
     def _toggle_source(self, name: str) -> None:
         """Flips a source's enabled state and syncs the visible
@@ -680,11 +692,6 @@ class OVOSTUIApp(App):
 
     def action_show_help(self) -> None:
         self.push_screen(HelpScreen())
-
-    def action_show_skills(self) -> None:
-        screen = SkillsScreen()
-        self.push_screen(screen)
-        self.bus.list_skills(lambda skills: self.call_from_thread(screen.show_skills, skills))
 
     def action_show_skill_filter(self) -> None:
         self.push_screen(SkillFilterScreen(self.skill_enabled))

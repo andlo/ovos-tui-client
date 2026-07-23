@@ -1,13 +1,14 @@
-"""Tests for the modal screens: ServicePickerScreen (restart/stop/
-start, opened from the Command Palette - see test_command_palette.py
-for the palette-entry side of this) and SkillsScreen (list installed
-skills)."""
-from unittest.mock import MagicMock, patch
+"""Tests for SkillFilterScreen (F4) - the one remaining modal screen
+besides HelpScreen. ServicesScreen/ServicePickerScreen and SkillsScreen
+are gone entirely: service management and installed-skill listing/
+activation now live in the Command Palette with results written to
+the conversation pane instead of a popup - see test_command_palette.py
+for that."""
+from unittest.mock import MagicMock
 
 import pytest
-from textual.widgets import Label, ListView
 
-from ovos_tui_client.app import OVOSTUIApp, ServicePickerScreen, SkillsScreen
+from ovos_tui_client.app import OVOSTUIApp, SkillFilterScreen
 
 
 def _app_with_fake_bus(tmp_path):
@@ -18,132 +19,7 @@ def _app_with_fake_bus(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_service_picker_lists_discovered_services(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    with patch("ovos_tui_client.app.discover_services",
-               return_value=["ovos-core.service", "ovos-audio.service"]):
-        async with app.run_test() as pilot:
-            app.push_screen(ServicePickerScreen("Restart", MagicMock()))
-            await pilot.pause()
-            list_view = app.screen.query_one("#service-picker-list", ListView)
-            assert len(list_view.children) == 2
-
-
-@pytest.mark.asyncio
-async def test_service_picker_shows_no_units_message_when_empty(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    with patch("ovos_tui_client.app.discover_services", return_value=[]):
-        async with app.run_test() as pilot:
-            app.push_screen(ServicePickerScreen("Restart", MagicMock()))
-            await pilot.pause()
-            with pytest.raises(Exception):
-                app.screen.query_one("#service-picker-list", ListView)
-
-
-@pytest.mark.asyncio
-async def test_escape_closes_the_service_picker_screen(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]):
-        async with app.run_test() as pilot:
-            app.push_screen(ServicePickerScreen("Restart", MagicMock()))
-            await pilot.pause()
-            assert isinstance(app.screen, ServicePickerScreen)
-            await pilot.press("escape")
-            await pilot.pause()
-            assert not isinstance(app.screen, ServicePickerScreen)
-
-
-@pytest.mark.asyncio
-async def test_selecting_a_service_calls_the_bound_action(tmp_path):
-    """The picker is action-agnostic - whatever action_fn it was
-    constructed with (restart/stop/start_service) runs on the chosen
-    unit. Uses a generic mock here rather than one specific action,
-    since the screen itself doesn't care which."""
-    app = _app_with_fake_bus(tmp_path)
-    mock_action = MagicMock(return_value=(True, "ovos-core.service: restarted"))
-    with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]):
-        async with app.run_test() as pilot:
-            app.push_screen(ServicePickerScreen("Restart", mock_action))
-            await pilot.pause()
-            list_view = app.screen.query_one("#service-picker-list", ListView)
-            list_view.focus()
-            await pilot.press("enter")
-            await pilot.pause()
-
-            mock_action.assert_called_once_with("ovos-core.service")
-            result_label = app.screen.query_one("#service-picker-result", Label)
-            assert "restarted" in str(result_label.content)
-
-
-@pytest.mark.asyncio
-async def test_pressing_s_opens_the_skills_screen_and_requests_list(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        await pilot.press("f3")
-        await pilot.pause()
-
-        assert isinstance(app.screen, SkillsScreen)
-        app.bus.list_skills.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_skills_screen_shows_skills_once_callback_fires(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        await pilot.press("f3")
-        await pilot.pause()
-
-        callback = app.bus.list_skills.call_args[0][0]
-        # bypass call_from_thread (would raise on the same thread, as
-        # established earlier) by calling the screen's method directly -
-        # this test is about show_skills() rendering, not the thread
-        # marshalling call_from_thread already has its own test for
-        screen = app.screen
-        screen.show_skills(["ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"])
-        await pilot.pause()
-
-        from textual.widgets import RichLog
-        view = app.screen.query_one("#skills-list-view", RichLog)
-        rendered = "\n".join(str(line) for line in view.lines)
-        assert "ovos-skill-grimm-tales.andlo" in rendered
-        assert "ovos-skill-andersen-tales.andlo" in rendered
-
-
-@pytest.mark.asyncio
-async def test_skills_screen_shows_timeout_message_on_none(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        await pilot.press("f3")
-        await pilot.pause()
-
-        screen = app.screen
-        screen.show_skills(None)
-        await pilot.pause()
-
-        from textual.widgets import RichLog
-        view = app.screen.query_one("#skills-list-view", RichLog)
-        rendered = "\n".join(str(line) for line in view.lines)
-        assert "timed out" in rendered.lower() or "no response" in rendered.lower()
-
-
-@pytest.mark.asyncio
-async def test_escape_closes_the_skills_screen(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        await pilot.press("f3")
-        await pilot.pause()
-        assert isinstance(app.screen, SkillsScreen)
-        await pilot.press("escape")
-        await pilot.pause()
-        assert not isinstance(app.screen, SkillsScreen)
-
-
-# --- F4: skill filter modal (Sources/Levels are inline in the main
-# view now, not a modal - see test_app.py) ---
-
-@pytest.mark.asyncio
 async def test_pressing_f4_opens_the_skill_filter_screen(tmp_path):
-    from ovos_tui_client.app import SkillFilterScreen
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         await pilot.press("f4")
@@ -197,7 +73,6 @@ async def test_skill_filter_screen_shows_placeholder_when_no_skills_seen_yet(tmp
 
 @pytest.mark.asyncio
 async def test_escape_closes_the_skill_filter_screen(tmp_path):
-    from ovos_tui_client.app import SkillFilterScreen
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         await pilot.press("f4")

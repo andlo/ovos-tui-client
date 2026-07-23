@@ -60,27 +60,44 @@ on modern Python/setuptools).
   retroactively to already-received lines too, same as the free-text
   filter. Choices persist across sessions (`~/.config/ovos-tui-client/
   state.json`), saved on quit.
-- **F1**: keybinding reference. **F3**: currently loaded skills (from
-  the bus). **F5-F8**: jump focus straight to Logs / Conversation /
-  Activity / the utterance input. There's no F2/Services shortcut
-  anymore - service management moved entirely into the Command
-  Palette (below), which made a dedicated key/screen for it redundant.
+- **F1**: keybinding reference. **F4**: skill-filter panel (see
+  below). **F5-F8**: jump focus straight to Logs / Conversation /
+  Activity / the utterance input. There's no F2/Services or F3/Skills
+  shortcut anymore - service management and installed-skill listing/
+  activation moved entirely into the Command Palette (below), with
+  results written to the **conversation pane** (dim/grey text)
+  instead of a popup - per feedback that this tool should avoid modal
+  windows wherever an action doesn't inherently need its own screen.
 - **Ctrl+P**: Textual's command palette - meant as a way to talk to/
   control OVOS directly ("bagom"/behind the scenes), not just a
-  launcher for this tool's own popup screens. Every F1/F3-F8 action is
+  launcher for this tool's own popup screens. Every F1/F4-F8 action is
   there too, fuzzy-searchable, but it also goes further. The palette
   itself has no native grouping/submenus (confirmed - it's a flat
   fuzzy-matched list in every command-palette implementation, not just
   Textual's), so related commands share a literal prefix instead, so
-  typing that prefix clusters them together:
+  typing that prefix clusters them together - and every action below
+  runs immediately, filtered in place as you type, with its result
+  written to the conversation pane - **no popup windows**:
   - **`Log: `** - toggle any source/level directly, e.g. "Log: Toggle
     source: skills", "Log: Toggle level: ERROR" - same effect as
     clicking the checkbox, without leaving the palette.
-  - **`Service: `** - "Service: Restart...", "Service: Stop...",
-    "Service: Start..." - picking one opens a small follow-up list of
-    every discovered `ovos-*.service` unit to choose from (a two-step
-    flow: pick the action, then pick the target - the closest
-    approximation of a submenu the palette's flat list allows).
+  - **`Service: `** - "Service: Restart ovos-core.service", "Service:
+    Stop ...", "Service: Start ..." - one hit per discovered
+    `ovos-*.service` unit per action, fuzzy-matched as you type (e.g.
+    "restart co" narrows straight to `ovos-core.service`). Selecting
+    one runs it immediately; the result ("ovos-core.service:
+    restarted", or the failure reason) appears in the conversation
+    pane.
+  - **`Skill: `** - "Skill: List installed" (a static entry - fetches
+    the current list via the bus and writes it to the conversation
+    pane, refreshing the autocomplete source for the next two), plus
+    "Skill: Activate <skill_id>" / "Skill: Deactivate <skill_id>" for
+    every skill from that list, fuzzy-matched the same way as
+    services. Fire-and-forget (see `bus.py`'s honesty note on
+    `activate_skill()`/`deactivate_skill()` - based on the documented
+    mycroft-core convention, not verified against a live modern OVOS
+    instance) - the conversation-pane line confirms the request was
+    *sent*, not that OVOS applied it.
   **Tab/Shift+Tab**: cycle focus across everything (checkboxes, panes,
   input) - a Textual built-in, no custom code needed. **Escape**:
   closes whatever modal is open.
@@ -88,8 +105,11 @@ on modern Python/setuptools).
   Activity (none of which are normally typable) redirects that
   keystroke to the utterance input instead of doing nothing - almost
   always what was actually meant.
-- **Conversation**: what you typed (green, full line) and what OVOS
-  said back (blue, full line).
+- **Conversation**: what you typed (green), what OVOS said back
+  (blue), and dim/grey status lines for everything above (startup
+  connection info, service actions, skill list/activate/deactivate
+  results) - distinct styling so status lines don't compete for
+  attention with the actual conversation.
 - **Activity**: a curated, simplified feed of what's happening on the
   bus right now - which skill is handling the request, wake word/
   speech start-stop, global stop, and for `ovos.common_reading.*`

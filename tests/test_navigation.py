@@ -197,14 +197,14 @@ async def test_write_to_log_keeps_auto_scrolling_when_already_at_bottom(tmp_path
 
 @pytest.mark.asyncio
 async def test_get_system_commands_includes_our_actions(tmp_path):
+    """Service Restart/Stop/Start are NOT static entries here - they're
+    dynamic hits from ServiceCommandProvider (see test_command_palette.py),
+    since they need per-service names filled in at search time."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
         assert any("Help" in t for t in titles)
-        assert any("Service: Restart" in t for t in titles)
-        assert any("Service: Stop" in t for t in titles)
-        assert any("Service: Start" in t for t in titles)
-        assert any("Skills: show installed" in t for t in titles)
+        assert any("Skill: List installed" in t for t in titles)
         assert any("filter" in t.lower() for t in titles)
         assert any("Focus: Logs" in t for t in titles)
         assert any("Focus: Conversation" in t for t in titles)

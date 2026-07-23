@@ -110,3 +110,21 @@ class OVOSBusConnection:
 
         timer_factory = timer_factory or threading.Timer
         timer_factory(timeout, _timeout_check).start()
+
+    def activate_skill(self, skill_id: str):
+        """Re-enables a previously deactivated skill via the classic
+        mycroft-core 'skillmanager.activate' bus convention - the
+        sibling message to 'skillmanager.list' (used by list_skills()
+        above), from the same mycroft-core SkillManager source. Fire-
+        and-forget: unlike list_skills(), there's no documented
+        response event to wait for, so this doesn't take a callback.
+
+        The exact payload key ('skill') is based on the documented
+        mycroft-core convention, not verified against a live modern
+        OVOS instance - same honesty caveat as list_skills()."""
+        self._client.emit(Message("skillmanager.activate", {"skill": skill_id}))
+
+    def deactivate_skill(self, skill_id: str):
+        """Disables a skill via 'skillmanager.deactivate' - see
+        activate_skill()'s docstring for the same caveats."""
+        self._client.emit(Message("skillmanager.deactivate", {"skill": skill_id}))

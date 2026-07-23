@@ -233,3 +233,23 @@ def test_list_skills_timeout_does_not_fire_if_response_already_received():
     # timeout check must see state["received"] is already True and
     # skip calling back with None
     assert received == [["ovos-skill-grimm-tales.andlo"]]
+
+
+def test_activate_skill_emits_skillmanager_activate_with_skill_id():
+    conn, fake_client = _make_connection()
+    conn.activate_skill("ovos-skill-grimm-tales.andlo")
+
+    fake_client.emit.assert_called_once()
+    sent = fake_client.emit.call_args[0][0]
+    assert sent.msg_type == "skillmanager.activate"
+    assert sent.data == {"skill": "ovos-skill-grimm-tales.andlo"}
+
+
+def test_deactivate_skill_emits_skillmanager_deactivate_with_skill_id():
+    conn, fake_client = _make_connection()
+    conn.deactivate_skill("ovos-skill-grimm-tales.andlo")
+
+    fake_client.emit.assert_called_once()
+    sent = fake_client.emit.call_args[0][0]
+    assert sent.msg_type == "skillmanager.deactivate"
+    assert sent.data == {"skill": "ovos-skill-grimm-tales.andlo"}
