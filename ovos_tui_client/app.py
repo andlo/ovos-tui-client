@@ -163,15 +163,19 @@ class SkillsScreen(ModalScreen):
 
 
 class FilterScreen(ModalScreen):
-    """F4 - one combined panel for all three filter dimensions (log
-    sources, log levels, discovered skills), each a plain single-line
-    checkbox in a scrollable vertical list - not squeezed into
-    side-by-side boxes (the previous design, replaced after feedback
-    that separate F4/F5 screens with cramped rows were harder to scan
-    than one straightforward list). Mutates the App's own
-    log_sources/level_enabled/skill_enabled directly (passed by
-    reference, no separate sync-back step) and re-renders the log view
-    live via self.app._rerender_logs() on every toggle.
+    """F4 - one combined panel for all three filter dimensions.
+    Sources and Log Levels each sit on a single horizontal line
+    (there's normally room, and both lists are short/fixed-length);
+    Skills stack one per line below, since that list can grow long as
+    more are discovered. Checkboxes are styled compact (no padding/
+    border) - Textual's default Checkbox otherwise renders as a large
+    boxy 3-row-tall button, which is fine in isolation but looks
+    wrong and wastes a lot of space packed into a list like this.
+
+    Mutates the App's own log_sources/level_enabled/skill_enabled
+    directly (passed by reference, no separate sync-back step) and
+    re-renders the log view live via self.app._rerender_logs() on
+    every toggle.
 
     Known, accepted limitation: skill_ids discovered while this modal
     is already open won't appear until it's closed and reopened, since
@@ -180,11 +184,18 @@ class FilterScreen(ModalScreen):
     CSS = """
     FilterScreen { align: center middle; }
     #filter-dialog {
-        width: 60; height: 80%; max-height: 40;
+        width: 80%; height: auto; max-height: 30;
         border: solid $accent; background: $panel; padding: 1 2;
     }
-    #filter-scroll { height: 1fr; }
+    #filter-scroll { height: auto; max-height: 20; }
     .section-label { margin-top: 1; text-style: bold; }
+    .filter-row { height: 1; }
+    Checkbox {
+        height: 1;
+        padding: 0;
+        border: none;
+        margin-right: 2;
+    }
     """
 
     def __init__(self, log_sources: list, level_enabled: dict, skill_enabled: dict):
@@ -198,11 +209,13 @@ class FilterScreen(ModalScreen):
             yield Label("Filter (Esc to close)")
             with VerticalScroll(id="filter-scroll"):
                 yield Label("Sources", classes="section-label")
-                for src in self.log_sources:
-                    yield Checkbox(src.name, value=src.enabled, id=f"modal-source-{src.name}")
+                with Horizontal(classes="filter-row"):
+                    for src in self.log_sources:
+                        yield Checkbox(src.name, value=src.enabled, id=f"modal-source-{src.name}")
                 yield Label("Log Levels", classes="section-label")
-                for level in KNOWN_LOG_LEVELS:
-                    yield Checkbox(level, value=self.level_enabled.get(level, True), id=f"modal-level-{level}")
+                with Horizontal(classes="filter-row"):
+                    for level in KNOWN_LOG_LEVELS:
+                        yield Checkbox(level, value=self.level_enabled.get(level, True), id=f"modal-level-{level}")
                 if self.skill_enabled:
                     yield Label("Skills seen so far", classes="section-label")
                     for skill_id, enabled in self.skill_enabled.items():
