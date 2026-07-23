@@ -16,7 +16,22 @@ def discover_services():
     """Returns a sorted list of unit names (e.g. 'ovos-core.service')
     for every loaded systemd --user unit matching 'ovos-*'. Returns []
     on any failure (systemctl not found, no user session, etc) rather
-    than raising - callers should treat that as 'nothing to show'."""
+    than raising - callers should treat that as 'nothing to show'.
+
+    Kept as-is (name-only) for backward compatibility with existing
+    callers/tests - see discover_services_with_state() below for the
+    richer version that also reports whether each unit is running."""
+    return [name for name, _ in discover_services_with_state()]
+
+
+def discover_services_with_state():
+    """Like discover_services(), but returns (unit_name, is_active)
+    tuples - `systemctl --user list-units` already reports this in its
+    3rd column (ACTIVE: active/inactive/failed/etc), which
+    discover_services() was previously discarding. Added so the
+    Command Palette can offer only the actions that make sense for a
+    unit's current state (no point offering 'Start' on something
+    already running, or 'Stop'/'Restart' on something that isn't)."""
     try:
         result = subprocess.run(
             ["systemctl", "--user", "list-units", "ovos-*", "--plain", "--no-legend"],
@@ -26,15 +41,21 @@ def discover_services():
         return []
     if result.returncode != 0:
         return []
-    names = []
+    services = []
     for line in result.stdout.splitlines():
         line = line.strip()
         if not line:
             continue
-        unit_name = line.split()[0]
-        if unit_name.endswith(".service"):
-            names.append(unit_name)
-    return sorted(names)
+        columns = line.split()
+        unit_name = columns[0]
+        if not unit_name.endswith(".service"):
+            continue
+        # columns: UNIT LOAD ACTIVE SUB DESCRIPTION... - ACTIVE is
+        # index 2 when present; be defensive about short/malformed
+        # lines rather than raising on an unexpected systemctl format.
+        is_active = len(columns) > 2 and columns[2] == "active"
+        services.append((unit_name, is_active))
+    return sorted(services)
 
 
 def _systemctl_action(action: str, unit_name: str, timeout: int = 30):

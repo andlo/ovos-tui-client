@@ -45,12 +45,14 @@ on modern Python/setuptools).
 - **Sources** and **Log Levels** (DEBUG/INFO/WARNING/ERROR/CRITICAL)
   are compact checkboxes directly in the main view, checked by
   default, no modal needed - each category on its own single line.
-- **Skills:** - click it, or press **F4** - opens a panel to filter by
-  skill (dynamically discovered the first time a skill_id is seen in
-  the log text - best-effort, not every skill-related line mentions
-  its own skill_id explicitly; unchecked by default, unlike Sources/
-  Levels, since this list is open-ended rather than short and fixed).
-  Kept in a modal rather than inline for that reason.
+- **Skills:** - click it, or press Enter when it's focused - opens the
+  Command Palette, where "Log: Toggle skill" filters the log display
+  by skill_id (dynamically discovered the first time a skill_id is
+  seen in the log text - best-effort, not every skill-related line
+  mentions its own skill_id explicitly; unchecked by default, unlike
+  Sources/Levels, since this list is open-ended rather than short and
+  fixed). No modal for this anymore - see the Command Palette section
+  below.
 
   **Filter semantics:** an unchecked box does NOT mean "hidden" - it
   means "not specifically filtered to". With nothing checked in a
@@ -60,17 +62,18 @@ on modern Python/setuptools).
   retroactively to already-received lines too, same as the free-text
   filter. Choices persist across sessions (`~/.config/ovos-tui-client/
   state.json`), saved on quit.
-- **F1**: keybinding reference. **F4**: skill-filter panel (see
-  below). **F5-F8**: jump focus straight to Logs / Conversation /
-  Activity / the utterance input. There's no F2/Services or F3/Skills
-  shortcut anymore - service management and installed-skill listing/
-  activation moved entirely into the Command Palette (below), with
-  results written to the **conversation pane** (dim/grey text)
-  instead of a popup - per feedback that this tool should avoid modal
-  windows wherever an action doesn't inherently need its own screen.
+- **F1**: keybinding reference. **F5-F8**: jump focus straight to
+  Logs / Conversation / Activity / the utterance input. There's no
+  F2/Services, F3/Skills, or F4/Skill-filter shortcut anymore -
+  service management, installed-skill listing/activation, AND the
+  log-display skill filter all moved entirely into the Command
+  Palette (below), with results written to the **conversation pane**
+  (dim/grey text) instead of a popup - per feedback that this tool
+  should avoid modal windows wherever an action doesn't inherently
+  need its own screen.
 - **Ctrl+P**: Textual's command palette - meant as a way to talk to/
   control OVOS directly ("bagom"/behind the scenes), not just a
-  launcher for this tool's own popup screens. Every F1/F4-F8 action is
+  launcher for this tool's own popup screens. Every F1/F5-F8 action is
   there too, fuzzy-searchable, but it also goes further. The palette
   itself has no native grouping/submenus (confirmed - it's a flat
   fuzzy-matched list in every command-palette implementation, not just
@@ -78,12 +81,16 @@ on modern Python/setuptools).
   typing that prefix clusters them together - and every action below
   runs immediately, filtered in place as you type, with its result
   written to the conversation pane - **no popup windows**:
-  - **`Log: `** - toggle any source/level directly, e.g. "Log: Toggle
-    source: skills", "Log: Toggle level: ERROR" - same effect as
-    clicking the checkbox, without leaving the palette.
+  - **`Log: `** - toggle any source/level/skill directly, e.g. "Log:
+    Toggle source: skills", "Log: Toggle level: ERROR", "Log: Toggle
+    skill: ovos-skill-horoscope..." - same effect as clicking the
+    checkbox, without leaving the palette.
   - **`Service: `** - "Service: Restart ovos-core.service", "Service:
     Stop ...", "Service: Start ..." - one hit per discovered
-    `ovos-*.service` unit per action, fuzzy-matched as you type (e.g.
+    `ovos-*.service` unit, but **only for actions that make sense for
+    its current state**: a running service offers Stop/Restart but
+    not Start; a stopped one offers only Start (determined from
+    `systemctl`'s own ACTIVE column). Fuzzy-matched as you type (e.g.
     "restart co" narrows straight to `ovos-core.service`). Selecting
     one runs it immediately; the result ("ovos-core.service:
     restarted", or the failure reason) appears in the conversation
@@ -97,13 +104,19 @@ on modern Python/setuptools).
     honesty note on `activate_skill()`/`deactivate_skill()` - based on
     the documented mycroft-core convention, not verified against a
     live modern OVOS instance) - the conversation-pane line confirms
-    the request was *sent*, not that OVOS applied it.
+    the request was *sent*, not that OVOS applied it. Currently shows
+    both Activate and Deactivate for every skill regardless of its
+    actual state (unlike Service:, above) - narrowing this to just the
+    relevant one needs knowing per-skill active/inactive state, which
+    isn't reliably available yet (tracked separately).
   - **`Pipeline: List`** - reads `mycroft.conf`'s `intents.pipeline`
     order via `ovos-config` (respects config layering) and writes it,
     numbered, to the conversation pane - a quick way to check pipeline
     order without leaving the TUI. Read-only.
-  - Textual's own default **"Screenshot"** command is filtered out -
-    not useful for this tool, just noise in an already-long list.
+  - Textual's own default **"Screenshot"** and **"Keys"** commands are
+    filtered out - Screenshot isn't useful for this tool; Keys would
+    just duplicate F1/HelpScreen, which has more detail anyway (filter
+    semantics, scroll behavior, not just keys).
   **Tab/Shift+Tab**: cycle focus across everything (checkboxes, panes,
   input) - a Textual built-in, no custom code needed. **Escape**:
   closes whatever modal is open.

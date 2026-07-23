@@ -28,20 +28,34 @@ def _conversation_text(app) -> str:
     return "\n".join(str(line) for line in app.query_one("#conversation", RichLog).lines)
 
 
-# --- ServiceCommandProvider: in-place filtering, no popup ---
+# --- ServiceCommandProvider: in-place filtering, no popup, state-aware ---
 
 @pytest.mark.asyncio
-async def test_service_search_yields_a_hit_per_service_per_action(tmp_path):
+async def test_running_service_offers_stop_and_restart_but_not_start(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         provider = ServiceCommandProvider(app.screen)
-        with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]):
+        with patch("ovos_tui_client.app.discover_services_with_state", return_value=[("ovos-core.service", True)]):
             hits = await _collect_hits(provider, "ovos-core")
 
         texts = [str(h.match_display) for h in hits]
         assert any("Restart" in t and "ovos-core.service" in t for t in texts)
         assert any("Stop" in t and "ovos-core.service" in t for t in texts)
+        assert not any("Start" in t and "ovos-core.service" in t for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_stopped_service_offers_only_start(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        provider = ServiceCommandProvider(app.screen)
+        with patch("ovos_tui_client.app.discover_services_with_state", return_value=[("ovos-core.service", False)]):
+            hits = await _collect_hits(provider, "ovos-core")
+
+        texts = [str(h.match_display) for h in hits]
         assert any("Start" in t and "ovos-core.service" in t for t in texts)
+        assert not any("Stop" in t and "ovos-core.service" in t for t in texts)
+        assert not any("Restart" in t and "ovos-core.service" in t for t in texts)
 
 
 @pytest.mark.asyncio
@@ -49,7 +63,7 @@ async def test_service_hits_share_the_service_prefix_for_grouping(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         provider = ServiceCommandProvider(app.screen)
-        with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]):
+        with patch("ovos_tui_client.app.discover_services_with_state", return_value=[("ovos-core.service", True)]):
             hits = await _collect_hits(provider, "service")
 
         assert all(str(h.match_display).startswith("Service: ") for h in hits)
@@ -60,8 +74,8 @@ async def test_service_search_narrows_by_query(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         provider = ServiceCommandProvider(app.screen)
-        with patch("ovos_tui_client.app.discover_services",
-                   return_value=["ovos-core.service", "ovos-audio.service"]):
+        with patch("ovos_tui_client.app.discover_services_with_state",
+                   return_value=[("ovos-core.service", True), ("ovos-audio.service", True)]):
             hits = await _collect_hits(provider, "restart audio")
 
         texts = [str(h.match_display) for h in hits]
@@ -74,7 +88,7 @@ async def test_selecting_a_service_hit_runs_the_action_no_popup(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         provider = ServiceCommandProvider(app.screen)
-        with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]), \
+        with patch("ovos_tui_client.app.discover_services_with_state", return_value=[("ovos-core.service", True)]), \
              patch("ovos_tui_client.app.restart_service", return_value=(True, "ovos-core.service: restarted")) as mock_restart:
             hits = await _collect_hits(provider, "Restart ovos-core")
             hit = next(h for h in hits if "Restart" in str(h.match_display))
@@ -92,7 +106,7 @@ async def test_failed_service_action_still_writes_to_conversation(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         provider = ServiceCommandProvider(app.screen)
-        with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]), \
+        with patch("ovos_tui_client.app.discover_services_with_state", return_value=[("ovos-core.service", True)]), \
              patch("ovos_tui_client.app.stop_service", return_value=(False, "ovos-core.service: permission denied")):
             hits = await _collect_hits(provider, "Stop ovos-core")
             hit = next(h for h in hits if "Stop" in str(h.match_display))
@@ -332,3 +346,68 @@ async def test_list_pipeline_handles_read_errors_gracefully(tmp_path):
             await pilot.pause()
 
         assert "could not read" in _conversation_text(app).lower()
+
+
+# --- SkillFilterCommandProvider: log-display skill filter, in the palette ---
+
+@pytest.mark.asyncio
+async def test_skill_filter_search_yields_a_hit_per_discovered_skill(tmp_path):
+    from ovos_tui_client.app import SkillFilterCommandProvider
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_enabled = {"ovos-skill-grimm-tales.andlo": False}
+    async with app.run_test() as pilot:
+        provider = SkillFilterCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "grimm")
+        assert len(hits) == 1
+        assert "Log: Toggle skill: ovos-skill-grimm-tales.andlo" in str(hits[0].match_display)
+
+
+@pytest.mark.asyncio
+async def test_skill_filter_hits_share_the_log_prefix_for_grouping(tmp_path):
+    from ovos_tui_client.app import SkillFilterCommandProvider
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_enabled = {"ovos-skill-grimm-tales.andlo": False}
+    async with app.run_test() as pilot:
+        provider = SkillFilterCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "log")
+        assert all(str(h.match_display).startswith("Log: ") for h in hits)
+
+
+@pytest.mark.asyncio
+async def test_selecting_a_skill_filter_hit_toggles_it_and_rerenders(tmp_path):
+    from ovos_tui_client.app import SkillFilterCommandProvider
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_enabled = {"ovos-skill-grimm-tales.andlo": False}
+    async with app.run_test() as pilot:
+        app.log_buffer.append(("skills", "handling for skill_id=ovos-skill-grimm-tales.andlo now"))
+        provider = SkillFilterCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "grimm")
+        hits[0].command()
+        await pilot.pause()
+
+        assert app.skill_enabled["ovos-skill-grimm-tales.andlo"] is True
+        assert "grimm-tales" in "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
+
+
+@pytest.mark.asyncio
+async def test_skill_filter_search_has_no_hits_when_none_discovered_yet(tmp_path):
+    from ovos_tui_client.app import SkillFilterCommandProvider
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        provider = SkillFilterCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "anything")
+        assert hits == []
+
+
+# --- Textual defaults filtered: Screenshot AND Keys ---
+
+@pytest.mark.asyncio
+async def test_keys_command_is_filtered_out(tmp_path):
+    """Per feedback: having both Textual's own 'Keys' list and this
+    project's own, richer F1/HelpScreen was two different places
+    saying similar things - HelpScreen stays as the canonical source."""
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+        assert "Keys" not in titles
+        assert "Screenshot" not in titles

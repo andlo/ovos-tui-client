@@ -84,8 +84,11 @@ async def test_f8_focuses_utterance_input(tmp_path):
 # --- clickable "Skills:" status label ---
 
 @pytest.mark.asyncio
-async def test_clicking_skills_label_opens_skill_filter_screen(tmp_path):
-    from ovos_tui_client.app import SkillFilterScreen
+async def test_clicking_skills_label_opens_command_palette(tmp_path):
+    """No more F4/SkillFilterScreen - clicking 'Skills:' now opens the
+    Command Palette, where 'Log: Toggle skill' lives instead (see
+    SkillFilterCommandProvider in test_command_palette.py)."""
+    from textual.command import CommandPalette
     app = _app_with_fake_bus(tmp_path)
     # default 80-col test size crowds the skills-status label off the
     # visible region once several source/level checkboxes are packed
@@ -93,20 +96,20 @@ async def test_clicking_skills_label_opens_skill_filter_screen(tmp_path):
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.click("#skills-status")
         await pilot.pause()
-        assert isinstance(app.screen, SkillFilterScreen)
+        assert isinstance(app.screen, CommandPalette)
 
 
 @pytest.mark.asyncio
-async def test_enter_on_focused_skills_label_opens_skill_filter_screen(tmp_path):
+async def test_enter_on_focused_skills_label_opens_command_palette(tmp_path):
     """Keyboard-only equivalent of clicking - for users without a
     mouse in their terminal."""
-    from ovos_tui_client.app import SkillFilterScreen
+    from textual.command import CommandPalette
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         app.query_one("#skills-status").focus()
         await pilot.press("enter")
         await pilot.pause()
-        assert isinstance(app.screen, SkillFilterScreen)
+        assert isinstance(app.screen, CommandPalette)
 
 
 # --- typing in a non-input pane redirects to the utterance input ---
@@ -197,15 +200,17 @@ async def test_write_to_log_keeps_auto_scrolling_when_already_at_bottom(tmp_path
 
 @pytest.mark.asyncio
 async def test_get_system_commands_includes_our_actions(tmp_path):
-    """Service Restart/Stop/Start are NOT static entries here - they're
-    dynamic hits from ServiceCommandProvider (see test_command_palette.py),
-    since they need per-service names filled in at search time."""
+    """Service Restart/Stop/Start and the log-display skill filter are
+    NOT static entries here - they're dynamic hits from
+    ServiceCommandProvider/SkillFilterCommandProvider (see
+    test_command_palette.py), since they need per-service/per-skill
+    names filled in at search time."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
         assert any("Help" in t for t in titles)
         assert any("Skill: List installed" in t for t in titles)
-        assert any("filter" in t.lower() for t in titles)
+        assert any("Pipeline: List" in t for t in titles)
         assert any("Focus: Logs" in t for t in titles)
         assert any("Focus: Conversation" in t for t in titles)
         assert any("Focus: Activity" in t for t in titles)

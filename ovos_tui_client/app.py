@@ -1,7 +1,8 @@
 """The Textual App: a 4-pane layout for testing OVOS without a
-mic/speaker, plus four modal screens (help, installed skills, skill
-filter, and the service-action picker opened from the Command
-Palette).
+mic/speaker, plus a single modal screen (HelpScreen, F1) - every other
+action (services, installed skills, log-display skill filter) lives in
+the Command Palette instead, filtered in place, with results written
+to the conversation pane. See get_system_commands() for why.
 
     ┌──────────────────────────────────────────┐
     │ Sources/Levels checkboxes (compact, one   │
@@ -18,7 +19,7 @@ Textual widgets aren't thread-safe to update directly from the
 bus-client's background thread, so incoming lines are queued and
 drained on the UI's own event loop instead.
 
-KEYBINDINGS - F1 help, F4 filter by skill, F5-F8
+KEYBINDINGS - F1 help, F5-F8
 jump focus to Logs/Conversation/Activity/Input, Ctrl+P opens Textual's
 built-in command palette (all the F-key actions are
 also available there, fuzzy-searchable), Escape closes any open modal.
@@ -62,7 +63,7 @@ from ovos_tui_client.logs import (
     find_log_dir, discover_log_sources, line_matches_filter, strip_log_prefix,
     extract_log_level, extract_skill_id, KNOWN_LOG_NAMES, KNOWN_LOG_LEVELS,
 )
-from ovos_tui_client.services import discover_services, restart_service, stop_service, start_service
+from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service
 from ovos_tui_client.state import load_filter_state, save_filter_state
 
 LOG_POLL_INTERVAL = 0.5  # seconds
@@ -115,7 +116,6 @@ class HelpScreen(ModalScreen):
             yield Label("Keybindings (Esc to close)")
             yield Label("")
             yield Label("F1   Show this help")
-            yield Label("F4   Filter by skill (click 'Skills:' works too)")
             yield Label("F5   Jump focus to Logs")
             yield Label("F6   Jump focus to Conversation")
             yield Label("F7   Jump focus to Activity")
@@ -126,9 +126,11 @@ class HelpScreen(ModalScreen):
             yield Label("Space / Enter   Toggle a focused checkbox")
             yield Label("Up / Down   Browse utterance history (in the input)")
             yield Label("")
-            yield Label("No popup windows for services or skill activation -")
-            yield Label("type 'service' or 'skill' in the palette instead.")
-            yield Label("Results appear as dim text in the Conversation pane.")
+            yield Label("No popup windows for services, skill activation, or")
+            yield Label("the skill log-filter - type 'service', 'skill', or")
+            yield Label("'log' in the palette instead (click 'Skills:' opens")
+            yield Label("the palette too). Results appear as dim text in the")
+            yield Label("Conversation pane.")
             yield Label("")
             yield Label("Typing anywhere in Logs/Conversation/Activity")
             yield Label("switches focus to the utterance input automatically -")
@@ -148,75 +150,63 @@ class HelpScreen(ModalScreen):
             self.dismiss()
 
 
-class SkillFilterScreen(ModalScreen):
-    """F4 (also reachable by clicking the 'Skills:' status label) -
-    filter which discovered skill_ids are shown. Sources and Log
-    Levels are compact inline checkboxes directly in the main view
-    (see OVOSTUIApp.compose) since both lists are short and
-    fixed-length; skills stay in a modal since that list grows
-    arbitrarily long as more are discovered from the log stream.
+class SkillFilterCommandProvider(Provider):
+    """Command Palette provider (Ctrl+P) for toggling the log-display
+    skill filter (this is DIFFERENT from SkillCommandProvider below,
+    which activates/deactivates installed skills in OVOS itself - this
+    one only affects what's shown in the Logs pane here, same concept
+    as the Source/Level toggles). Replaces the old F4/SkillFilterScreen
+    modal entirely, per feedback that this should live in the palette
+    like everything else, not its own screen.
+
+    Hits share the "Log: " prefix with the Source/Level toggle
+    SystemCommand entries (see get_system_commands()) so typing "log"
+    clusters all three filter dimensions together - this one is a
+    Provider rather than a static list because self.app.skill_enabled
+    grows dynamically as new skill_ids are discovered from the log
+    stream, same reasoning as ServiceCommandProvider/
+    SkillCommandProvider above.
 
     Same unchecked-narrows-nothing / checked-narrows-to-checked
-    semantics as the inline source/level checkboxes (see module
-    docstring) - except Skills defaults UNCHECKED, not checked, since
+    semantics as the inline Source/Level checkboxes (see module
+    docstring) - Skills default UNCHECKED, not checked, since
     "check the few you care about" reads naturally for a list that
-    keeps growing. Mutates the App's own skill_enabled dict directly
-    (passed by reference, no separate sync-back step) and re-renders
-    the log view live via self.app._rerender_logs() on every toggle.
+    keeps growing."""
 
-    Known, accepted limitation: skill_ids discovered while this modal
-    is already open won't appear until it's closed and reopened, since
-    compose() only runs once at mount."""
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        for skill_id, enabled in self.app.skill_enabled.items():
+            state = "checked" if enabled else "unchecked"
+            command_text = f"Log: Toggle skill: {skill_id} ({state})"
+            score = matcher.match(command_text)
+            if score > 0:
+                yield Hit(
+                    score,
+                    matcher.highlight(command_text),
+                    partial(self.app._toggle_skill, skill_id),
+                )
 
-    CSS = """
-    SkillFilterScreen { align: center middle; }
-    #skill-filter-dialog {
-        width: 70; height: auto; max-height: 25;
-        border: solid $accent; background: $panel; padding: 1 2;
-    }
-    Checkbox { height: 1; padding: 0; border: none; }
-    """
-
-    def __init__(self, skill_enabled: dict):
-        super().__init__()
-        self.skill_enabled = skill_enabled
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="skill-filter-dialog"):
-            yield Label("Filter by skill (Esc to close) - none checked = show all")
-            if not self.skill_enabled:
-                yield Label("(no skills seen in the log stream yet)")
-            for skill_id, enabled in self.skill_enabled.items():
-                widget_id = "modal-skill-" + skill_id.replace(".", "-").replace("_", "-")
-                yield Checkbox(skill_id, value=enabled, id=widget_id)
-
-    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        skill_id = str(event.checkbox.label)
-        self.skill_enabled[skill_id] = event.value
-        self.app._rerender_logs()
-
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            self.dismiss()
 
 
 class ClickableLabel(Label):
     """A Label that also responds to being clicked, so it can double
     as a lightweight button without separate Button styling - used
-    for the 'Skills: N/M' status text, which opens the skill-filter
-    screen (same as pressing F4) when clicked. `can_focus = True` so
-    it also picks up a visible focus outline and participates in the
-    normal Tab cycle, useful for keyboard/no-mouse users - Enter or
-    Space on a focused Label doesn't activate it by default in
-    Textual, so on_key is added explicitly alongside on_click."""
+    for the 'Skills: N/M' status text, which opens the Command Palette
+    (type "Log: Toggle skill" from there - no F4/modal anymore, that
+    filter now lives in SkillFilterCommandProvider like everything
+    else) when clicked. `can_focus = True` so it also picks
+    up a visible focus outline and participates in the normal Tab
+    cycle, useful for keyboard/no-mouse users - Enter or Space on a
+    focused Label doesn't activate it by default in Textual, so on_key
+    is added explicitly alongside on_click."""
     can_focus = True
 
     def on_click(self, event) -> None:
-        self.app.action_show_skill_filter()
+        self.app.action_command_palette()
 
     def on_key(self, event) -> None:
         if event.key in ("enter", "space"):
-            self.app.action_show_skill_filter()
+            self.app.action_command_palette()
             event.stop()
 
 
@@ -229,8 +219,15 @@ class ServiceCommandProvider(Provider):
     practical way to get that effect out of what's fundamentally a
     flat fuzzy-matched list); typing "service restart" narrows further
     to just restart actions; "service restart core" narrows to the
-    specific unit. Service names come from services.discover_services()
-    at search time, not a fixed list.
+    specific unit. Service names/state come from
+    services.discover_services_with_state() at search time, not a
+    fixed list.
+
+    Only offers actions that make sense for each unit's CURRENT state
+    (per feedback): a running service offers Stop/Restart but not
+    Start; a stopped one offers only Start. Determined from
+    systemctl's own ACTIVE column - see discover_services_with_state()
+    in services.py.
 
     Selecting a hit runs the action immediately and writes the result
     to the conversation pane (dim/grey, via App._write_status()) -
@@ -240,12 +237,13 @@ class ServiceCommandProvider(Provider):
 
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
-        for unit_name in discover_services():
-            for label, action_fn in (
-                ("Restart", restart_service),
-                ("Stop", stop_service),
-                ("Start", start_service),
-            ):
+        for unit_name, is_active in discover_services_with_state():
+            actions = (
+                [("Stop", stop_service), ("Restart", restart_service)]
+                if is_active
+                else [("Start", start_service)]
+            )
+            for label, action_fn in actions:
                 command_text = f"Service: {label} {unit_name}"
                 score = matcher.match(command_text)
                 if score > 0:
@@ -351,27 +349,24 @@ class OVOSTUIApp(App):
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
         ("f1", "show_help", "Help"),
-        ("f4", "show_skill_filter", "Skill Filter"),
         ("f5", "focus_logs", "Logs"),
         ("f6", "focus_conversation", "Conversation"),
         ("f7", "focus_activity", "Activity"),
         ("f8", "focus_input", "Input"),
     ]
-    # No F2/Services or F3/Skills bindings anymore - service and skill
-    # management (restart/stop/start, list/activate/deactivate) moved
-    # entirely into the Command Palette (type "service" or "skill",
-    # see get_system_commands()/ServiceCommandProvider/
-    # SkillCommandProvider below), with results written to the
+    # No F2/Services, F3/Skills, or F4/Skill-filter bindings anymore -
+    # service management, installed-skill list/activate/deactivate,
+    # AND the log-display skill filter all moved entirely into the
+    # Command Palette (type "service", "skill", or "log", see
+    # get_system_commands()/ServiceCommandProvider/SkillCommandProvider/
+    # SkillFilterCommandProvider), with results written to the
     # conversation pane instead of a popup window - per feedback that
     # this tool should prefer palette + conversation-pane output over
     # modal windows wherever an action doesn't inherently need its own
-    # screen. F4/SkillFilterScreen is unrelated and stays - that's
-    # filtering the LOG DISPLAY by skill_ids seen in the log stream, a
-    # different concept from activating/deactivating installed skills.
-    # Not renumbering F4+ to fill the gap - no benefit to disrupting
-    # keys that already work.
+    # screen. Not renumbering F5+ to fill the gap - no benefit to
+    # disrupting keys that already work.
 
-    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider}
+    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider}
 
     def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None):
         super().__init__()
@@ -661,7 +656,7 @@ class OVOSTUIApp(App):
         event.input.value = ""
 
     def get_system_commands(self, screen: Screen):
-        """Surfaces the same actions available via F1/F4-F8 in
+        """Surfaces the same actions available via F1/F5-F8 in
         Textual's built-in command palette (Ctrl+P) too, so they're
         discoverable by fuzzy search as well as by key.
 
@@ -670,30 +665,38 @@ class OVOSTUIApp(App):
         same as every other command-palette implementation), so
         "typing a category, then narrowing" is achieved by giving
         related commands a shared literal prefix. Typing "log"
-        clusters every Source/Level toggle together; typing "service"
-        clusters restart/stop/start (handled by ServiceCommandProvider,
-        registered via COMMANDS - filters IN PLACE as you type, no
-        popup); typing "skill" clusters List/Activate/Deactivate
-        (List is the one static entry below; Activate/Deactivate are
-        SkillCommandProvider, same in-place-filtering pattern).
+        clusters every Source/Level/Skill-filter toggle together
+        (Source/Level are the static entries below; Skill-filter is
+        SkillFilterCommandProvider, registered via COMMANDS); typing
+        "service" clusters restart/stop/start (ServiceCommandProvider);
+        typing "skill" clusters List/Activate/Deactivate (List is the
+        one static entry below; Activate/Deactivate are
+        SkillCommandProvider). All three Provider classes filter IN
+        PLACE as you type, no popup.
 
         NO POPUP WINDOWS for any of these, per feedback: results are
         written to the conversation pane (_write_status(), dim/grey
         text) instead of a modal result screen or Textual's toast
         notifications - this is also why the old standalone Services
-        (F2) and Skills-list (F3) modals are gone entirely, replaced
-        by palette entries + conversation-pane output.
+        (F2), Skills-list (F3), and Skill-filter (F4) modals are gone
+        entirely, replaced by palette entries + conversation-pane
+        output.
 
-        Textual's own default 'Screenshot' command is filtered out
-        (see the loop below) - not useful for this tool and just
-        added noise to an already-long list, per feedback."""
+        Textual's own default 'Screenshot' and 'Keys' commands are
+        filtered out (see the loop below). Screenshot isn't useful for
+        this tool. Keys is filtered specifically per feedback that
+        having both Textual's own keybinding list AND this project's
+        own, more detailed F1/HelpScreen was two different places
+        saying similar things - HelpScreen is the richer one (filter
+        semantics, scroll behavior, not just keys), so it's kept as
+        the canonical source and Keys is removed to avoid the
+        duplication/confusion."""
         for cmd in super().get_system_commands(screen):
-            if cmd.title != "Screenshot":
+            if cmd.title not in ("Screenshot", "Keys"):
                 yield cmd
         yield SystemCommand("Help: show keybindings", "Lists every keybinding (same as F1)", self.action_show_help)
         yield SystemCommand("Skill: List installed", "Refreshes and writes the installed-skill list to the conversation pane", self._refresh_installed_skills)
         yield SystemCommand("Pipeline: List", "Shows mycroft.conf's intents.pipeline order in the conversation pane", self._list_pipeline)
-        yield SystemCommand("Skills: filter logs by skill", "Opens the skill-filter panel (same as F4)", self.action_show_skill_filter)
         yield SystemCommand("Focus: Logs", "Jump focus to the logs pane (same as F5)", self.action_focus_logs)
         yield SystemCommand("Focus: Conversation", "Jump focus to the conversation pane (same as F6)", self.action_focus_conversation)
         yield SystemCommand("Focus: Activity", "Jump focus to the activity pane (same as F7)", self.action_focus_activity)
@@ -729,11 +732,18 @@ class OVOSTUIApp(App):
             pass
         self._rerender_logs()
 
+    def _toggle_skill(self, skill_id: str) -> None:
+        """The log-DISPLAY skill filter (not skill activate/deactivate
+        - see SkillFilterCommandProvider's docstring for that
+        distinction), toggled from the palette. No corresponding
+        checkbox to sync (unlike _toggle_source/_toggle_level, this
+        filter dimension never had inline checkboxes - it was always
+        behind F4/a modal before this)."""
+        self.skill_enabled[skill_id] = not self.skill_enabled.get(skill_id, False)
+        self._rerender_logs()
+
     def action_show_help(self) -> None:
         self.push_screen(HelpScreen())
-
-    def action_show_skill_filter(self) -> None:
-        self.push_screen(SkillFilterScreen(self.skill_enabled))
 
     def action_focus_logs(self) -> None:
         self.query_one("#logs-view", RichLog).focus()

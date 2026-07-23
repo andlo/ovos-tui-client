@@ -2,7 +2,7 @@
 real service management is exercised here."""
 from unittest.mock import MagicMock, patch
 
-from ovos_tui_client.services import discover_services, restart_service, stop_service, start_service
+from ovos_tui_client.services import discover_services, discover_services_with_state, restart_service, stop_service, start_service
 
 
 def _fake_completed(stdout="", stderr="", returncode=0):
@@ -113,3 +113,29 @@ def test_stop_service_missing_systemctl_reported_not_raised():
         ok, msg = stop_service("ovos-core.service")
 
     assert ok is False
+
+
+def test_discover_services_with_state_parses_active_column():
+    fake_output = (
+        "ovos-core.service       loaded active   running Open Voice OS - Core (skills)\n"
+        "ovos-audio.service      loaded inactive dead    Open Voice OS - Audio\n"
+    )
+    with patch("subprocess.run", return_value=_fake_completed(stdout=fake_output)):
+        services = discover_services_with_state()
+
+    assert services == [
+        ("ovos-audio.service", False),
+        ("ovos-core.service", True),
+    ]
+
+
+def test_discover_services_with_state_returns_empty_list_on_failure():
+    with patch("subprocess.run", side_effect=FileNotFoundError()):
+        assert discover_services_with_state() == []
+
+
+def test_discover_services_still_returns_name_only_list():
+    """Backward compatibility for existing callers/tests."""
+    fake_output = "ovos-core.service loaded active running X\n"
+    with patch("subprocess.run", return_value=_fake_completed(stdout=fake_output)):
+        assert discover_services() == ["ovos-core.service"]
