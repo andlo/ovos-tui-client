@@ -445,9 +445,10 @@ async def test_skill_filter_search_has_no_hits_when_none_discovered_yet(tmp_path
 
 @pytest.mark.asyncio
 async def test_keys_command_is_filtered_out(tmp_path):
-    """Per feedback: having both Textual's own 'Keys' list and this
-    project's own, richer F1/HelpScreen was two different places
-    saying similar things - HelpScreen stays as the canonical source."""
+    """'Keys' is Textual's own default trigger for the exact same
+    show-help-panel action our own 'Help: Toggle panel' entry already
+    calls - keeping both would just be two entries doing the same
+    thing under different names."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]

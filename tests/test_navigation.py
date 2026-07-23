@@ -1,14 +1,15 @@
-"""Tests for the newest round of features: F1 help screen, F5-F8 pane
-focus shortcuts, the clickable 'Skills:' status label, redirecting
-stray typing in non-input panes to the utterance input, and
-scroll-position-aware writing (never yanking a scrolled-up user back
-to the bottom)."""
+"""Tests for the newest round of features: F1 help panel toggle,
+F5-F8 pane focus shortcuts, the clickable 'Skills:' status label,
+redirecting stray typing in non-input panes to the utterance input,
+and scroll-position-aware writing (never yanking a scrolled-up user
+back to the bottom)."""
 from unittest.mock import MagicMock
 
 import pytest
 from textual.widgets import RichLog, Input, Checkbox
+from textual.widgets import HelpPanel
 
-from ovos_tui_client.app import OVOSTUIApp, HelpScreen
+from ovos_tui_client.app import OVOSTUIApp
 
 
 def _app_with_fake_bus(tmp_path):
@@ -19,26 +20,31 @@ def _app_with_fake_bus(tmp_path):
     return app
 
 
-# --- F1 help screen ---
+# --- F1 toggles Textual's own built-in HelpPanel (a side panel, not a modal) ---
 
 @pytest.mark.asyncio
-async def test_pressing_f1_opens_the_help_screen(tmp_path):
+async def test_pressing_f1_shows_the_help_panel(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        assert not app.query(HelpPanel)
+        await pilot.press("f1")
+        await pilot.pause()
+        assert app.query(HelpPanel)
+
+
+@pytest.mark.asyncio
+async def test_pressing_f1_again_hides_the_help_panel(tmp_path):
+    """No single built-in toggle action exists (only show/hide
+    separately) - action_toggle_help_panel() checks current state
+    itself, tested here via two F1 presses."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         await pilot.press("f1")
         await pilot.pause()
-        assert isinstance(app.screen, HelpScreen)
-
-
-@pytest.mark.asyncio
-async def test_escape_closes_the_help_screen(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
+        assert app.query(HelpPanel)
         await pilot.press("f1")
         await pilot.pause()
-        await pilot.press("escape")
-        await pilot.pause()
-        assert not isinstance(app.screen, HelpScreen)
+        assert not app.query(HelpPanel)
 
 
 # --- F5-F8 pane focus shortcuts ---

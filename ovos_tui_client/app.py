@@ -1,8 +1,9 @@
 """The Textual App: a 4-pane layout for testing OVOS without a
-mic/speaker, plus a single modal screen (HelpScreen, F1) - every other
-action (services, installed skills, log-display skill filter) lives in
-the Command Palette instead, filtered in place, with results written
-to the conversation pane. See get_system_commands() for why.
+mic/speaker. No custom modal screens at all - F1 toggles Textual's own
+built-in HelpPanel (a side panel, see APP_HELP/action_toggle_help_panel),
+and every other action (services, installed skills, log-display skill
+filter) lives in the Command Palette, filtered in place, with results
+written to the conversation pane. See get_system_commands() for why.
 
     ┌──────────────────────────────────────────┐
     │ Sources/Levels checkboxes (compact, one   │
@@ -19,7 +20,7 @@ Textual widgets aren't thread-safe to update directly from the
 bus-client's background thread, so incoming lines are queued and
 drained on the UI's own event loop instead.
 
-KEYBINDINGS - F1 help, F5-F8
+KEYBINDINGS - F1 toggles the help side panel, F5-F8
 jump focus to Logs/Conversation/Activity/Input, Ctrl+P opens Textual's
 built-in command palette (all the F-key actions are
 also available there, fuzzy-searchable), Escape closes any open modal.
@@ -115,57 +116,34 @@ def format_log_line(source_name: str, line: str) -> str:
     return text
 
 
-class HelpScreen(ModalScreen):
-    """F1 - a quick reference for every keybinding and the filter/
-    scroll behaviors that aren't otherwise obvious from the UI alone."""
+# Shared help content for Textual's own built-in HelpPanel (F1, a
+# genuine side panel docked to the right - not a modal), rather than a
+# custom-built HelpScreen. HelpPanel combines two things automatically:
+# this markdown text (from the focused widget's own .HELP attribute)
+# AND a live, always-accurate KeyPanel listing every current binding -
+# so there's no separate, hand-maintained keybinding list to let go
+# stale as bindings change. Assigned to every focusable widget below
+# (compose()) since HelpPanel only shows .HELP from whichever widget
+# currently has focus, not the App itself.
+APP_HELP = """\
+# ovos-tui-client
 
-    CSS = """
-    HelpScreen { align: center middle; }
-    #help-dialog {
-        width: 64; height: auto; max-height: 30;
-        border: solid $accent; background: $panel; padding: 1 2;
-    }
-    #help-dialog Label { height: 1; }
-    .help-spacer { height: 1; }
-    """
+No popup windows for services, skill activation, or the skill
+log-filter - type "service", "skill", or "log" in the Command Palette
+(Ctrl+P) instead (clicking "Skills:" opens the palette too). Results
+appear as dim text in the Conversation pane.
 
-    def compose(self) -> ComposeResult:
-        with Vertical(id="help-dialog"):
-            yield Label("Keybindings (Esc to close)")
-            yield Label("")
-            yield Label("F1   Show this help")
-            yield Label("F5   Jump focus to Logs")
-            yield Label("F6   Jump focus to Conversation")
-            yield Label("F7   Jump focus to Activity")
-            yield Label("F8   Jump focus to the utterance input")
-            yield Label("Ctrl+P   Command palette (all actions, searchable)")
-            yield Label("Ctrl+Q   Quit")
-            yield Label("Tab / Shift+Tab   Cycle focus")
-            yield Label("Space / Enter   Toggle a focused checkbox")
-            yield Label("Up / Down   Browse utterance history (in the input)")
-            yield Label("")
-            yield Label("No popup windows for services, skill activation, or")
-            yield Label("the skill log-filter - type 'service', 'skill', or")
-            yield Label("'log' in the palette instead (click 'Skills:' opens")
-            yield Label("the palette too). Results appear as dim text in the")
-            yield Label("Conversation pane.")
-            yield Label("")
-            yield Label("Typing anywhere in Logs/Conversation/Activity")
-            yield Label("switches focus to the utterance input automatically -")
-            yield Label("that's almost always what you meant to do.")
-            yield Label("")
-            yield Label("Filter checkboxes: unchecked = show everything in")
-            yield Label("that category. Checking one or more narrows to only")
-            yield Label("the checked ones. Sources/Levels start checked;")
-            yield Label("Skills start unchecked (it's an open-ended list).")
-            yield Label("")
-            yield Label("Scrolled-up panes never get yanked back to the")
-            yield Label("bottom by new lines - only auto-scrolls while")
-            yield Label("already at the bottom.")
+Typing anywhere in Logs/Conversation/Activity switches focus to the
+utterance input automatically - that's almost always what you meant
+to do.
 
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            self.dismiss()
+**Filter checkboxes:** unchecked = show everything in that category.
+Checking one or more narrows to only the checked ones. Sources/Levels
+start checked; Skills start unchecked (it's an open-ended list).
+
+Scrolled-up panes never get yanked back to the bottom by new lines -
+only auto-scrolls while already at the bottom.
+"""
 
 
 class SkillFilterCommandProvider(Provider):
@@ -381,7 +359,7 @@ class OVOSTUIApp(App):
 
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
-        ("f1", "show_help", "Help"),
+        ("f1", "toggle_help_panel", "Help"),
         ("f5", "focus_logs", "Logs"),
         ("f6", "focus_conversation", "Conversation"),
         ("f7", "focus_activity", "Activity"),
@@ -445,12 +423,22 @@ class OVOSTUIApp(App):
                 for level in KNOWN_LOG_LEVELS:
                     yield Checkbox(level, value=self.level_enabled.get(level, True), id=f"toggle-level-{level}")
                 yield ClickableLabel("", id="skills-status")
-            yield Input(placeholder="Filter logs (free text)...", id="log-filter")
-            yield RichLog(id="logs-view", wrap=False, markup=True, auto_scroll=True)
+            log_filter = Input(placeholder="Filter logs (free text)...", id="log-filter")
+            log_filter.HELP = APP_HELP
+            yield log_filter
+            logs_view = RichLog(id="logs-view", wrap=False, markup=True, auto_scroll=True)
+            logs_view.HELP = APP_HELP
+            yield logs_view
         with Horizontal(id="middle-row"):
-            yield RichLog(id="conversation", wrap=True, markup=True, auto_scroll=True)
-            yield RichLog(id="activity", wrap=True, markup=True, auto_scroll=True)
-        yield Input(placeholder="Type what you'd say to OVOS...", id="utterance-input", select_on_focus=False)
+            conversation = RichLog(id="conversation", wrap=True, markup=True, auto_scroll=True)
+            conversation.HELP = APP_HELP
+            yield conversation
+            activity = RichLog(id="activity", wrap=True, markup=True, auto_scroll=True)
+            activity.HELP = APP_HELP
+            yield activity
+        utterance_input = Input(placeholder="Type what you'd say to OVOS...", id="utterance-input", select_on_focus=False)
+        utterance_input.HELP = APP_HELP
+        yield utterance_input
         yield Footer()
 
     def on_mount(self) -> None:
@@ -805,13 +793,10 @@ class OVOSTUIApp(App):
 
         Textual's own default 'Screenshot' and 'Keys' commands are
         filtered out (see the loop below). Screenshot isn't useful for
-        this tool. Keys is filtered because having both Textual's own
-        keybinding list AND this project's own, more detailed
-        F1/HelpScreen was two different places saying similar
-        things - HelpScreen is the richer one (filter
-        semantics, scroll behavior, not just keys), so it's kept as
-        the canonical source and Keys is removed to avoid the
-        duplication/confusion.
+        this tool. Keys is filtered because it's the exact same
+        show-help-panel action our own 'Help: Toggle panel' entry
+        below already calls - keeping both would just be two entries
+        doing the same thing under different names.
 
         No separate description/help line under any entry - state
         (checked/unchecked, active/inactive) is embedded directly in
@@ -822,7 +807,7 @@ class OVOSTUIApp(App):
         for cmd in super().get_system_commands(screen):
             if cmd.title not in ("Screenshot", "Keys"):
                 yield cmd
-        yield SystemCommand("Help: show keybindings", "", self.action_show_help)
+        yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
         yield SystemCommand("Skill: List installed", "", self._refresh_installed_skills)
         yield SystemCommand("Pipeline: List", "", self._list_pipeline)
         yield SystemCommand("Focus: Logs", "", self.action_focus_logs)
@@ -896,8 +881,26 @@ class OVOSTUIApp(App):
             self.skill_enabled[skill_id] = False
         self._rerender_logs()
 
-    def action_show_help(self) -> None:
-        self.push_screen(HelpScreen())
+    def action_toggle_help_panel(self) -> None:
+        """F1 (and 'Help: Toggle panel' in the Command Palette) toggle
+        Textual's own built-in HelpPanel - a genuine side panel docked
+        to the right, not a modal (much better fit here than a popup).
+        Shows a combination of APP_HELP (this
+        project's own explanatory markdown, assigned to every
+        focusable widget in compose() - see APP_HELP's own comment for
+        why per-widget rather than per-app) and a live, always-
+        accurate list of every current binding (Textual's own
+        KeyPanel widget) - no separate hand-maintained keybinding list
+        to go stale.
+
+        There is no single built-in toggle action (only show/hide
+        separately), hence this wrapper - checks whether a HelpPanel
+        is currently mounted and calls the appropriate one."""
+        from textual.widgets import HelpPanel
+        if self.query(HelpPanel):
+            self.action_hide_help_panel()
+        else:
+            self.action_show_help_panel()
 
     def action_focus_logs(self) -> None:
         self.query_one("#logs-view", RichLog).focus()

@@ -62,7 +62,12 @@ on modern Python/setuptools).
   retroactively to already-received lines too, same as the free-text
   filter. Choices persist across sessions (`~/.config/ovos-tui-client/
   state.json`), saved on quit.
-- **F1**: keybinding reference. **F5-F8**: jump focus straight to
+- **F1**: toggles Textual's own built-in help panel - a genuine side
+  panel docked to the right, not a popup - combining this project's
+  own explanatory text (filter semantics, scroll behavior, the
+  no-popup-windows design) with a live, always-accurate list of every
+  current keybinding. No custom-built help screen to maintain
+  separately and let go stale. **F5-F8**: jump focus straight to
   Logs / Conversation / Activity / the utterance input. There's no
   F2/Services, F3/Skills, or F4/Skill-filter shortcut anymore -
   service management, installed-skill listing/activation, AND the
@@ -117,9 +122,10 @@ on modern Python/setuptools).
     numbered, to the conversation pane - a quick way to check pipeline
     order without leaving the TUI. Read-only.
   - Textual's own default **"Screenshot"** and **"Keys"** commands are
-    filtered out - Screenshot isn't useful for this tool; Keys would
-    just duplicate F1/HelpScreen, which has more detail anyway (filter
-    semantics, scroll behavior, not just keys).
+    filtered out - Screenshot isn't useful for this tool; Keys is
+    Textual's own default trigger for exactly the same show-help-panel
+    action "Help: Toggle panel" already calls, so keeping both would
+    just be two entries doing the same thing.
   **Tab/Shift+Tab**: cycle focus across everything (checkboxes, panes,
   input) - a Textual built-in, no custom code needed. **Escape**:
   closes whatever modal is open. Every palette entry is a single line
