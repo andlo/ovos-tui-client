@@ -1,12 +1,13 @@
-"""Tests for ServiceCommandProvider - the Command Palette's real
-autocomplete-as-you-type over discovered services (issue #3).
+"""Tests for the Command Palette's Service: Restart/Stop/Start entries
+(issue #3 follow-up) - the two-step flow where picking an action opens
+ServicePickerScreen (see test_screens.py) to choose which service.
 services.py's own discover/restart/stop/start functions are mocked
-throughout; this file tests the Provider glue, not systemctl."""
+throughout; this file tests the palette-entry glue, not systemctl."""
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ovos_tui_client.app import OVOSTUIApp, ServiceCommandProvider
+from ovos_tui_client.app import OVOSTUIApp, ServicePickerScreen
 
 
 def _app_with_fake_bus(tmp_path):
@@ -16,76 +17,83 @@ def _app_with_fake_bus(tmp_path):
     return app
 
 
-async def _collect_hits(provider, query):
-    return [hit async for hit in provider.search(query)]
+@pytest.mark.asyncio
+async def test_system_commands_include_the_three_service_actions(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+        assert "Service: Restart..." in titles
+        assert "Service: Stop..." in titles
+        assert "Service: Start..." in titles
 
 
 @pytest.mark.asyncio
-async def test_search_yields_a_hit_per_service_per_action(tmp_path):
+async def test_service_titles_share_a_common_prefix_for_palette_grouping(tmp_path):
+    """The whole point of the 'Service: ' prefix: typing 'service' in
+    the palette should cluster all three actions together via fuzzy
+    match, since Textual's palette has no native submenu support."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
-        provider = ServiceCommandProvider(app.screen)
-        with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]):
-            hits = await _collect_hits(provider, "ovos-core")
-
-        texts = [str(h.match_display) for h in hits]
-        assert any("Restart service: ovos-core.service" in t for t in texts)
-        assert any("Stop service: ovos-core.service" in t for t in texts)
-        assert any("Start service: ovos-core.service" in t for t in texts)
+        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+        service_titles = [t for t in titles if t.startswith("Service: ")]
+        assert len(service_titles) == 3
 
 
 @pytest.mark.asyncio
-async def test_search_matches_partial_queries(tmp_path):
-    """Confirms fuzzy autocomplete actually narrows by what's typed,
-    not just returning everything regardless of query."""
+async def test_log_toggle_titles_share_a_common_prefix_for_palette_grouping(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
-        provider = ServiceCommandProvider(app.screen)
-        with patch("ovos_tui_client.app.discover_services",
-                   return_value=["ovos-core.service", "ovos-audio.service"]):
-            hits = await _collect_hits(provider, "restart audio")
-
-        texts = [str(h.match_display) for h in hits]
-        assert any("ovos-audio.service" in t for t in texts)
-        assert not any("ovos-core.service" in t and "Restart" in t for t in texts)
+        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+        log_titles = [t for t in titles if t.startswith("Log: ")]
+        assert any("Toggle source" in t for t in log_titles)
+        assert any("Toggle level" in t for t in log_titles)
 
 
 @pytest.mark.asyncio
-async def test_selecting_a_restart_hit_calls_restart_service(tmp_path):
+async def test_selecting_service_restart_command_opens_the_picker_bound_to_restart(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
-        provider = ServiceCommandProvider(app.screen)
         with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]), \
              patch("ovos_tui_client.app.restart_service", return_value=(True, "ovos-core.service: restarted")) as mock_restart:
-            hits = await _collect_hits(provider, "Restart service: ovos-core.service")
-            hit = next(h for h in hits if "Restart" in str(h.match_display))
-            hit.command()
+            commands = {cmd.title: cmd.callback for cmd in app.get_system_commands(app.screen)}
+            commands["Service: Restart..."]()
             await pilot.pause()
 
+            assert isinstance(app.screen, ServicePickerScreen)
+            assert app.screen.action_label == "Restart"
+
+            # confirm the bound action really is restart_service, not stop/start
+            app.screen.action_fn("ovos-core.service")
             mock_restart.assert_called_once_with("ovos-core.service")
 
 
 @pytest.mark.asyncio
-async def test_selecting_a_stop_hit_calls_stop_service(tmp_path):
+async def test_selecting_service_stop_command_opens_the_picker_bound_to_stop(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
-        provider = ServiceCommandProvider(app.screen)
         with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]), \
              patch("ovos_tui_client.app.stop_service", return_value=(True, "ovos-core.service: stopped")) as mock_stop:
-            hits = await _collect_hits(provider, "Stop service: ovos-core.service")
-            hit = next(h for h in hits if "Stop" in str(h.match_display))
-            hit.command()
+            commands = {cmd.title: cmd.callback for cmd in app.get_system_commands(app.screen)}
+            commands["Service: Stop..."]()
             await pilot.pause()
 
+            assert isinstance(app.screen, ServicePickerScreen)
+            assert app.screen.action_label == "Stop"
+            app.screen.action_fn("ovos-core.service")
             mock_stop.assert_called_once_with("ovos-core.service")
 
 
 @pytest.mark.asyncio
-async def test_no_services_means_no_hits(tmp_path):
+async def test_selecting_service_start_command_opens_the_picker_bound_to_start(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
-        provider = ServiceCommandProvider(app.screen)
-        with patch("ovos_tui_client.app.discover_services", return_value=[]):
-            hits = await _collect_hits(provider, "restart")
+        with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]), \
+             patch("ovos_tui_client.app.start_service", return_value=(True, "ovos-core.service: started")) as mock_start:
+            commands = {cmd.title: cmd.callback for cmd in app.get_system_commands(app.screen)}
+            commands["Service: Start..."]()
+            await pilot.pause()
 
-        assert hits == []
+            assert isinstance(app.screen, ServicePickerScreen)
+            assert app.screen.action_label == "Start"
+            app.screen.action_fn("ovos-core.service")
+            mock_start.assert_called_once_with("ovos-core.service")

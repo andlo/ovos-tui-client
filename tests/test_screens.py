@@ -1,11 +1,13 @@
-"""Tests for the two modal screens: ServicesScreen (restart) and
-SkillsScreen (list installed skills)."""
+"""Tests for the modal screens: ServicePickerScreen (restart/stop/
+start, opened from the Command Palette - see test_command_palette.py
+for the palette-entry side of this) and SkillsScreen (list installed
+skills)."""
 from unittest.mock import MagicMock, patch
 
 import pytest
 from textual.widgets import Label, ListView
 
-from ovos_tui_client.app import OVOSTUIApp, ServicesScreen, SkillsScreen
+from ovos_tui_client.app import OVOSTUIApp, ServicePickerScreen, SkillsScreen
 
 
 def _app_with_fake_bus(tmp_path):
@@ -16,66 +18,60 @@ def _app_with_fake_bus(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_pressing_r_opens_the_services_screen(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]):
-        async with app.run_test() as pilot:
-            await pilot.press("f2")
-            await pilot.pause()
-            assert isinstance(app.screen, ServicesScreen)
-
-
-@pytest.mark.asyncio
-async def test_services_screen_lists_discovered_services(tmp_path):
+async def test_service_picker_lists_discovered_services(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     with patch("ovos_tui_client.app.discover_services",
                return_value=["ovos-core.service", "ovos-audio.service"]):
         async with app.run_test() as pilot:
-            await pilot.press("f2")
+            app.push_screen(ServicePickerScreen("Restart", MagicMock()))
             await pilot.pause()
-            list_view = app.screen.query_one("#services-list", ListView)
+            list_view = app.screen.query_one("#service-picker-list", ListView)
             assert len(list_view.children) == 2
 
 
 @pytest.mark.asyncio
-async def test_services_screen_shows_no_units_message_when_empty(tmp_path):
+async def test_service_picker_shows_no_units_message_when_empty(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     with patch("ovos_tui_client.app.discover_services", return_value=[]):
         async with app.run_test() as pilot:
-            await pilot.press("f2")
+            app.push_screen(ServicePickerScreen("Restart", MagicMock()))
             await pilot.pause()
             with pytest.raises(Exception):
-                app.screen.query_one("#services-list", ListView)
+                app.screen.query_one("#service-picker-list", ListView)
 
 
 @pytest.mark.asyncio
-async def test_escape_closes_the_services_screen(tmp_path):
+async def test_escape_closes_the_service_picker_screen(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]):
         async with app.run_test() as pilot:
-            await pilot.press("f2")
+            app.push_screen(ServicePickerScreen("Restart", MagicMock()))
             await pilot.pause()
-            assert isinstance(app.screen, ServicesScreen)
+            assert isinstance(app.screen, ServicePickerScreen)
             await pilot.press("escape")
             await pilot.pause()
-            assert not isinstance(app.screen, ServicesScreen)
+            assert not isinstance(app.screen, ServicePickerScreen)
 
 
 @pytest.mark.asyncio
-async def test_selecting_a_service_calls_restart(tmp_path):
+async def test_selecting_a_service_calls_the_bound_action(tmp_path):
+    """The picker is action-agnostic - whatever action_fn it was
+    constructed with (restart/stop/start_service) runs on the chosen
+    unit. Uses a generic mock here rather than one specific action,
+    since the screen itself doesn't care which."""
     app = _app_with_fake_bus(tmp_path)
-    with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]), \
-         patch("ovos_tui_client.app.restart_service", return_value=(True, "ovos-core.service: restarted")) as mock_restart:
+    mock_action = MagicMock(return_value=(True, "ovos-core.service: restarted"))
+    with patch("ovos_tui_client.app.discover_services", return_value=["ovos-core.service"]):
         async with app.run_test() as pilot:
-            await pilot.press("f2")
+            app.push_screen(ServicePickerScreen("Restart", mock_action))
             await pilot.pause()
-            list_view = app.screen.query_one("#services-list", ListView)
+            list_view = app.screen.query_one("#service-picker-list", ListView)
             list_view.focus()
             await pilot.press("enter")
             await pilot.pause()
 
-            mock_restart.assert_called_once_with("ovos-core.service")
-            result_label = app.screen.query_one("#services-result", Label)
+            mock_action.assert_called_once_with("ovos-core.service")
+            result_label = app.screen.query_one("#service-picker-result", Label)
             assert "restarted" in str(result_label.content)
 
 

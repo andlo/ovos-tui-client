@@ -60,21 +60,27 @@ on modern Python/setuptools).
   retroactively to already-received lines too, same as the free-text
   filter. Choices persist across sessions (`~/.config/ovos-tui-client/
   state.json`), saved on quit.
-- **F1**: keybinding reference. **F2**: services panel (restart an
-  `ovos-*.service` unit). **F3**: currently loaded skills (from the
-  bus). **F5-F8**: jump focus straight to Logs / Conversation /
-  Activity / the utterance input.
+- **F1**: keybinding reference. **F3**: currently loaded skills (from
+  the bus). **F5-F8**: jump focus straight to Logs / Conversation /
+  Activity / the utterance input. There's no F2/Services shortcut
+  anymore - service management moved entirely into the Command
+  Palette (below), which made a dedicated key/screen for it redundant.
 - **Ctrl+P**: Textual's command palette - meant as a way to talk to/
   control OVOS directly ("bagom"/behind the scenes), not just a
-  launcher for this tool's own popup screens. Every F1-F8 action is
-  there too, fuzzy-searchable, but it also goes further:
-  - **Toggle source/level**: e.g. "Toggle source: skills", "Toggle
-    level: ERROR" - same effect as clicking the checkbox, without
-    leaving the palette.
-  - **Restart/Stop/Start service**: type e.g. "restart co" and it
-    autocompletes against whatever `ovos-*.service` units are
-    currently discovered (`services.py`) - real fuzzy matching as you
-    type, not a fixed list.
+  launcher for this tool's own popup screens. Every F1/F3-F8 action is
+  there too, fuzzy-searchable, but it also goes further. The palette
+  itself has no native grouping/submenus (confirmed - it's a flat
+  fuzzy-matched list in every command-palette implementation, not just
+  Textual's), so related commands share a literal prefix instead, so
+  typing that prefix clusters them together:
+  - **`Log: `** - toggle any source/level directly, e.g. "Log: Toggle
+    source: skills", "Log: Toggle level: ERROR" - same effect as
+    clicking the checkbox, without leaving the palette.
+  - **`Service: `** - "Service: Restart...", "Service: Stop...",
+    "Service: Start..." - picking one opens a small follow-up list of
+    every discovered `ovos-*.service` unit to choose from (a two-step
+    flow: pick the action, then pick the target - the closest
+    approximation of a submenu the palette's flat list allows).
   **Tab/Shift+Tab**: cycle focus across everything (checkboxes, panes,
   input) - a Textual built-in, no custom code needed. **Escape**:
   closes whatever modal is open.
