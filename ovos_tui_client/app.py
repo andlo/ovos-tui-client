@@ -288,21 +288,31 @@ class SkillCommandProvider(Provider):
     empty (nothing successfully fetched yet), this simply has no hits
     to offer yet - not an error, just nothing to show.
 
+    installed_skills maps skill_id -> active (True/False/None -
+    confirmed directly against a live OVOS instance: 'skillmanager.
+    list' really does report per-skill active state, not just names).
+    Only the relevant action is offered per skill, same reasoning as
+    ServiceCommandProvider: Activate if inactive, Deactivate if
+    active. An unknown state (None) shows both, since we genuinely
+    don't know which applies.
+
     Activate/deactivate themselves go through bus.py's
     activate_skill()/deactivate_skill(), which use the classic
     mycroft-core 'skillmanager.activate'/'skillmanager.deactivate'
-    convention - unverified against a live modern OVOS instance, same
-    honesty caveat as list_skills() (see bus.py). Fire-and-forget, so
-    the conversation-pane line this writes confirms the REQUEST was
-    sent, not that OVOS actually applied it."""
+    convention. Fire-and-forget, so the conversation-pane line this
+    writes confirms the REQUEST was sent, not that OVOS actually
+    applied it."""
 
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
-        for skill_id in self.app.installed_skills:
-            for label, method_name in (
-                ("Activate", "activate_skill"),
-                ("Deactivate", "deactivate_skill"),
-            ):
+        for skill_id, active in self.app.installed_skills.items():
+            actions = (
+                [("Activate", "activate_skill"), ("Deactivate", "deactivate_skill")]
+                if active is None
+                else [("Deactivate", "deactivate_skill")] if active
+                else [("Activate", "activate_skill")]
+            )
+            for label, method_name in actions:
                 command_text = f"Skill: {label} {skill_id}"
                 score = matcher.match(command_text)
                 if score > 0:
@@ -314,6 +324,11 @@ class SkillCommandProvider(Provider):
 
     def _run(self, method_name: str, skill_id: str, label: str) -> None:
         getattr(self.app.bus, method_name)(skill_id)
+        # optimistic local update - fire-and-forget means there's no
+        # confirmation to wait for anyway, and this means the very
+        # next search only offers the OTHER action for this skill,
+        # without needing a full re-fetch via "Skill: List installed"
+        self.app.installed_skills[skill_id] = (method_name == "activate_skill")
         self.app._write_status(f"{skill_id}: {label.lower()} requested")
 
 
@@ -402,7 +417,7 @@ class OVOSTUIApp(App):
         # reads naturally - see module docstring's FILTER SEMANTICS.
         self.level_enabled = {level: True for level in KNOWN_LOG_LEVELS}
         self.skill_enabled = {}  # skill_id -> bool, unchecked by default as discovered
-        self.installed_skills = []  # cache for SkillCommandProvider - see _refresh_installed_skills()
+        self.installed_skills = {}  # skill_id -> active (True/False/None) - see _refresh_installed_skills()
 
         # Restores filter choices from a previous session (state.py) -
         # only for sources/levels that still exist on THIS run (a
@@ -570,12 +585,13 @@ class OVOSTUIApp(App):
         verbose=True by default) - not on every palette keystroke,
         since each call is a real bus round-trip with a timeout.
 
-        verbose=True writes one skill per line to the conversation
-        pane (not a single comma-joined line) - readability, especially
-        as the list grows. See issue #15 for the not-yet-implemented
-        idea of grouping/categorizing by skill type (skill/ocp/
-        reading/pipeline etc) - deferred pending research into whether
-        that's reliably detectable from skill_id alone.
+        verbose=True writes one skill per line, with its active/
+        inactive/unknown state, to the conversation pane (not a single
+        comma-joined line) - readability, especially as the list
+        grows. See issue #15 for the not-yet-implemented idea of
+        grouping/categorizing by skill type (skill/ocp/reading/
+        pipeline etc) - deferred pending research into whether that's
+        reliably detectable from skill_id alone.
 
         on_complete, if given, is called (via call_from_thread, same
         as everything else here) after the result is written -
@@ -589,11 +605,13 @@ class OVOSTUIApp(App):
             if skills is None:
                 self.call_from_thread(self._write_status, "Skill list: no response (timed out)", ok=False)
             else:
-                self.installed_skills = sorted(skills)
+                self.installed_skills = skills
                 if verbose:
                     self.call_from_thread(self._write_status, f"Skills: {len(self.installed_skills)} installed:")
-                    for skill_id in self.installed_skills:
-                        self.call_from_thread(self._write_status, f"  {skill_id}")
+                    for skill_id in sorted(self.installed_skills):
+                        active = self.installed_skills[skill_id]
+                        state = "active" if active else "inactive" if active is False else "unknown"
+                        self.call_from_thread(self._write_status, f"  {skill_id} ({state})")
                 else:
                     self.call_from_thread(self._write_status, f"Finding skills... {len(self.installed_skills)} found")
             if on_complete is not None:
@@ -793,26 +811,33 @@ class OVOSTUIApp(App):
         things - HelpScreen is the richer one (filter
         semantics, scroll behavior, not just keys), so it's kept as
         the canonical source and Keys is removed to avoid the
-        duplication/confusion."""
+        duplication/confusion.
+
+        No separate description/help line under any entry - state
+        (checked/unchecked, active/inactive) is embedded directly in
+        the title text instead (e.g. "Log: Toggle source: skills
+        (checked)"), matching how the dynamic Provider-based entries
+        already work. One line per command everywhere, nothing more
+        than necessary shown."""
         for cmd in super().get_system_commands(screen):
             if cmd.title not in ("Screenshot", "Keys"):
                 yield cmd
-        yield SystemCommand("Help: show keybindings", "Lists every keybinding (same as F1)", self.action_show_help)
-        yield SystemCommand("Skill: List installed", "Refreshes and writes the installed-skill list to the conversation pane", self._refresh_installed_skills)
-        yield SystemCommand("Pipeline: List", "Shows mycroft.conf's intents.pipeline order in the conversation pane", self._list_pipeline)
-        yield SystemCommand("Focus: Logs", "Jump focus to the logs pane (same as F5)", self.action_focus_logs)
-        yield SystemCommand("Focus: Conversation", "Jump focus to the conversation pane (same as F6)", self.action_focus_conversation)
-        yield SystemCommand("Focus: Activity", "Jump focus to the activity pane (same as F7)", self.action_focus_activity)
-        yield SystemCommand("Focus: Utterance input", "Jump focus to the input box (same as F8)", self.action_focus_input)
+        yield SystemCommand("Help: show keybindings", "", self.action_show_help)
+        yield SystemCommand("Skill: List installed", "", self._refresh_installed_skills)
+        yield SystemCommand("Pipeline: List", "", self._list_pipeline)
+        yield SystemCommand("Focus: Logs", "", self.action_focus_logs)
+        yield SystemCommand("Focus: Conversation", "", self.action_focus_conversation)
+        yield SystemCommand("Focus: Activity", "", self.action_focus_activity)
+        yield SystemCommand("Focus: Utterance input", "", self.action_focus_input)
         for src in self.log_sources:
             state = "checked" if src.enabled else "unchecked"
-            yield SystemCommand(f"Log: Toggle source: {src.name}", f"Currently {state}", partial(self._toggle_source, src.name))
+            yield SystemCommand(f"Log: Toggle source: {src.name} ({state})", "", partial(self._toggle_source, src.name))
         for level in KNOWN_LOG_LEVELS:
             state = "checked" if self.level_enabled.get(level, True) else "unchecked"
-            yield SystemCommand(f"Log: Toggle level: {level}", f"Currently {state}", partial(self._toggle_level, level))
+            yield SystemCommand(f"Log: Toggle level: {level} ({state})", "", partial(self._toggle_level, level))
         if self.skill_enabled:
-            yield SystemCommand("Log: Select all skills", "Check every discovered skill_id (narrows to exactly the current set)", self._select_all_skills)
-            yield SystemCommand("Log: Deselect all skills", "Uncheck every skill_id (back to the default: unrestricted)", self._deselect_all_skills)
+            yield SystemCommand("Log: Select all skills", "", self._select_all_skills)
+            yield SystemCommand("Log: Deselect all skills", "", self._deselect_all_skills)
 
     def _toggle_source(self, name: str) -> None:
         """Flips a source's enabled state and syncs the visible

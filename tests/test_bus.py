@@ -164,7 +164,47 @@ def test_list_skills_registers_a_once_handler():
     assert fake_client.once.call_args[0][0] == "mycroft.skills.list"
 
 
-def test_list_skills_calls_callback_with_skills_on_response():
+def test_list_skills_calls_callback_with_active_state_per_skill():
+    """The real, confirmed response shape (checked against a live OVOS
+    instance): {"skill_id": {"active": bool_or_none, "id": "skill_id"},
+    ...}, keyed by skill_id - not a flat list under a "skills" key."""
+    conn, fake_client = _make_connection()
+    received = []
+    conn.list_skills(lambda skills: received.append(skills), timer_factory=MagicMock())
+
+    response_handler = fake_client.once.call_args[0][1]
+    fake_message = MagicMock()
+    fake_message.data = {
+        "ovos-skill-grimm-tales.andlo": {"active": False, "id": "ovos-skill-grimm-tales.andlo"},
+        "ovos-skill-andersen-tales.andlo": {"active": True, "id": "ovos-skill-andersen-tales.andlo"},
+    }
+    response_handler(fake_message)
+
+    assert received == [{
+        "ovos-skill-grimm-tales.andlo": False,
+        "ovos-skill-andersen-tales.andlo": True,
+    }]
+
+
+def test_list_skills_treats_unset_active_as_none_not_false():
+    """A skill can genuinely report active: null (confirmed on a live
+    instance) - that means unknown state, not "inactive"."""
+    conn, fake_client = _make_connection()
+    received = []
+    conn.list_skills(lambda skills: received.append(skills), timer_factory=MagicMock())
+
+    response_handler = fake_client.once.call_args[0][1]
+    fake_message = MagicMock()
+    fake_message.data = {"ovos-skill-pyradios.openvoiceos": {"active": None, "id": "ovos-skill-pyradios.openvoiceos"}}
+    response_handler(fake_message)
+
+    assert received == [{"ovos-skill-pyradios.openvoiceos": None}]
+
+
+def test_list_skills_falls_back_gracefully_for_a_flat_list_shape():
+    """Defensive fallback only - if some OVOS version genuinely
+    responds with a flat list instead of the confirmed dict shape,
+    don't crash, just report unknown state for each skill_id."""
     conn, fake_client = _make_connection()
     received = []
     conn.list_skills(lambda skills: received.append(skills), timer_factory=MagicMock())
@@ -174,23 +214,7 @@ def test_list_skills_calls_callback_with_skills_on_response():
     fake_message.data = {"skills": ["ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"]}
     response_handler(fake_message)
 
-    assert received == [["ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"]]
-
-
-def test_list_skills_falls_back_to_data_keys_if_no_skills_field():
-    """Defensive fallback for the case where the response format
-    differs from the assumed convention - see the honesty note in
-    list_skills()'s docstring about this being unverified."""
-    conn, fake_client = _make_connection()
-    received = []
-    conn.list_skills(lambda skills: received.append(skills), timer_factory=MagicMock())
-
-    response_handler = fake_client.once.call_args[0][1]
-    fake_message = MagicMock()
-    fake_message.data = {"ovos-skill-grimm-tales.andlo": {}, "ovos-skill-andersen-tales.andlo": {}}
-    response_handler(fake_message)
-
-    assert set(received[0]) == {"ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"}
+    assert received == [{"ovos-skill-grimm-tales.andlo": None, "ovos-skill-andersen-tales.andlo": None}]
 
 
 def test_list_skills_calls_callback_with_none_on_timeout():
@@ -224,7 +248,7 @@ def test_list_skills_timeout_does_not_fire_if_response_already_received():
     conn.list_skills(lambda skills: received.append(skills), timer_factory=DeferredTimer)
     response_handler = fake_client.once.call_args[0][1]
     fake_message = MagicMock()
-    fake_message.data = {"skills": ["ovos-skill-grimm-tales.andlo"]}
+    fake_message.data = {"ovos-skill-grimm-tales.andlo": {"active": True, "id": "ovos-skill-grimm-tales.andlo"}}
 
     response_handler(fake_message)  # the real response arrives first
     fired_timer["fn"]()  # then the timeout check runs afterward
@@ -232,7 +256,7 @@ def test_list_skills_timeout_does_not_fire_if_response_already_received():
     # only the real response should have reached the callback - the
     # timeout check must see state["received"] is already True and
     # skip calling back with None
-    assert received == [["ovos-skill-grimm-tales.andlo"]]
+    assert received == [{"ovos-skill-grimm-tales.andlo": True}]
 
 
 def test_activate_skill_emits_skillmanager_activate_with_skill_id():

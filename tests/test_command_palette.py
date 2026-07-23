@@ -119,12 +119,41 @@ async def test_failed_service_action_still_writes_to_conversation(tmp_path):
 # --- SkillCommandProvider: in-place filtering over installed_skills cache ---
 
 @pytest.mark.asyncio
-async def test_skill_search_yields_activate_and_deactivate_per_cached_skill(tmp_path):
+async def test_inactive_skill_offers_only_activate(tmp_path):
     app = _app_with_fake_bus(tmp_path)
-    app.installed_skills = ["ovos-skill-grimm-tales.andlo"]
+    app.installed_skills = {"ovos-skill-grimm-tales.andlo": False}
     async with app.run_test() as pilot:
         provider = SkillCommandProvider(app.screen)
         hits = await _collect_hits(provider, "grimm")
+
+        texts = [str(h.match_display) for h in hits]
+        assert any("Activate" in t for t in texts)
+        assert not any("Deactivate" in t for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_active_skill_offers_only_deactivate(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    app.installed_skills = {"ovos-skill-grimm-tales.andlo": True}
+    async with app.run_test() as pilot:
+        provider = SkillCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "grimm")
+
+        texts = [str(h.match_display) for h in hits]
+        assert any("Deactivate" in t for t in texts)
+        assert not any("Activate" in t for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_unknown_state_skill_offers_both(tmp_path):
+    """active: None (a real, confirmed OVOS response value - unknown/
+    unset state) shows both actions, since we genuinely don't know
+    which applies."""
+    app = _app_with_fake_bus(tmp_path)
+    app.installed_skills = {"ovos-skill-pyradios.openvoiceos": None}
+    async with app.run_test() as pilot:
+        provider = SkillCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "pyradios")
 
         texts = [str(h.match_display) for h in hits]
         assert any("Activate" in t for t in texts)
@@ -145,7 +174,7 @@ async def test_skill_search_has_no_hits_when_cache_is_empty(tmp_path):
 @pytest.mark.asyncio
 async def test_selecting_activate_calls_bus_activate_skill_no_popup(tmp_path):
     app = _app_with_fake_bus(tmp_path)
-    app.installed_skills = ["ovos-skill-grimm-tales.andlo"]
+    app.installed_skills = {"ovos-skill-grimm-tales.andlo": False}
     async with app.run_test() as pilot:
         provider = SkillCommandProvider(app.screen)
         hits = await _collect_hits(provider, "Activate grimm")
@@ -158,9 +187,22 @@ async def test_selecting_activate_calls_bus_activate_skill_no_popup(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_selecting_activate_optimistically_updates_the_local_cache(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    app.installed_skills = {"ovos-skill-grimm-tales.andlo": False}
+    async with app.run_test() as pilot:
+        provider = SkillCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "Activate grimm")
+        hits[0].command()
+        await pilot.pause()
+
+        assert app.installed_skills["ovos-skill-grimm-tales.andlo"] is True
+
+
+@pytest.mark.asyncio
 async def test_selecting_deactivate_calls_bus_deactivate_skill_no_popup(tmp_path):
     app = _app_with_fake_bus(tmp_path)
-    app.installed_skills = ["ovos-skill-grimm-tales.andlo"]
+    app.installed_skills = {"ovos-skill-grimm-tales.andlo": True}
     async with app.run_test() as pilot:
         provider = SkillCommandProvider(app.screen)
         hits = await _collect_hits(provider, "Deactivate grimm")
@@ -194,12 +236,12 @@ async def test_refresh_installed_skills_populates_cache_and_writes_conversation(
         # testing thread-marshaled callbacks in this codebase.
         app.call_from_thread = MagicMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))
         app.bus.list_skills = MagicMock(
-            side_effect=lambda cb: cb(["ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"])
+            side_effect=lambda cb: cb({"ovos-skill-grimm-tales.andlo": False, "ovos-skill-andersen-tales.andlo": True})
         )
         app._refresh_installed_skills()
         await pilot.pause()
 
-        assert app.installed_skills == ["ovos-skill-andersen-tales.andlo", "ovos-skill-grimm-tales.andlo"]
+        assert app.installed_skills == {"ovos-skill-grimm-tales.andlo": False, "ovos-skill-andersen-tales.andlo": True}
         text = _conversation_text(app)
         assert "grimm-tales" in text
         assert "andersen-tales" in text
@@ -214,7 +256,7 @@ async def test_refresh_installed_skills_handles_timeout_gracefully(tmp_path):
         app._refresh_installed_skills()
         await pilot.pause()
 
-        assert app.installed_skills == []
+        assert app.installed_skills == {}
         assert "no response" in _conversation_text(app).lower() or "timed out" in _conversation_text(app).lower()
 
 
@@ -285,7 +327,7 @@ async def test_list_installed_skills_writes_one_per_line(tmp_path):
     async with app.run_test() as pilot:
         app.call_from_thread = MagicMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))
         app.bus.list_skills = MagicMock(
-            side_effect=lambda cb: cb(["ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"])
+            side_effect=lambda cb: cb({"ovos-skill-grimm-tales.andlo": False, "ovos-skill-andersen-tales.andlo": True})
         )
         app._refresh_installed_skills()
         await pilot.pause()
@@ -460,7 +502,7 @@ async def test_startup_narrates_finding_skills_count_only_not_full_list(tmp_path
     # `async with` block below yields control, on_mount has already
     # run to completion.
     app.bus.list_skills = MagicMock(
-        side_effect=lambda cb: cb(["ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"])
+        side_effect=lambda cb: cb({"ovos-skill-grimm-tales.andlo": False, "ovos-skill-andersen-tales.andlo": True})
     )
     app.call_from_thread = MagicMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))
     async with app.run_test() as pilot:
@@ -480,7 +522,7 @@ async def test_startup_ends_with_ok_ready(tmp_path):
     avoids the same timing race as test_startup_narrates_service_states
     above."""
     app = _app_with_fake_bus(tmp_path)
-    app.bus.list_skills = MagicMock(side_effect=lambda cb: cb(["ovos-skill-grimm-tales.andlo"]))
+    app.bus.list_skills = MagicMock(side_effect=lambda cb: cb({"ovos-skill-grimm-tales.andlo": True}))
     app.call_from_thread = MagicMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))
     with patch("ovos_tui_client.app.discover_services_with_state", return_value=[]):
         async with app.run_test() as pilot:

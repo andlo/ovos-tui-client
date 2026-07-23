@@ -98,18 +98,20 @@ on modern Python/setuptools).
     pane.
   - **`Skill: `** - "Skill: List installed" (a static entry - fetches
     the current list via the bus and writes it to the conversation
-    pane, one skill per line, refreshing the autocomplete source for
-    the next two), plus "Skill: Activate <skill_id>" / "Skill:
-    Deactivate <skill_id>" for every skill from that list, fuzzy-
-    matched the same way as services. Fire-and-forget (see `bus.py`'s
-    honesty note on `activate_skill()`/`deactivate_skill()` - based on
-    the documented mycroft-core convention, not verified against a
-    live modern OVOS instance) - the conversation-pane line confirms
-    the request was *sent*, not that OVOS applied it. Currently shows
-    both Activate and Deactivate for every skill regardless of its
-    actual state (unlike Service:, above) - narrowing this to just the
-    relevant one needs knowing per-skill active/inactive state, which
-    isn't reliably available yet (tracked separately).
+    pane, one skill per line with its active/inactive/unknown state,
+    refreshing the autocomplete source for the next two), plus "Skill:
+    Activate <skill_id>" / "Skill: Deactivate <skill_id>" for every
+    skill from that list, fuzzy-matched the same way as services -
+    **only the relevant action is offered per skill** (Activate if
+    inactive, Deactivate if active; both if the state is genuinely
+    unknown), same as `Service:` above. Confirmed directly against a
+    live OVOS instance that `skillmanager.list`'s response really does
+    carry per-skill active state, not just names. Fire-and-forget (see
+    `bus.py`'s honesty note on `activate_skill()`/`deactivate_skill()`
+    - based on the documented mycroft-core convention) - the
+    conversation-pane line confirms the request was *sent*, not that
+    OVOS applied it; the local cache updates optimistically so the
+    next search reflects the change immediately.
   - **`Pipeline: List`** - reads `mycroft.conf`'s `intents.pipeline`
     order via `ovos-config` (respects config layering) and writes it,
     numbered, to the conversation pane - a quick way to check pipeline
@@ -120,7 +122,10 @@ on modern Python/setuptools).
     semantics, scroll behavior, not just keys).
   **Tab/Shift+Tab**: cycle focus across everything (checkboxes, panes,
   input) - a Textual built-in, no custom code needed. **Escape**:
-  closes whatever modal is open.
+  closes whatever modal is open. Every palette entry is a single line
+  - no separate description text underneath; where a command has
+  state worth showing (checked/unchecked, active/inactive), it's
+  embedded right in the title instead.
 - Typing a plain character while focus is on Logs/Conversation/
   Activity (none of which are normally typable) redirects that
   keystroke to the utterance input instead of doing nothing - almost

@@ -81,14 +81,18 @@ class OVOSBusConnection:
         """Requests the list of currently loaded skills via the classic
         mycroft-core 'skillmanager.list' -> 'mycroft.skills.list'
         bus convention (OVOS maintains backward compatibility with
-        most mycroft-core bus messages). Calls callback(skill_ids) once
+        most mycroft-core bus messages). Calls callback(skills) once
         a response arrives, or callback(None) if nothing arrives within
         `timeout` seconds.
 
-        This exact response event/format is based on the documented
-        mycroft-core convention, not verified against a live modern
-        OVOS instance - if your install responds on a different event
-        name, that's the one line to change.
+        `skills` is a dict of skill_id -> active (True/False/None -
+        None means the skill reported an unknown/unset state, not that
+        it's inactive). Confirmed directly against a live OVOS
+        instance: the real response shape is
+        {"skill_id": {"active": bool_or_none, "id": "skill_id"}, ...},
+        keyed by skill_id - not a flat list under a "skills" key as
+        the mycroft-core docs alone would suggest. Handled here so
+        callers just get a clean skill_id -> active mapping.
 
         `timer_factory` is injectable for testing (defaults to
         threading.Timer) so tests don't have to sleep for real."""
@@ -96,9 +100,19 @@ class OVOSBusConnection:
 
         def _on_response(message):
             state["received"] = True
-            skills = message.data.get("skills")
-            if skills is None:
-                skills = list(message.data.keys())
+            raw = message.data.get("skills")
+            if raw is None:
+                raw = message.data
+            if isinstance(raw, dict):
+                skills = {
+                    skill_id: (info.get("active") if isinstance(info, dict) else None)
+                    for skill_id, info in raw.items()
+                }
+            else:
+                # defensive fallback if some OVOS version really does
+                # respond with a flat list instead - active state
+                # simply isn't available in that shape
+                skills = {skill_id: None for skill_id in raw}
             callback(skills)
 
         self._client.once("mycroft.skills.list", _on_response)

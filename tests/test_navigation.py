@@ -243,12 +243,15 @@ async def test_ctrl_q_is_bound_to_quit(tmp_path):
 
 @pytest.mark.asyncio
 async def test_get_system_commands_includes_source_and_level_toggles(tmp_path):
+    """State is embedded directly in the title (e.g. "(checked)"),
+    not a separate description line - one line per command, matching
+    how the dynamic Provider-based entries already work."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
-        assert "Log: Toggle source: skills" in titles
-        assert "Log: Toggle source: bus" in titles
-        assert "Log: Toggle level: ERROR" in titles
+        assert any(t.startswith("Log: Toggle source: skills (") for t in titles)
+        assert any(t.startswith("Log: Toggle source: bus (") for t in titles)
+        assert any(t.startswith("Log: Toggle level: ERROR (") for t in titles)
 
 
 @pytest.mark.asyncio
