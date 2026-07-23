@@ -9,6 +9,7 @@ connection - see bus.py's on_activity() for how this gets wired up.
 
 FETCH_CONTENT_PREFIX = "ovos.common_reading.fetch_content."
 FALLBACK_PREFIX = "ovos.skills.fallback."
+OCP_PREFIX = "ovos.common_play."
 
 
 def summarize_message(msg_type, data=None):
@@ -83,6 +84,76 @@ def summarize_message(msg_type, data=None):
                 return f"✓ {skill_id} (fallback) finished"
             return f"✗ {skill_id} (fallback) could not resolve"
         return None  # ping/pong/request - not shown, see comment above
+
+    # The COMMON QUERY path (question:query / question:query.response):
+    # a third, separate pipeline from fallback and this project's own
+    # common-reading one, used for factual/knowledge questions ("what
+    # is the capital of France") - broadcasts to every registered
+    # answering skill (wikipedia, duckduckgo, wolframalpha, etc) and
+    # collects whichever responses come back. Confirmed directly
+    # against a live OVOS instance.
+    #
+    # Every skill responds TWICE: once with searching: true (still
+    # working - a transient "I'm on it" phase, sometimes even sent
+    # more than once by the same skill in the live capture), then once
+    # with searching: false (done) - only the final searching: false
+    # responses are shown here, same reasoning as skipping fallback's
+    # ping/pong.
+    #
+    # Unlike an earlier draft of this, a searching: false response
+    # WITHOUT an answer is still shown (as "no answer"), not skipped -
+    # for consistency with how this project's own common-reading pong/
+    # search.response already shows every candidate regardless of
+    # confidence, and how fetch_content.response shows "empty response
+    # (fetch failed)" rather than staying silent. A skill trying and
+    # visibly coming up empty is exactly the kind of thing worth
+    # seeing when debugging why a question didn't get answered.
+    if msg_type == "question:query":
+        return f'🔍 asking all skills: "{data.get("phrase", "?")}"'
+
+    if msg_type == "question:query.response":
+        if data.get("searching"):
+            return None
+        skill_id = data.get("skill_id", "?")
+        answer = data.get("answer")
+        return f'📥 {skill_id}: "{answer}"' if answer else f"✗ {skill_id}: no answer"
+
+    # question:action - the actual "this one won" signal, fired once
+    # the winning answer among all the candidates above has been
+    # selected. Confirmed against the official OVOS message
+    # specification (openvoiceos.github.io/message_spec/ovos_core/,
+    # CommonQAService): "'phrase': str, 'skill_id': str, 'callback_data':
+    # dict - Trigger skill callback after answer was selected".
+    if msg_type == "question:action":
+        return f"🏆 {data.get('skill_id', '?')} selected to answer"
+
+    # The OCP (OVOS Common Play - media playback: music, radio, etc)
+    # search path. Structurally different from fallback/common-reading/
+    # common-query above: a single skill can report MANY candidates via
+    # repeated ovos.common_play.query.response calls (10+ for one
+    # search, confirmed via live capture) rather than one verdict each -
+    # this project's summarize_message() is a pure, stateless function
+    # (see module docstring), so there's no way to aggregate those N
+    # responses into one line without a bigger architecture change.
+    # Showing all of them would flood the pane, so query.response is
+    # deliberately NOT shown here, unlike the "show every final
+    # outcome" approach used for common-reading/common-query. Only the
+    # search kickoff and each skill's search_end (one line per skill,
+    # not per candidate) are shown - skill.search_start and every raw
+    # query.response are skipped, along with playback_time (fires
+    # continuously during actual playback - pure noise) and all gui.*
+    # bookkeeping messages.
+    #
+    # NOT YET CONFIRMED: which specific skill actually gets selected to
+    # play (as opposed to merely offering candidates) - every live
+    # capture attempt on this box hit an external API failure
+    # (YouTube/Pyradios) before reaching that point. Tracked as a
+    # follow-up rather than guessed at.
+    if msg_type == "ocp:play":
+        return f'🎵 OCP: searching for "{data.get("query", "?")}"'
+
+    if msg_type == OCP_PREFIX + "skill.search_end":
+        return f"✓ {data.get('skill_id', '?')}: search complete"
 
     # A small, deliberately curated set of core lifecycle events -
     # picked for being both common and meaningful on their own (no

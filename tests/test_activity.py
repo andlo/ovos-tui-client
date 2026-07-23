@@ -143,3 +143,97 @@ def test_fallback_ping_pong_and_request_are_not_shown():
     assert summarize_message(
         "ovos.skills.fallback.ovos-skill-fallback-unknown.openvoiceos.request", {}
     ) is None
+
+
+# --- Common Query path (confirmed via live capture) ---
+
+def test_common_query_question():
+    line = summarize_message("question:query", {"phrase": "what is the capital of france"})
+    assert line == '🔍 asking all skills: "what is the capital of france"'
+
+
+def test_common_query_response_with_answer():
+    line = summarize_message("question:query.response", {
+        "phrase": "what is the capital of france",
+        "skill_id": "ovos-skill-wikipedia.openvoiceos",
+        "searching": False,
+        "answer": "Its capital, largest city and main cultural...",
+    })
+    assert line == '📥 ovos-skill-wikipedia.openvoiceos: "Its capital, largest city and main cultural..."'
+
+
+def test_common_query_response_without_answer_still_shown():
+    """Consistency with common-reading's own pong/search.response
+    (shown regardless of confidence) and fetch_content.response's
+    "empty response" - a skill visibly coming up empty is worth
+    seeing, not silently dropped."""
+    line = summarize_message("question:query.response", {
+        "phrase": "what is the capital of france",
+        "skill_id": "ovos-skill-ddg.openvoiceos",
+        "searching": False,
+    })
+    assert line == "✗ ovos-skill-ddg.openvoiceos: no answer"
+
+
+def test_common_query_response_searching_true_is_not_shown():
+    """The transient "still working" phase - same reasoning as
+    skipping fallback's ping/pong."""
+    line = summarize_message("question:query.response", {
+        "phrase": "what is the capital of france",
+        "skill_id": "ovos-skill-wikihow.openvoiceos",
+        "searching": True,
+    })
+    assert line is None
+
+
+# --- question:action (confirmed via official OVOS message spec) ---
+
+def test_common_query_action_selected():
+    line = summarize_message("question:action", {
+        "phrase": "what is the capital of france",
+        "skill_id": "ovos-skill-wikipedia.openvoiceos",
+        "callback_data": {},
+    })
+    assert line == "🏆 ovos-skill-wikipedia.openvoiceos selected to answer"
+
+
+# --- OCP (media playback) search path (confirmed via live capture) ---
+
+def test_ocp_play_kickoff():
+    line = summarize_message("ocp:play", {"query": "jazz music", "media_type": 2})
+    assert line == '🎵 OCP: searching for "jazz music"'
+
+
+def test_ocp_skill_search_end():
+    line = summarize_message("ovos.common_play.skill.search_end", {"skill_id": "ovos-skill-pyradios.openvoiceos"})
+    assert line == "✓ ovos-skill-pyradios.openvoiceos: search complete"
+
+
+def test_ocp_skill_search_start_not_shown():
+    """Transient "I'm looking" phase - same reasoning as fallback's
+    ping/pong."""
+    line = summarize_message("ovos.common_play.skill.search_start", {"skill_id": "ovos-skill-pyradios.openvoiceos"})
+    assert line is None
+
+
+def test_ocp_query_response_not_shown():
+    """Deliberately NOT shown - a single skill can send many of these
+    per search (confirmed via live capture: youtube-music sent 10 for
+    one query), and summarize_message() is a stateless pure function
+    with no way to aggregate them into one line."""
+    line = summarize_message("ovos.common_play.query.response", {
+        "phrase": "jazz music", "skill_id": "ovos-skill-youtube-music.openvoiceos",
+    })
+    assert line is None
+
+
+def test_ocp_playback_time_not_shown():
+    """Fires continuously during actual playback - pure noise."""
+    line = summarize_message("ovos.common_play.playback_time", {"position": 16.1, "length": 4590281.0})
+    assert line is None
+
+
+def test_ocp_gui_messages_not_shown():
+    assert summarize_message("gui.value.set", {"footer_text": "Searching..."}) is None
+    assert summarize_message("gui.page.show", {"page_names": ["busy"]}) is None
+    assert summarize_message("gui.status.request", {}) is None
