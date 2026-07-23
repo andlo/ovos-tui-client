@@ -134,7 +134,13 @@ on modern Python/setuptools).
   a small, deliberately old-school boot sequence - version number,
   "Reading logs...", "Getting service states...", "Finding skills...
   N found" (count only - not the full listing, see "Skill: List
-  installed" above for that), ending in "OK ready."
+  installed" above for that), ending in "OK ready." - only once both
+  of the async/background startup steps (service-state check, skill
+  lookup) have genuinely finished, not just been kicked off, so it
+  doesn't appear before its own result does. The UI itself is
+  interactive from the moment those steps are kicked off, not after -
+  the service-state check in particular runs on a background thread
+  precisely so a slow `systemctl` call can never freeze the whole app.
 - **Activity**: a curated, simplified feed of what's happening on the
   bus right now - which skill is handling the request, wake word/
   speech start-stop, global stop, and for `ovos.common_reading.*`

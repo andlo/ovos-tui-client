@@ -52,6 +52,7 @@ import importlib.metadata
 from collections import deque
 from functools import partial
 
+from textual import work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical
@@ -442,11 +443,32 @@ class OVOSTUIApp(App):
         conversation pane (per feedback: "i samme stil som gamle dage
         når man startede sin computer") - each line corresponds to a
         REAL step actually happening at that point (not just
-        decorative filler), ending in 'OK ready.' once the UI is
-        interactive. installed-skill listing is intentionally terse
-        here (count only) - the full one-skill-per-line listing (see
-        _refresh_installed_skills()) is for the explicit "Skill: List
-        installed" palette command, not startup noise."""
+        decorative filler).
+
+        Two real bugs found via testing, both fixed here:
+
+        1. discover_services_with_state() makes a genuine, blocking
+           subprocess call (systemctl). Calling it directly here froze
+           the WHOLE UI (Textual's event loop is single-threaded) until
+           it returned - "man ikke kan noget før den har åbnet noget i
+           loggen" (nothing responds until something appears in the
+           log). Moved to _check_services_worker(), a @work(thread=True)
+           background worker, so on_mount itself returns immediately
+           and the UI is interactive from the start - set_interval()
+           and focusing the input now happen BEFORE kicking off either
+           async step below, not after.
+
+        2. 'OK ready.' was written unconditionally right after
+           KICKING OFF the skill lookup, not after it actually
+           finished - so it could appear before the result did (e.g.
+           'Finding skills...' / 'OK ready.' / 'Finding skills... N
+           found', which looked exactly like a bug, because it was
+           one). Fixed with _finish_startup(): both the service-state
+           worker and the skill lookup call it on completion (success
+           OR failure/timeout - both have their own timeouts, so this
+           always eventually fires), and only once BOTH have reported
+           in does 'OK ready.' get written - genuinely accurate now,
+           not just well-intentioned."""
         self._write_status(f"ovos-tui-client v{_ovos_tui_version()} starting...")
 
         if not self.log_sources:
@@ -464,15 +486,32 @@ class OVOSTUIApp(App):
         self.bus.connect()
         self._write_status(f"Connected to OVOS messagebus at {self.host}:{self.port}")
 
-        n_services = len(discover_services_with_state())
-        self._write_status(f"Getting service states... {n_services} ovos-*.service unit(s) found")
-
-        self._write_status("Finding skills...")
-        self._refresh_installed_skills(verbose=False)
-
         self.set_interval(LOG_POLL_INTERVAL, self._poll_logs)
         self.query_one("#utterance-input", Input).focus()
-        self._write_status("OK ready.")
+
+        self._startup_steps_remaining = 2
+        self._check_services_worker()
+        self._write_status("Finding skills...")
+        self._refresh_installed_skills(verbose=False, on_complete=self._finish_startup)
+
+    def _finish_startup(self) -> None:
+        """Called once each of the two async/off-thread startup steps
+        (service-state check, skill lookup) has actually completed, in
+        whichever order - only then is 'OK ready.' written. See
+        on_mount()'s docstring for the bug this fixes."""
+        self._startup_steps_remaining -= 1
+        if self._startup_steps_remaining <= 0:
+            self._write_status("OK ready.")
+
+    @work(thread=True)
+    def _check_services_worker(self) -> None:
+        """Runs discover_services_with_state() off the main thread -
+        see on_mount()'s docstring for the UI-freeze bug this fixes.
+        call_from_thread() is required for every UI touch from here,
+        per Textual's thread-worker rules."""
+        n_services = len(discover_services_with_state())
+        self.call_from_thread(self._write_status, f"Getting service states... {n_services} ovos-*.service unit(s) found")
+        self.call_from_thread(self._finish_startup)
 
     def _write_to_log(self, widget: RichLog, content) -> None:
         """The one place every RichLog write goes through, for all
@@ -492,10 +531,25 @@ class OVOSTUIApp(App):
         self.call_from_thread(self._write_activity, line)
 
     def _write_conversation(self, line: str) -> None:
-        self._write_to_log(self.query_one("#conversation", RichLog), line)
+        """Guards against NoMatches - a background worker's delayed
+        call_from_thread callback (e.g. _check_services_worker,
+        _refresh_installed_skills's bus callback) can arrive after the
+        app has torn down (real bug found via testing: app teardown
+        racing a still-running systemctl subprocess call in a
+        background thread). Same 'nothing to update anymore, not a
+        bug' reasoning as _poll_logs's existing NoMatches guard."""
+        try:
+            widget = self.query_one("#conversation", RichLog)
+        except NoMatches:
+            return
+        self._write_to_log(widget, line)
 
     def _write_activity(self, line: str) -> None:
-        self._write_to_log(self.query_one("#activity", RichLog), line)
+        try:
+            widget = self.query_one("#activity", RichLog)
+        except NoMatches:
+            return
+        self._write_to_log(widget, line)
 
     def _write_status(self, text: str, ok: bool = True) -> None:
         """Dim/grey status lines in the conversation pane - startup
@@ -510,7 +564,7 @@ class OVOSTUIApp(App):
         style = "dim" if ok else "red"
         self._write_conversation(f"[{style}]{text}[/{style}]")
 
-    def _refresh_installed_skills(self, verbose: bool = True) -> None:
+    def _refresh_installed_skills(self, verbose: bool = True, on_complete=None) -> None:
         """Populates self.installed_skills (SkillCommandProvider's
         autocomplete source) via bus.list_skills(). Called once at
         startup (verbose=False - see on_mount's boot-narration
@@ -524,18 +578,29 @@ class OVOSTUIApp(App):
         as the list grows. See issue #15 for the not-yet-implemented
         idea of grouping/categorizing by skill type (skill/ocp/
         reading/pipeline etc) - deferred pending research into whether
-        that's reliably detectable from skill_id alone."""
+        that's reliably detectable from skill_id alone.
+
+        on_complete, if given, is called (via call_from_thread, same
+        as everything else here) after the result is written -
+        regardless of success or timeout, both are "done" as far as a
+        caller waiting on completion is concerned. Used by on_mount()
+        to know when it's genuinely safe to say 'OK ready.' - see that
+        docstring for the bug this fixes (the old code wrote 'OK
+        ready.' immediately after KICKING OFF this lookup, not after
+        it finished, so it could appear before the result did)."""
         def _on_result(skills):
             if skills is None:
                 self.call_from_thread(self._write_status, "Skill list: no response (timed out)", ok=False)
-                return
-            self.installed_skills = sorted(skills)
-            if not verbose:
-                self.call_from_thread(self._write_status, f"Finding skills... {len(self.installed_skills)} found")
-                return
-            self.call_from_thread(self._write_status, f"Skills: {len(self.installed_skills)} installed:")
-            for skill_id in self.installed_skills:
-                self.call_from_thread(self._write_status, f"  {skill_id}")
+            else:
+                self.installed_skills = sorted(skills)
+                if verbose:
+                    self.call_from_thread(self._write_status, f"Skills: {len(self.installed_skills)} installed:")
+                    for skill_id in self.installed_skills:
+                        self.call_from_thread(self._write_status, f"  {skill_id}")
+                else:
+                    self.call_from_thread(self._write_status, f"Finding skills... {len(self.installed_skills)} found")
+            if on_complete is not None:
+                self.call_from_thread(on_complete)
         self.bus.list_skills(_on_result)
 
     def _list_pipeline(self) -> None:

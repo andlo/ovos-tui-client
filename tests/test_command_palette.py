@@ -434,10 +434,19 @@ async def test_startup_narrates_reading_logs(tmp_path):
 
 @pytest.mark.asyncio
 async def test_startup_narrates_service_states(tmp_path):
+    """discover_services_with_state() runs on a background worker
+    thread (see on_mount's docstring on why) - real bug found via
+    testing: checking conversation text immediately after run_test()
+    yields is a genuine race, since the worker hasn't necessarily
+    finished a real subprocess call yet. app.workers.wait_for_complete()
+    actually waits for it, rather than guessing at timing with
+    pilot.pause()."""
     app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        text = _conversation_text(app)
-        assert "service state" in text.lower()
+    with patch("ovos_tui_client.app.discover_services_with_state", return_value=[("ovos-core.service", True)]):
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            text = _conversation_text(app)
+            assert "service state" in text.lower()
 
 
 @pytest.mark.asyncio
@@ -465,11 +474,21 @@ async def test_startup_narrates_finding_skills_count_only_not_full_list(tmp_path
 
 @pytest.mark.asyncio
 async def test_startup_ends_with_ok_ready(tmp_path):
+    """'OK ready.' is only written once BOTH async startup steps
+    (service-state worker, skill lookup) report completion - see
+    on_mount()'s docstring for the real ordering bug this fixes.
+    Mocking both to resolve immediately + waiting for the worker
+    avoids the same timing race as test_startup_narrates_service_states
+    above."""
     app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        view = app.query_one("#conversation", RichLog)
-        last_line = str(view.lines[-1])
-        assert "ok ready" in last_line.lower()
+    app.bus.list_skills = MagicMock(side_effect=lambda cb: cb(["ovos-skill-grimm-tales.andlo"]))
+    app.call_from_thread = MagicMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))
+    with patch("ovos_tui_client.app.discover_services_with_state", return_value=[]):
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            view = app.query_one("#conversation", RichLog)
+            last_line = str(view.lines[-1])
+            assert "ok ready" in last_line.lower()
 
 
 # --- Log: Select all / Deselect all skills ---
