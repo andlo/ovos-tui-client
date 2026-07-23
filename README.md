@@ -101,26 +101,29 @@ on modern Python/setuptools).
     one runs it immediately; the result ("ovos-core.service:
     restarted", or the failure reason) appears in the conversation
     pane.
-  - **`Skill: `** - "Skill: List installed" (a static entry - fetches
-    the current list via the bus and writes it to the conversation
-    pane, one skill per line with its active/inactive/unknown state,
-    refreshing the autocomplete source for the next two), plus "Skill:
-    Activate <skill_id>" / "Skill: Deactivate <skill_id>" for every
-    skill from that list, fuzzy-matched the same way as services -
-    **only the relevant action is offered per skill** (Activate if
-    inactive, Deactivate if active; both if the state is genuinely
-    unknown), same as `Service:` above. Confirmed directly against a
-    live OVOS instance that `skillmanager.list`'s response really does
-    carry per-skill active state, not just names. Fire-and-forget (see
-    `bus.py`'s honesty note on `activate_skill()`/`deactivate_skill()`
-    - based on the documented mycroft-core convention) - the
-    conversation-pane line confirms the request was *sent*, not that
-    OVOS applied it; the local cache updates optimistically so the
-    next search reflects the change immediately.
-  - **`Pipeline: List`** - reads `mycroft.conf`'s `intents.pipeline`
-    order via `ovos-config` (respects config layering) and writes it,
-    numbered, to the conversation pane - a quick way to check pipeline
-    order without leaving the TUI. Read-only.
+  - **`Skill: `** - one entry per known skill, current state shown in
+    the title - "Skill: skill_id (Active)" or "Skill: skill_id
+    (Inactive)" - selecting it toggles (Deactivate if currently
+    Active, Activate if currently Inactive), same "state in title,
+    selecting toggles" convention as `Log:` above. An unknown state
+    shows both Activate and Deactivate explicitly instead, since
+    there's no current state to toggle from. The list is populated
+    once at startup via the bus (`skillmanager.list` - confirmed
+    directly against a live OVOS instance that its response really
+    does carry per-skill active state, not just names), not refetched
+    per keystroke. Fire-and-forget (see `bus.py`'s honesty note on
+    `activate_skill()`/`deactivate_skill()` - based on the documented
+    mycroft-core convention) - the conversation-pane line confirms the
+    request was *sent*, not that OVOS applied it; the local cache
+    updates optimistically so the next search reflects the change
+    immediately. No separate "list installed skills" command anymore -
+    typing "skill" already shows every one of them.
+  - **`Pipeline: `** - one entry per stage in `mycroft.conf`'s
+    `intents.pipeline` array, numbered in order - "Pipeline: 1.
+    stop_high", "Pipeline: 2. ovos-common-reading-pipeline-plugin",
+    etc, via `ovos-config` (respects config layering). Read-only -
+    pipeline order is static config, not something with a live bus
+    toggle; selecting an entry just confirms which stage you found.
   - Textual's own default **"Screenshot"** and **"Keys"** commands are
     filtered out - Screenshot isn't useful for this tool; Keys is
     Textual's own default trigger for exactly the same show-help-panel

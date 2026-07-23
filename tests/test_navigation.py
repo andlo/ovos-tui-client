@@ -208,15 +208,16 @@ async def test_write_to_log_keeps_auto_scrolling_when_already_at_bottom(tmp_path
 async def test_get_system_commands_includes_our_actions(tmp_path):
     """Service Restart/Stop/Start and the log-display skill filter are
     NOT static entries here - they're dynamic hits from
-    ServiceCommandProvider/SkillFilterCommandProvider (see
-    test_command_palette.py), since they need per-service/per-skill
-    names filled in at search time."""
+    ServiceCommandProvider/SkillFilterCommandProvider/
+    PipelineCommandProvider (see test_command_palette.py), since they
+    need per-service/per-skill/per-stage names filled in at search
+    time. There's no separate 'Skill: List installed' or 'Pipeline:
+    List' anymore either - both were removed once typing 'skill' or
+    'pipeline' already shows everything directly."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
         assert any("Help" in t for t in titles)
-        assert any("Skill: List installed" in t for t in titles)
-        assert any("Pipeline: List" in t for t in titles)
         assert any("Focus: Logs" in t for t in titles)
         assert any("Focus: Conversation" in t for t in titles)
         assert any("Focus: Activity" in t for t in titles)

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from textual.widgets import RichLog
 
-from ovos_tui_client.app import OVOSTUIApp, ServiceCommandProvider, SkillCommandProvider
+from ovos_tui_client.app import OVOSTUIApp, ServiceCommandProvider, SkillCommandProvider, PipelineCommandProvider
 
 
 def _app_with_fake_bus(tmp_path):
@@ -215,18 +215,19 @@ async def test_selecting_deactivate_calls_bus_deactivate_skill_no_popup(tmp_path
         app.bus.deactivate_skill.assert_called_once_with("ovos-skill-grimm-tales.andlo")
 
 
-# --- "Skill: List installed" static command + conversation output ---
-
-@pytest.mark.asyncio
-async def test_system_commands_include_skill_list_installed(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
-        assert "Skill: List installed" in titles
-
+# --- "Skill: List installed" removed - see test_navigation.py's
+# test_get_system_commands_includes_our_actions for confirmation it's
+# gone, and PipelineCommandProvider tests below for the same
+# "Provider search replaces one-shot List command" pattern applied to
+# pipeline stages ---
 
 @pytest.mark.asyncio
 async def test_refresh_installed_skills_populates_cache_and_writes_conversation(tmp_path):
+    """Writes a terse "Skills found: N active M inactive" summary -
+    the old full-listing behavior (one line per skill) was removed
+    along with "Skill: List installed", since typing "skill" in the
+    palette (SkillCommandProvider) already shows every skill with its
+    current state."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         # bus.list_skills()'s callback normally fires from the bus
@@ -245,8 +246,9 @@ async def test_refresh_installed_skills_populates_cache_and_writes_conversation(
 
         assert app.installed_skills == {"ovos-skill-grimm-tales.andlo": False, "ovos-skill-andersen-tales.andlo": True}
         text = _conversation_text(app)
-        assert "grimm-tales" in text
-        assert "andersen-tales" in text
+        assert "skills found" in text.lower()
+        assert "1 active" in text.lower()
+        assert "1 inactive" in text.lower()
 
 
 @pytest.mark.asyncio
@@ -326,75 +328,78 @@ async def test_other_textual_defaults_are_not_filtered(tmp_path):
         assert "Quit" in titles or any("quit" in t.lower() for t in titles)
 
 
-# --- "Skill: List installed" - one skill per line ---
+# --- PipelineCommandProvider: browse mycroft.conf's intents.pipeline
+# order, in the palette - replaces the old one-shot "Pipeline: List"
+# command, same reasoning as removing "Skill: List installed" ---
 
 @pytest.mark.asyncio
-async def test_list_installed_skills_writes_one_per_line(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        app.call_from_thread = MagicMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))
-        app.bus.list_skills = MagicMock(
-            side_effect=lambda cb: cb({"ovos-skill-grimm-tales.andlo": False, "ovos-skill-andersen-tales.andlo": True})
-        )
-        app._refresh_installed_skills()
-        await pilot.pause()
-
-        view = app.query_one("#conversation", RichLog)
-        lines = [str(line) for line in view.lines]
-        assert any("ovos-skill-grimm-tales.andlo" in line and "ovos-skill-andersen-tales.andlo" not in line
-                   for line in lines)
-        assert any("ovos-skill-andersen-tales.andlo" in line and "ovos-skill-grimm-tales.andlo" not in line
-                   for line in lines)
-
-
-# --- "Pipeline: List" ---
-
-@pytest.mark.asyncio
-async def test_system_commands_include_pipeline_list(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
-        assert "Pipeline: List" in titles
-
-
-@pytest.mark.asyncio
-async def test_list_pipeline_writes_stages_to_conversation(tmp_path):
+async def test_pipeline_search_yields_numbered_stages(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         fake_config = MagicMock()
         fake_config.get.return_value = {"pipeline": ["stop_high", "ocp_high", "adapt_high"]}
         with patch("ovos_config.config.Configuration", return_value=fake_config):
-            app._list_pipeline()
-            await pilot.pause()
+            provider = PipelineCommandProvider(app.screen)
+            hits = await _collect_hits(provider, "pipeline")
 
-        text = _conversation_text(app)
-        assert "stop_high" in text
-        assert "ocp_high" in text
-        assert "adapt_high" in text
+        texts = [str(h.match_display) for h in hits]
+        assert "Pipeline: 1. stop_high" in texts
+        assert "Pipeline: 2. ocp_high" in texts
+        assert "Pipeline: 3. adapt_high" in texts
 
 
 @pytest.mark.asyncio
-async def test_list_pipeline_handles_missing_config_gracefully(tmp_path):
+async def test_pipeline_search_narrows_by_stage_name(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        fake_config = MagicMock()
+        fake_config.get.return_value = {"pipeline": ["stop_high", "ocp_high", "adapt_high"]}
+        with patch("ovos_config.config.Configuration", return_value=fake_config):
+            provider = PipelineCommandProvider(app.screen)
+            hits = await _collect_hits(provider, "ocp")
+
+        texts = [str(h.match_display) for h in hits]
+        assert any("ocp_high" in t for t in texts)
+        assert not any("stop_high" in t for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_selecting_a_pipeline_hit_writes_to_conversation_no_popup(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        fake_config = MagicMock()
+        fake_config.get.return_value = {"pipeline": ["stop_high", "ocp_high"]}
+        with patch("ovos_config.config.Configuration", return_value=fake_config):
+            provider = PipelineCommandProvider(app.screen)
+            hits = await _collect_hits(provider, "ocp")
+            hits[0].command()
+            await pilot.pause()
+
+        assert "Pipeline stage 2: ocp_high" in _conversation_text(app)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_search_handles_config_read_errors_gracefully(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        with patch("ovos_config.config.Configuration", side_effect=RuntimeError("boom")):
+            provider = PipelineCommandProvider(app.screen)
+            hits = await _collect_hits(provider, "pipeline")  # must not raise
+
+        assert hits == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_search_handles_empty_pipeline_gracefully(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         fake_config = MagicMock()
         fake_config.get.return_value = {}
         with patch("ovos_config.config.Configuration", return_value=fake_config):
-            app._list_pipeline()
-            await pilot.pause()
+            provider = PipelineCommandProvider(app.screen)
+            hits = await _collect_hits(provider, "pipeline")
 
-        assert "empty" in _conversation_text(app).lower() or "not set" in _conversation_text(app).lower()
-
-
-@pytest.mark.asyncio
-async def test_list_pipeline_handles_read_errors_gracefully(tmp_path):
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        with patch("ovos_config.config.Configuration", side_effect=RuntimeError("boom")):
-            app._list_pipeline()  # must not raise
-            await pilot.pause()
-
-        assert "could not read" in _conversation_text(app).lower()
+        assert hits == []
 
 
 # --- SkillFilterCommandProvider: log-display skill filter, in the palette ---

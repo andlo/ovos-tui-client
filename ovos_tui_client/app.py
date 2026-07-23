@@ -174,6 +174,52 @@ class SkillFilterCommandProvider(Provider):
                 )
 
 
+class PipelineCommandProvider(Provider):
+    """Command Palette provider (Ctrl+P) for browsing the intent
+    pipeline order (mycroft.conf's intents.pipeline array) - typing
+    "pipeline" shows every stage with its position, e.g. "Pipeline:
+    1. stop_high", "Pipeline: 2. ovos-common-reading-pipeline-plugin".
+    Replaces the old one-shot "Pipeline: List" command that dumped the
+    whole list to the conversation pane in one go - redundant once the
+    list is directly browsable/searchable here, same reasoning as
+    removing "Skill: List installed" once "Skill: " search already
+    shows every skill.
+
+    Read directly from config on every search call rather than cached -
+    unlike installed_skills (a real bus round-trip with a timeout),
+    reading mycroft.conf is fast/local, and pipeline order essentially
+    never changes without an OVOS restart, so there's no staleness
+    concern worth caching against. Uses ovos_config (respects OVOS's
+    own config layering) rather than parsing the raw file.
+
+    Read-only - toggling stages on/off would mean writing to
+    mycroft.conf itself, which needs its own careful design pass (see
+    issue #6 on viewing/editing mycroft.conf generally, and the
+    follow-up issue on pipeline-stage toggling specifically - no
+    confirmed live bus message exists for this, only static config).
+    Selecting a hit here just confirms which stage you found by
+    writing it to the conversation pane - there's no state to change."""
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        try:
+            from ovos_config.config import Configuration
+            pipeline = Configuration().get("intents", {}).get("pipeline", [])
+        except Exception:
+            return
+        for i, stage in enumerate(pipeline, start=1):
+            command_text = f"Pipeline: {i}. {stage}"
+            score = matcher.match(command_text)
+            if score > 0:
+                yield Hit(
+                    score,
+                    matcher.highlight(command_text),
+                    partial(self._show, i, stage),
+                )
+
+    def _show(self, position: int, stage: str) -> None:
+        self.app._write_status(f"Pipeline stage {position}: {stage}")
+
 
 class ClickableLabel(Label):
     """A Label that also responds to being clicked, so it can double
@@ -249,13 +295,12 @@ class SkillCommandProvider(Provider):
     """Command Palette provider (Ctrl+P) for activating/deactivating
     any known installed skill, same in-place filtering as
     ServiceCommandProvider above - no modal window. Hits read from
-    OVOSTUIApp.installed_skills, a cache populated by
-    _refresh_installed_skills() (called once at startup, and again
-    whenever "Skill: List installed" runs - see get_system_commands())
-    rather than fetched fresh on every keystroke, since that would
-    mean a bus round-trip per character typed. If the cache is still
-    empty (nothing successfully fetched yet), this simply has no hits
-    to offer yet - not an error, just nothing to show.
+    OVOSTUIApp.installed_skills, a cache populated once at startup by
+    _refresh_installed_skills() (see on_mount()) rather than fetched
+    fresh on every keystroke, since that would mean a bus round-trip
+    per character typed. If the cache is still empty (nothing
+    successfully fetched yet), this simply has no hits to offer yet -
+    not an error, just nothing to show.
 
     installed_skills maps skill_id -> active (True/False/None -
     confirmed directly against a live OVOS instance: 'skillmanager.
@@ -312,7 +357,7 @@ class SkillCommandProvider(Provider):
         # optimistic local update - fire-and-forget means there's no
         # confirmation to wait for anyway, and this means the very
         # next search only offers the OTHER action for this skill,
-        # without needing a full re-fetch via "Skill: List installed"
+        # without needing a full re-fetch from the bus
         self.app.installed_skills[skill_id] = (method_name == "activate_skill")
         self.app._write_status(f"{skill_id}: {label.lower()} requested")
 
@@ -386,7 +431,7 @@ class OVOSTUIApp(App):
     # renumbering F5+ to fill the gap - no benefit to disrupting keys
     # that already work.
 
-    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider}
+    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider, PipelineCommandProvider}
 
     def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None):
         super().__init__()
@@ -500,7 +545,7 @@ class OVOSTUIApp(App):
 
         self._startup_steps_remaining = 2
         self._check_services_worker()
-        self._refresh_installed_skills(verbose=False, on_complete=self._finish_startup)
+        self._refresh_installed_skills(on_complete=self._finish_startup)
 
     def _finish_startup(self) -> None:
         """Called once each of the two async/off-thread startup steps
@@ -600,23 +645,22 @@ class OVOSTUIApp(App):
         style = "dim" if ok else "red"
         self._write_conversation(f"[{style}]{text}[/{style}]")
 
-    def _refresh_installed_skills(self, verbose: bool = True, on_complete=None) -> None:
+    def _refresh_installed_skills(self, on_complete=None) -> None:
         """Populates self.installed_skills (SkillCommandProvider's
         autocomplete source) via bus.list_skills(). Called once at
-        startup (verbose=False - active/inactive counts only, not a
-        full listing - see on_mount's boot-narration docstring) and
-        again whenever 'Skill: List installed' runs (see
-        get_system_commands(), verbose=True by default) - not on every
-        palette keystroke, since each call is a real bus round-trip
-        with a timeout.
+        startup, not on every palette keystroke, since each call is a
+        real bus round-trip with a timeout - the cache is what
+        SkillCommandProvider actually searches against.
 
-        verbose=True writes one skill per line, with its active/
-        inactive/unknown state, to the conversation pane (not a single
-        comma-joined line) - readability, especially as the list
-        grows. See issue #15 for the not-yet-implemented idea of
-        grouping/categorizing by skill type (skill/ocp/reading/
-        pipeline etc) - deferred pending research into whether that's
-        reliably detectable from skill_id alone.
+        Writes a terse "Skills found: N active M inactive" summary to
+        the conversation pane - no separate full listing anymore
+        (there used to be a "Skill: List installed" palette command
+        for that; removed as redundant once typing "skill" in the
+        palette already shows every skill with its current state, per
+        SkillCommandProvider). See issue #15 for the not-yet-
+        implemented idea of grouping/categorizing by skill type
+        (skill/ocp/reading/pipeline etc) - deferred pending research
+        into whether that's reliably detectable from skill_id alone.
 
         on_complete, if given, is called (via call_from_thread, same
         as everything else here) after the result is written -
@@ -631,46 +675,16 @@ class OVOSTUIApp(App):
                 self.call_from_thread(self._write_status, "Skill list: no response (timed out)", ok=False)
             else:
                 self.installed_skills = skills
-                if verbose:
-                    self.call_from_thread(self._write_status, f"Skills: {len(self.installed_skills)} installed:")
-                    for skill_id in sorted(self.installed_skills):
-                        active = self.installed_skills[skill_id]
-                        state = "active" if active else "inactive" if active is False else "unknown"
-                        self.call_from_thread(self._write_status, f"  {skill_id} ({state})")
-                else:
-                    n_active = sum(1 for v in self.installed_skills.values() if v)
-                    n_inactive = sum(1 for v in self.installed_skills.values() if v is False)
-                    n_unknown = sum(1 for v in self.installed_skills.values() if v is None)
-                    summary = f"Skills found: {n_active} active {n_inactive} inactive"
-                    if n_unknown:
-                        summary += f" {n_unknown} unknown"
-                    self.call_from_thread(self._write_status, summary)
+                n_active = sum(1 for v in self.installed_skills.values() if v)
+                n_inactive = sum(1 for v in self.installed_skills.values() if v is False)
+                n_unknown = sum(1 for v in self.installed_skills.values() if v is None)
+                summary = f"Skills found: {n_active} active {n_inactive} inactive"
+                if n_unknown:
+                    summary += f" {n_unknown} unknown"
+                self.call_from_thread(self._write_status, summary)
             if on_complete is not None:
                 self.call_from_thread(on_complete)
         self.bus.list_skills(_on_result)
-
-    def _list_pipeline(self) -> None:
-        """'Pipeline: List' - reads mycroft.conf's intents.pipeline
-        array via ovos_config (respects OVOS's own config layering,
-        rather than parsing the raw file directly) and writes it to
-        the conversation pane, one stage per line in order - a quick
-        way to check pipeline order without leaving the TUI, which
-        this project's own README has an entire section on getting
-        right (see the earlier pause/stop-vocabulary debugging
-        history). Read-only - see issue #6 for the separate, larger
-        question of viewing/editing mycroft.conf more generally."""
-        try:
-            from ovos_config.config import Configuration
-            pipeline = Configuration().get("intents", {}).get("pipeline", [])
-        except Exception as e:
-            self._write_status(f"Pipeline: could not read config - {e}", ok=False)
-            return
-        if not pipeline:
-            self._write_status("Pipeline: intents.pipeline is empty or not set")
-            return
-        self._write_status(f"Pipeline ({len(pipeline)} stages, in order):")
-        for i, stage in enumerate(pipeline, start=1):
-            self._write_status(f"  {i}. {stage}")
 
 
 
@@ -853,8 +867,6 @@ class OVOSTUIApp(App):
             if cmd.title not in ("Screenshot", "Keys"):
                 yield cmd
         yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
-        yield SystemCommand("Skill: List installed", "", self._refresh_installed_skills)
-        yield SystemCommand("Pipeline: List", "", self._list_pipeline)
         yield SystemCommand("Focus: Logs", "", self.action_focus_logs)
         yield SystemCommand("Focus: Conversation", "", self.action_focus_conversation)
         yield SystemCommand("Focus: Activity", "", self.action_focus_activity)
