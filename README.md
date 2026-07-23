@@ -12,8 +12,9 @@ on modern Python/setuptools).
 
 ```
 ┌──────────────────────────────────────────┐
-│ LOGS (top) - toggleable per source        │
-│ [x]bus [x]skills [ ]audio        scroll↕  │
+│ Sources: 4/4 (F5)  Levels: 5/5 (F4)       │
+│ Filter logs (free text)...                │
+│ LOGS                              scroll↕ │
 ├───────────────────────────┬───────────────┤
 │ CONVERSATION (2/3)         │ ACTIVITY (1/3)│
 │ You: read me a grimm story │ 🔍 pipeline:  │
@@ -27,16 +28,25 @@ on modern Python/setuptools).
 
 - **Logs**: tails every recognized OVOS service log file it finds
   (`bus.log`, `skills.log`, `audio.log`/`media.log`, `voice.log`,
-  `gui.log`, `enclosure.log`, `phal.log`), each with its own color, a
-  checkbox per source to toggle it on/off, plus per-**log-level**
-  checkboxes (DEBUG/INFO/WARNING/ERROR/CRITICAL) and per-**skill**
-  checkboxes (dynamically added the first time a skill_id is seen in
-  the log text - best-effort, not every skill-related line mentions
-  its own skill_id explicitly), plus a free-text filter box - all of
-  these apply retroactively to already-received lines, not just new
-  ones. OVOS's own `TIMESTAMP - COMPONENT - ` prefix is stripped, and
-  every `[source]` tag is padded to the same width so message text
-  lines up in one column. Lines containing `ERROR` are bolded.
+  `gui.log`, `enclosure.log`, `phal.log`), each with its own color.
+  OVOS's own `TIMESTAMP - COMPONENT - ` prefix is stripped, and every
+  `[source]` tag is padded to the same width so message text lines up
+  in one column. Lines containing `ERROR` are bolded. A compact status
+  line above the free-text filter box shows current filter counts.
+- **F4**: opens a panel to toggle which **log levels**
+  (DEBUG/INFO/WARNING/ERROR/CRITICAL) are shown.
+- **F5**: opens a panel to toggle which **log sources** (files) and
+  which **skills** (dynamically discovered the first time a skill_id
+  is seen in the log text - best-effort, not every skill-related line
+  mentions its own skill_id explicitly) are shown. All of these,
+  including the free-text filter, apply retroactively to
+  already-received lines, not just new ones.
+
+  These were originally three permanently-visible rows of checkboxes
+  directly under the log pane - moved into F4/F5 on-demand panels
+  after real testing showed the always-visible rows ate a lot of
+  screen space once Checkbox's actual multi-row rendering height was
+  correctly accounted for.
 - **F2**: opens a services panel listing discovered `ovos-*.service`
   systemd --user units - select one and press Enter to restart it.
 - **F3**: opens a panel listing currently loaded skills (requested via

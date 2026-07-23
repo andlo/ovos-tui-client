@@ -1,8 +1,9 @@
 """The Textual App: a 4-pane layout for testing OVOS without a
-mic/speaker, plus two modal screens (services, installed skills).
+mic/speaker, plus four modal screens (services, installed skills,
+level filter, source filter).
 
     ┌──────────────────────────────────────────┐
-    │ Logs (top) - source/level/skill toggles,  │
+    │ Logs (top) - compact filter status line,  │
     │ colored per source, ERROR lines bold      │
     ├───────────────────────────┬───────────────┤
     │ Conversation (2/3 width)  │ Activity (1/3) │
@@ -16,8 +17,16 @@ Textual widgets aren't thread-safe to update directly from the
 bus-client's background thread, so incoming lines are queued and
 drained on the UI's own event loop instead.
 
-Keybindings: 'r' opens the services (restart) screen, 's' opens the
-installed-skills list, Escape closes either.
+Keybindings: F2 services, F3 installed skills, F4 log-level filter,
+F5 source/skill filter, Escape closes any open modal.
+
+Filtering UI was originally three permanently-visible rows of
+checkboxes (source/level/skill) directly under the log pane - moved
+into on-demand F4/F5 modals instead, after real user feedback that the
+always-visible rows ate too much screen space once Checkbox's actual
+3-row-tall rendering was correctly accounted for (see the height-
+clipping bug fixed in the previous version). A compact one-line status
+summary replaces them in the always-visible area.
 """
 import argparse
 from collections import deque
@@ -69,21 +78,12 @@ class ServicesScreen(ModalScreen):
     of crashing the screen."""
 
     CSS = """
-    ServicesScreen {
-        align: center middle;
-    }
+    ServicesScreen { align: center middle; }
     #services-dialog {
-        width: 60;
-        height: auto;
-        max-height: 20;
-        border: solid $accent;
-        background: $panel;
-        padding: 1 2;
+        width: 60; height: auto; max-height: 20;
+        border: solid $accent; background: $panel; padding: 1 2;
     }
-    #services-result {
-        height: auto;
-        color: $text-muted;
-    }
+    #services-result { height: auto; color: $text-muted; }
     """
 
     def __init__(self):
@@ -120,22 +120,12 @@ class SkillsScreen(ModalScreen):
     against a live modern instance)."""
 
     CSS = """
-    SkillsScreen {
-        align: center middle;
-    }
+    SkillsScreen { align: center middle; }
     #skills-dialog {
-        width: 70;
-        height: auto;
-        max-height: 25;
-        border: solid $accent;
-        background: $panel;
-        padding: 1 2;
+        width: 70; height: auto; max-height: 25;
+        border: solid $accent; background: $panel; padding: 1 2;
     }
     """
-
-    def __init__(self):
-        super().__init__()
-        self._skill_list_ready = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="skills-dialog"):
@@ -150,7 +140,6 @@ class SkillsScreen(ModalScreen):
         fires - may arrive from the bus-client's background thread, so
         callers must marshal onto the app thread first (see
         OVOSTUIApp.action_show_skills)."""
-        self._skill_list_ready = True
         view = self.query_one("#skills-list-view", RichLog)
         view.clear()
         if skills is None:
@@ -168,18 +157,103 @@ class SkillsScreen(ModalScreen):
             self.dismiss()
 
 
+class LevelFilterScreen(ModalScreen):
+    """F4 - toggle which log levels (DEBUG/INFO/WARNING/ERROR/
+    CRITICAL) are shown. Mutates the App's own level_enabled dict
+    directly (passed by reference) - no separate sync-back step
+    needed. Re-renders the log view live on every toggle via
+    self.app, not just when the modal closes."""
+
+    CSS = """
+    LevelFilterScreen { align: center middle; }
+    #level-filter-dialog {
+        width: 40; height: auto; max-height: 20;
+        border: solid $accent; background: $panel; padding: 1 2;
+    }
+    """
+
+    def __init__(self, level_enabled: dict):
+        super().__init__()
+        self.level_enabled = level_enabled
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="level-filter-dialog"):
+            yield Label("Filter by log level (Esc to close)")
+            for level in KNOWN_LOG_LEVELS:
+                yield Checkbox(level, value=self.level_enabled.get(level, True), id=f"modal-level-{level}")
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        level = event.checkbox.id.removeprefix("modal-level-")
+        self.level_enabled[level] = event.value
+        self.app._rerender_logs()
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss()
+
+
+class SourceFilterScreen(ModalScreen):
+    """F5 - toggle which log SOURCES (files) and which discovered
+    SKILL_IDs are shown. Both concepts are about "where did this line
+    come from", so they share one screen. log_sources/skill_enabled
+    are passed by reference - mutated directly, no sync-back step.
+
+    Note: skill_ids discovered AFTER this screen is already open won't
+    appear until it's closed and reopened (compose() only runs once at
+    mount) - a minor, accepted limitation given how rarely a *new*
+    skill_id would first appear in the brief window this modal is open."""
+
+    CSS = """
+    SourceFilterScreen { align: center middle; }
+    #source-filter-dialog {
+        width: 50; height: auto; max-height: 25;
+        border: solid $accent; background: $panel; padding: 1 2;
+    }
+    """
+
+    def __init__(self, log_sources: list, skill_enabled: dict):
+        super().__init__()
+        self.log_sources = log_sources
+        self.skill_enabled = skill_enabled
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="source-filter-dialog"):
+            yield Label("Filter by source (Esc to close)")
+            yield Label("Log files:", classes="section-label")
+            for src in self.log_sources:
+                yield Checkbox(src.name, value=src.enabled, id=f"modal-source-{src.name}")
+            if self.skill_enabled:
+                yield Label("Skills seen so far:", classes="section-label")
+                for skill_id, enabled in self.skill_enabled.items():
+                    widget_id = "modal-skill-" + skill_id.replace(".", "-").replace("_", "-")
+                    yield Checkbox(skill_id, value=enabled, id=widget_id)
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        checkbox_id = event.checkbox.id or ""
+        if checkbox_id.startswith("modal-source-"):
+            name = checkbox_id.removeprefix("modal-source-")
+            for src in self.log_sources:
+                if src.name == name:
+                    src.enabled = event.value
+        elif checkbox_id.startswith("modal-skill-"):
+            skill_id = str(event.checkbox.label)
+            self.skill_enabled[skill_id] = event.value
+        self.app._rerender_logs()
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss()
+
+
 class OVOSTUIApp(App):
     CSS = """
     #logs-container {
         height: 45%;
         border: solid $accent;
     }
-    #log-toggles, #level-toggles, #skill-toggles {
-        height: auto;
-    }
-    #log-toggles Checkbox, #level-toggles Checkbox, #skill-toggles Checkbox {
-        width: auto;
-        margin-right: 1;
+    #filter-status {
+        height: 1;
+        color: $text-muted;
     }
     #log-filter {
         height: 1;
@@ -205,6 +279,8 @@ class OVOSTUIApp(App):
         ("ctrl+c", "quit", "Quit"),
         ("f2", "show_services", "Services"),
         ("f3", "show_skills", "Skills"),
+        ("f4", "show_level_filter", "Levels"),
+        ("f5", "show_source_filter", "Sources"),
     ]
 
     def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None):
@@ -222,14 +298,7 @@ class OVOSTUIApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="logs-container"):
-            with Horizontal(id="log-toggles"):
-                for src in self.log_sources:
-                    yield Checkbox(src.name, value=True, id=f"toggle-{src.name}")
-            with Horizontal(id="level-toggles"):
-                for level in KNOWN_LOG_LEVELS:
-                    yield Checkbox(level, value=True, id=f"level-{level}")
-            with Horizontal(id="skill-toggles"):
-                pass  # populated dynamically as skill_ids are discovered in log text
+            yield Label("", id="filter-status")
             yield Input(placeholder="Filter logs (free text)...", id="log-filter")
             yield RichLog(id="logs-view", wrap=False, markup=True, auto_scroll=True)
         with Horizontal(id="middle-row"):
@@ -245,6 +314,7 @@ class OVOSTUIApp(App):
                 + (f" in {self.log_dir}" if self.log_dir else " in any candidate directory")
                 + ". Pass --log-dir to point at the right one.[/yellow]"
             )
+        self._update_filter_status()
         self.bus.on_speak(self._handle_speak)
         self.bus.on_activity(self._handle_activity)
         self.bus.connect()
@@ -263,6 +333,25 @@ class OVOSTUIApp(App):
     def _write_activity(self, line: str) -> None:
         self.query_one("#activity", RichLog).write(line)
 
+    def _update_filter_status(self) -> None:
+        """The compact one-line summary that replaced the three
+        always-visible checkbox rows - shows counts plus which
+        function key opens the full toggle list for each category."""
+        try:
+            label = self.query_one("#filter-status", Label)
+        except NoMatches:
+            return
+        n_src = len(self.log_sources)
+        n_src_on = sum(1 for s in self.log_sources if s.enabled)
+        n_lvl = len(self.level_enabled)
+        n_lvl_on = sum(1 for v in self.level_enabled.values() if v)
+        parts = [f"Sources: {n_src_on}/{n_src} (F5)", f"Levels: {n_lvl_on}/{n_lvl} (F4)"]
+        if self.skill_enabled:
+            n_sk = len(self.skill_enabled)
+            n_sk_on = sum(1 for v in self.skill_enabled.values() if v)
+            parts.append(f"Skills: {n_sk_on}/{n_sk} (F5)")
+        label.update("   ".join(parts))
+
     def _line_passes_all_filters(self, source_name: str, line: str) -> bool:
         """The full filter chain a line must pass to be shown: its
         source must be enabled, its log level (if any) must be
@@ -279,21 +368,15 @@ class OVOSTUIApp(App):
             return False
         return line_matches_filter(line, self.log_filter_text)
 
-    def _maybe_register_skill_checkbox(self, line: str) -> None:
-        """Best-effort: if this line mentions a skill_id we haven't
-        seen before, add a new checkbox for it so it can be toggled -
-        see logs.extract_skill_id's docstring for why this only
-        catches some lines, not all skill-related ones."""
+    def _maybe_register_skill(self, line: str) -> None:
+        """Best-effort: tracks a new skill_id the first time it's seen
+        in log text, so it shows up next time the F5 source-filter
+        modal is opened. See logs.extract_skill_id's docstring for why
+        this only catches some lines, not all skill-related ones."""
         skill_id = extract_skill_id(line)
         if skill_id is None or skill_id in self.skill_enabled:
             return
         self.skill_enabled[skill_id] = True
-        try:
-            container = self.query_one("#skill-toggles", Horizontal)
-        except NoMatches:
-            return  # app tearing down - see _poll_logs's docstring
-        widget_id = "skillfilter-" + skill_id.replace(".", "-").replace("_", "-")
-        container.mount(Checkbox(skill_id, value=True, id=widget_id))
 
     def _poll_logs(self) -> None:
         """Runs on a recurring timer (set_interval) - can fire during
@@ -307,41 +390,33 @@ class OVOSTUIApp(App):
             view = self.query_one("#logs-view", RichLog)
         except NoMatches:
             return
+        new_skill_seen = False
         for src in self.log_sources:
             new_lines = src.read_new_lines()
             for line in new_lines:
                 self.log_buffer.append((src.name, line))
-                self._maybe_register_skill_checkbox(line)
+                before = len(self.skill_enabled)
+                self._maybe_register_skill(line)
+                if len(self.skill_enabled) != before:
+                    new_skill_seen = True
                 if self._line_passes_all_filters(src.name, line):
                     view.write(format_log_line(src.name, line))
+        if new_skill_seen:
+            self._update_filter_status()
 
     def _rerender_logs(self) -> None:
         """Re-draws the whole logs pane from self.log_buffer against
         the current filters - needed because RichLog is append-only,
         so a filter/toggle change has to replay history rather than
-        just affecting future lines."""
+        just affecting future lines. Also refreshes the compact status
+        line, since this is called from both filter modals on every
+        toggle."""
         view = self.query_one("#logs-view", RichLog)
         view.clear()
         for source_name, line in self.log_buffer:
             if self._line_passes_all_filters(source_name, line):
                 view.write(format_log_line(source_name, line))
-
-    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        checkbox_id = event.checkbox.id or ""
-        if checkbox_id.startswith("toggle-"):
-            name = checkbox_id.removeprefix("toggle-")
-            for src in self.log_sources:
-                if src.name == name:
-                    src.enabled = event.value
-        elif checkbox_id.startswith("level-"):
-            level = checkbox_id.removeprefix("level-")
-            self.level_enabled[level] = event.value
-        elif checkbox_id.startswith("skillfilter-"):
-            skill_id = str(event.checkbox.label)
-            self.skill_enabled[skill_id] = event.value
-        else:
-            return  # a checkbox from a modal screen (services list) - not ours to handle here
-        self._rerender_logs()
+        self._update_filter_status()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "log-filter":
@@ -368,6 +443,12 @@ class OVOSTUIApp(App):
         screen = SkillsScreen()
         self.push_screen(screen)
         self.bus.list_skills(lambda skills: self.call_from_thread(screen.show_skills, skills))
+
+    def action_show_level_filter(self) -> None:
+        self.push_screen(LevelFilterScreen(self.level_enabled))
+
+    def action_show_source_filter(self) -> None:
+        self.push_screen(SourceFilterScreen(self.log_sources, self.skill_enabled))
 
     def on_key(self, event) -> None:
         input_widget = self.query_one("#utterance-input", Input)
