@@ -12,7 +12,7 @@ on modern Python/setuptools).
 
 ```
 ┌──────────────────────────────────────────┐
-│ Sources: 4/4 (F5)  Levels: 5/5 (F4)       │
+│ Sources: 4/4   Levels: 5/5   (F4 to filter)│
 │ Filter logs (free text)...                │
 │ LOGS                              scroll↕ │
 ├───────────────────────────┬───────────────┤
@@ -33,20 +33,23 @@ on modern Python/setuptools).
   `[source]` tag is padded to the same width so message text lines up
   in one column. Lines containing `ERROR` are bolded. A compact status
   line above the free-text filter box shows current filter counts.
-- **F4**: opens a panel to toggle which **log levels**
-  (DEBUG/INFO/WARNING/ERROR/CRITICAL) are shown.
-- **F5**: opens a panel to toggle which **log sources** (files) and
-  which **skills** (dynamically discovered the first time a skill_id
-  is seen in the log text - best-effort, not every skill-related line
-  mentions its own skill_id explicitly) are shown. All of these,
-  including the free-text filter, apply retroactively to
-  already-received lines, not just new ones.
+- **F4**: opens one combined filter panel - **sources** (log files),
+  **log levels** (DEBUG/INFO/WARNING/ERROR/CRITICAL), and **skills**
+  (dynamically discovered the first time a skill_id is seen in the log
+  text - best-effort, not every skill-related line mentions its own
+  skill_id explicitly). Each is a plain checkbox, one per line, in a
+  scrollable list grouped under section labels - not packed into
+  side-by-side boxes. All of these, including the free-text filter,
+  apply retroactively to already-received lines, not just new ones.
 
-  These were originally three permanently-visible rows of checkboxes
-  directly under the log pane - moved into F4/F5 on-demand panels
-  after real testing showed the always-visible rows ate a lot of
-  screen space once Checkbox's actual multi-row rendering height was
-  correctly accounted for.
+  This filtering UI has been through two earlier designs based on real
+  user feedback: first, three permanently-visible checkbox rows under
+  the log pane (dropped - ate a lot of screen space once Checkbox's
+  real multi-row rendering height was correctly accounted for), then
+  two separate F4/F5 modals with checkboxes packed into horizontal
+  rows (dropped - a single scrollable vertical list is simpler to scan
+  and sidesteps the whole "how much width does the shortest label vs
+  the longest one get" question).
 - **F2**: opens a services panel listing discovered `ovos-*.service`
   systemd --user units - select one and press Enter to restart it.
 - **F3**: opens a panel listing currently loaded skills (requested via

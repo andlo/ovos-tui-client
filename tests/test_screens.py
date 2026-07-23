@@ -142,90 +142,39 @@ async def test_escape_closes_the_skills_screen(tmp_path):
         assert not isinstance(app.screen, SkillsScreen)
 
 
-# --- F4: log-level filter modal ---
+# --- F4: combined filter modal (sources + levels + skills) ---
 
 @pytest.mark.asyncio
-async def test_pressing_f4_opens_the_level_filter_screen(tmp_path):
-    from ovos_tui_client.app import LevelFilterScreen
+async def test_pressing_f4_opens_the_filter_screen(tmp_path):
+    from ovos_tui_client.app import FilterScreen
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         await pilot.press("f4")
         await pilot.pause()
-        assert isinstance(app.screen, LevelFilterScreen)
+        assert isinstance(app.screen, FilterScreen)
 
 
 @pytest.mark.asyncio
-async def test_level_filter_screen_lists_all_known_levels(tmp_path):
+async def test_filter_screen_lists_sources_levels_and_discovered_skills(tmp_path):
     from textual.widgets import Checkbox
     app = _app_with_fake_bus(tmp_path)
+    app.skill_enabled = {"ovos-skill-grimm-tales.andlo": True}
     async with app.run_test() as pilot:
         await pilot.press("f4")
-        await pilot.pause()
-        for level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-            assert app.screen.query_one(f"#modal-level-{level}", Checkbox) is not None
-
-
-@pytest.mark.asyncio
-async def test_unchecking_a_level_in_the_modal_updates_app_state_and_rerenders(tmp_path):
-    from textual.widgets import Checkbox
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        app.log_buffer.append(("skills", "module:func:1 - ERROR - broke"))
-        await pilot.press("f4")
-        await pilot.pause()
-
-        checkbox = app.screen.query_one("#modal-level-ERROR", Checkbox)
-        checkbox.value = False
-        await pilot.pause()
-
-        assert app.level_enabled["ERROR"] is False
-        from textual.widgets import RichLog
-        rendered = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
-        assert "broke" not in rendered
-
-
-@pytest.mark.asyncio
-async def test_escape_closes_the_level_filter_screen(tmp_path):
-    from ovos_tui_client.app import LevelFilterScreen
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        await pilot.press("f4")
-        await pilot.pause()
-        assert isinstance(app.screen, LevelFilterScreen)
-        await pilot.press("escape")
-        await pilot.pause()
-        assert not isinstance(app.screen, LevelFilterScreen)
-
-
-# --- F5: source/skill filter modal ---
-
-@pytest.mark.asyncio
-async def test_pressing_f5_opens_the_source_filter_screen(tmp_path):
-    from ovos_tui_client.app import SourceFilterScreen
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        await pilot.press("f5")
-        await pilot.pause()
-        assert isinstance(app.screen, SourceFilterScreen)
-
-
-@pytest.mark.asyncio
-async def test_source_filter_screen_lists_log_sources(tmp_path):
-    from textual.widgets import Checkbox
-    app = _app_with_fake_bus(tmp_path)
-    async with app.run_test() as pilot:
-        await pilot.press("f5")
         await pilot.pause()
         assert app.screen.query_one("#modal-source-skills", Checkbox) is not None
+        for level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+            assert app.screen.query_one(f"#modal-level-{level}", Checkbox) is not None
+        assert app.screen.query_one("#modal-skill-ovos-skill-grimm-tales-andlo", Checkbox) is not None
 
 
 @pytest.mark.asyncio
-async def test_unchecking_a_source_in_the_modal_updates_app_state_and_rerenders(tmp_path):
+async def test_unchecking_a_source_in_the_filter_screen_updates_state_and_rerenders(tmp_path):
     from textual.widgets import Checkbox, RichLog
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         app.log_buffer.append(("skills", "already here before toggling"))
-        await pilot.press("f5")
+        await pilot.press("f4")
         await pilot.pause()
 
         checkbox = app.screen.query_one("#modal-source-skills", Checkbox)
@@ -239,24 +188,50 @@ async def test_unchecking_a_source_in_the_modal_updates_app_state_and_rerenders(
 
 
 @pytest.mark.asyncio
-async def test_source_filter_screen_lists_discovered_skills_too(tmp_path):
-    from textual.widgets import Checkbox
+async def test_unchecking_a_level_in_the_filter_screen_updates_state_and_rerenders(tmp_path):
+    from textual.widgets import Checkbox, RichLog
     app = _app_with_fake_bus(tmp_path)
-    app.skill_enabled = {"ovos-skill-grimm-tales.andlo": True}
     async with app.run_test() as pilot:
-        await pilot.press("f5")
+        app.log_buffer.append(("skills", "module:func:1 - ERROR - broke"))
+        await pilot.press("f4")
         await pilot.pause()
-        assert app.screen.query_one("#modal-skill-ovos-skill-grimm-tales-andlo", Checkbox) is not None
+
+        checkbox = app.screen.query_one("#modal-level-ERROR", Checkbox)
+        checkbox.value = False
+        await pilot.pause()
+
+        assert app.level_enabled["ERROR"] is False
+        rendered = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
+        assert "broke" not in rendered
 
 
 @pytest.mark.asyncio
-async def test_escape_closes_the_source_filter_screen(tmp_path):
-    from ovos_tui_client.app import SourceFilterScreen
+async def test_unchecking_a_skill_in_the_filter_screen_updates_state_and_rerenders(tmp_path):
+    from textual.widgets import Checkbox, RichLog
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_enabled = {"ovos-skill-grimm-tales.andlo": True}
+    async with app.run_test() as pilot:
+        app.log_buffer.append(("skills", "handling for skill_id=ovos-skill-grimm-tales.andlo now"))
+        await pilot.press("f4")
+        await pilot.pause()
+
+        checkbox = app.screen.query_one("#modal-skill-ovos-skill-grimm-tales-andlo", Checkbox)
+        checkbox.value = False
+        await pilot.pause()
+
+        assert app.skill_enabled["ovos-skill-grimm-tales.andlo"] is False
+        rendered = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
+        assert "grimm-tales" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_escape_closes_the_filter_screen(tmp_path):
+    from ovos_tui_client.app import FilterScreen
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
-        await pilot.press("f5")
+        await pilot.press("f4")
         await pilot.pause()
-        assert isinstance(app.screen, SourceFilterScreen)
+        assert isinstance(app.screen, FilterScreen)
         await pilot.press("escape")
         await pilot.pause()
-        assert not isinstance(app.screen, SourceFilterScreen)
+        assert not isinstance(app.screen, FilterScreen)

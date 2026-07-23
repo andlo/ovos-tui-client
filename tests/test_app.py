@@ -29,7 +29,7 @@ async def test_app_composes_all_four_panes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_filter_status_line_exists_and_shows_counts(tmp_path):
-    """The compact status line that replaced the three always-visible
+    """The compact status line that replaced the always-visible
     checkbox rows, after real user feedback that those rows ate too
     much screen space."""
     app = _app_with_fake_bus(tmp_path)
@@ -38,8 +38,7 @@ async def test_filter_status_line_exists_and_shows_counts(tmp_path):
         text = str(label.content)
         assert "Sources:" in text
         assert "Levels:" in text
-        assert "(F5)" in text
-        assert "(F4)" in text
+        assert "F4" in text
 
 
 @pytest.mark.asyncio
@@ -191,8 +190,9 @@ async def test_up_arrow_with_no_history_does_nothing(tmp_path):
 
 
 # --- log filtering: free text, source/level/skill state (now driven
-# via F4/F5 modals - see test_screens.py - or direct state mutation
-# here for the underlying filter LOGIC, independent of the modal UI) ---
+# via the F4 filter modal - see test_screens.py - or direct state
+# mutation here for the underlying filter LOGIC, independent of the
+# modal UI) ---
 
 @pytest.mark.asyncio
 async def test_log_filter_input_exists(tmp_path):
@@ -248,8 +248,8 @@ async def test_pressing_enter_in_filter_box_does_not_send_an_utterance(tmp_path)
 async def test_disabling_a_source_via_rerender_retroactively_hides_its_lines(tmp_path):
     """Regression guard: before the buffer+re-render architecture,
     disabling a source only stopped FUTURE lines, it didn't hide
-    already-written ones. Source toggling itself now lives in the F5
-    modal (see test_screens.py) - this tests the underlying
+    already-written ones. Source toggling itself now lives in the F4
+    filter modal (see test_screens.py) - this tests the underlying
     _rerender_logs() behavior directly."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
