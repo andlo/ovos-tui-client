@@ -483,14 +483,46 @@ class OVOSTUIApp(App):
         autocomplete source) via bus.list_skills(). Called once at
         startup and again whenever 'Skill: List installed' runs (see
         get_system_commands()) - not on every palette keystroke, since
-        each call is a real bus round-trip with a timeout."""
+        each call is a real bus round-trip with a timeout.
+
+        Writes one skill per line to the conversation pane (not a
+        single comma-joined line) - readability, especially as the
+        list grows. See issue #15 for the not-yet-implemented idea of
+        grouping/categorizing by skill type (skill/ocp/reading/
+        pipeline etc) - deferred pending research into whether that's
+        reliably detectable from skill_id alone."""
         def _on_result(skills):
             if skills is None:
                 self.call_from_thread(self._write_status, "Skill list: no response (timed out)", ok=False)
                 return
             self.installed_skills = sorted(skills)
-            self.call_from_thread(self._write_status, f"Skills: {len(skills)} installed - " + ", ".join(sorted(skills)))
+            self.call_from_thread(self._write_status, f"Skills: {len(self.installed_skills)} installed:")
+            for skill_id in self.installed_skills:
+                self.call_from_thread(self._write_status, f"  {skill_id}")
         self.bus.list_skills(_on_result)
+
+    def _list_pipeline(self) -> None:
+        """'Pipeline: List' - reads mycroft.conf's intents.pipeline
+        array via ovos_config (respects OVOS's own config layering,
+        rather than parsing the raw file directly) and writes it to
+        the conversation pane, one stage per line in order - a quick
+        way to check pipeline order without leaving the TUI, which
+        this project's own README has an entire section on getting
+        right (see the earlier pause/stop-vocabulary debugging
+        history). Read-only - see issue #6 for the separate, larger
+        question of viewing/editing mycroft.conf more generally."""
+        try:
+            from ovos_config.config import Configuration
+            pipeline = Configuration().get("intents", {}).get("pipeline", [])
+        except Exception as e:
+            self._write_status(f"Pipeline: could not read config - {e}", ok=False)
+            return
+        if not pipeline:
+            self._write_status("Pipeline: intents.pipeline is empty or not set")
+            return
+        self._write_status(f"Pipeline ({len(pipeline)} stages, in order):")
+        for i, stage in enumerate(pipeline, start=1):
+            self._write_status(f"  {i}. {stage}")
 
 
 
@@ -650,10 +682,17 @@ class OVOSTUIApp(App):
         text) instead of a modal result screen or Textual's toast
         notifications - this is also why the old standalone Services
         (F2) and Skills-list (F3) modals are gone entirely, replaced
-        by palette entries + conversation-pane output."""
-        yield from super().get_system_commands(screen)
+        by palette entries + conversation-pane output.
+
+        Textual's own default 'Screenshot' command is filtered out
+        (see the loop below) - not useful for this tool and just
+        added noise to an already-long list, per feedback."""
+        for cmd in super().get_system_commands(screen):
+            if cmd.title != "Screenshot":
+                yield cmd
         yield SystemCommand("Help: show keybindings", "Lists every keybinding (same as F1)", self.action_show_help)
         yield SystemCommand("Skill: List installed", "Refreshes and writes the installed-skill list to the conversation pane", self._refresh_installed_skills)
+        yield SystemCommand("Pipeline: List", "Shows mycroft.conf's intents.pipeline order in the conversation pane", self._list_pipeline)
         yield SystemCommand("Skills: filter logs by skill", "Opens the skill-filter panel (same as F4)", self.action_show_skill_filter)
         yield SystemCommand("Focus: Logs", "Jump focus to the logs pane (same as F5)", self.action_focus_logs)
         yield SystemCommand("Focus: Conversation", "Jump focus to the conversation pane (same as F6)", self.action_focus_conversation)

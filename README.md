@@ -90,14 +90,20 @@ on modern Python/setuptools).
     pane.
   - **`Skill: `** - "Skill: List installed" (a static entry - fetches
     the current list via the bus and writes it to the conversation
-    pane, refreshing the autocomplete source for the next two), plus
-    "Skill: Activate <skill_id>" / "Skill: Deactivate <skill_id>" for
-    every skill from that list, fuzzy-matched the same way as
-    services. Fire-and-forget (see `bus.py`'s honesty note on
-    `activate_skill()`/`deactivate_skill()` - based on the documented
-    mycroft-core convention, not verified against a live modern OVOS
-    instance) - the conversation-pane line confirms the request was
-    *sent*, not that OVOS applied it.
+    pane, one skill per line, refreshing the autocomplete source for
+    the next two), plus "Skill: Activate <skill_id>" / "Skill:
+    Deactivate <skill_id>" for every skill from that list, fuzzy-
+    matched the same way as services. Fire-and-forget (see `bus.py`'s
+    honesty note on `activate_skill()`/`deactivate_skill()` - based on
+    the documented mycroft-core convention, not verified against a
+    live modern OVOS instance) - the conversation-pane line confirms
+    the request was *sent*, not that OVOS applied it.
+  - **`Pipeline: List`** - reads `mycroft.conf`'s `intents.pipeline`
+    order via `ovos-config` (respects config layering) and writes it,
+    numbered, to the conversation pane - a quick way to check pipeline
+    order without leaving the TUI. Read-only.
+  - Textual's own default **"Screenshot"** command is filtered out -
+    not useful for this tool, just noise in an already-long list.
   **Tab/Shift+Tab**: cycle focus across everything (checkboxes, panes,
   input) - a Textual built-in, no custom code needed. **Escape**:
   closes whatever modal is open.

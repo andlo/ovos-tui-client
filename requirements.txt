@@ -7,3 +7,4 @@
 # OVOS install it's being added to.
 textual>=0.60
 ovos-bus-client
+ovos-config

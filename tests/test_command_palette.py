@@ -239,3 +239,96 @@ async def test_log_toggle_titles_share_a_common_prefix_for_palette_grouping(tmp_
         log_titles = [t for t in titles if t.startswith("Log: ")]
         assert any("Toggle source" in t for t in log_titles)
         assert any("Toggle level" in t for t in log_titles)
+
+
+# --- Screenshot command filtered out ---
+
+@pytest.mark.asyncio
+async def test_screenshot_command_is_filtered_out(tmp_path):
+    """Textual's default 'Screenshot' system command is noise for this
+    tool - explicitly removed."""
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+        assert "Screenshot" not in titles
+
+
+@pytest.mark.asyncio
+async def test_other_textual_defaults_are_not_filtered(tmp_path):
+    """Confirms the filter is specific to 'Screenshot', not a blanket
+    removal of Textual's own defaults (e.g. Quit/Theme should stay)."""
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+        assert "Quit" in titles or any("quit" in t.lower() for t in titles)
+
+
+# --- "Skill: List installed" - one skill per line ---
+
+@pytest.mark.asyncio
+async def test_list_installed_skills_writes_one_per_line(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        app.call_from_thread = MagicMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))
+        app.bus.list_skills = MagicMock(
+            side_effect=lambda cb: cb(["ovos-skill-grimm-tales.andlo", "ovos-skill-andersen-tales.andlo"])
+        )
+        app._refresh_installed_skills()
+        await pilot.pause()
+
+        view = app.query_one("#conversation", RichLog)
+        lines = [str(line) for line in view.lines]
+        assert any("ovos-skill-grimm-tales.andlo" in line and "ovos-skill-andersen-tales.andlo" not in line
+                   for line in lines)
+        assert any("ovos-skill-andersen-tales.andlo" in line and "ovos-skill-grimm-tales.andlo" not in line
+                   for line in lines)
+
+
+# --- "Pipeline: List" ---
+
+@pytest.mark.asyncio
+async def test_system_commands_include_pipeline_list(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
+        assert "Pipeline: List" in titles
+
+
+@pytest.mark.asyncio
+async def test_list_pipeline_writes_stages_to_conversation(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        fake_config = MagicMock()
+        fake_config.get.return_value = {"pipeline": ["stop_high", "ocp_high", "adapt_high"]}
+        with patch("ovos_config.config.Configuration", return_value=fake_config):
+            app._list_pipeline()
+            await pilot.pause()
+
+        text = _conversation_text(app)
+        assert "stop_high" in text
+        assert "ocp_high" in text
+        assert "adapt_high" in text
+
+
+@pytest.mark.asyncio
+async def test_list_pipeline_handles_missing_config_gracefully(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        fake_config = MagicMock()
+        fake_config.get.return_value = {}
+        with patch("ovos_config.config.Configuration", return_value=fake_config):
+            app._list_pipeline()
+            await pilot.pause()
+
+        assert "empty" in _conversation_text(app).lower() or "not set" in _conversation_text(app).lower()
+
+
+@pytest.mark.asyncio
+async def test_list_pipeline_handles_read_errors_gracefully(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        with patch("ovos_config.config.Configuration", side_effect=RuntimeError("boom")):
+            app._list_pipeline()  # must not raise
+            await pilot.pause()
+
+        assert "could not read" in _conversation_text(app).lower()
