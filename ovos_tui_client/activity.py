@@ -8,6 +8,7 @@ connection - see bus.py's on_activity() for how this gets wired up.
 """
 
 FETCH_CONTENT_PREFIX = "ovos.common_reading.fetch_content."
+FALLBACK_PREFIX = "ovos.skills.fallback."
 
 
 def summarize_message(msg_type, data=None):
@@ -50,6 +51,38 @@ def summarize_message(msg_type, data=None):
     if msg_type == "ovos.common_reading.fetch_content.response":
         n = len(data.get("paragraphs", []))
         return f"✓ received {n} paragraph(s)" if n else "✗ empty response (fetch failed)"
+
+    # The FALLBACK path: when nothing else matches an utterance (a
+    # very real, common case - garbled STT, genuinely unrecognized
+    # phrasing), OVOS asks a chain of fallback skills whether they can
+    # handle it. This was previously completely invisible in the
+    # activity pane - it's a different, dynamic message-type family
+    # (skill_id embedded in the type string itself, same pattern as
+    # FETCH_CONTENT_PREFIX above), not the mycroft.skill.handler.*
+    # pair the normal intent path uses. Confirmed directly against a
+    # live OVOS instance by sending a nonsense utterance and capturing
+    # the actual bus traffic: ping -> pong (per candidate skill,
+    # {"skill_id", "can_handle"}) -> request -> start -> response
+    # ({"result": bool, "fallback_handler": "Class.method"}).
+    #
+    # ping/pong are deliberately skipped: pong fires once per skill
+    # that merely CLAIMS it's capable (often several, in priority
+    # order), not the one that actually ends up handling it - showing
+    # every pong would overstate how many skills did something. Only
+    # .start/.response for whichever skill was actually invoked are
+    # shown, mirroring the normal mycroft.skill.handler.start/complete
+    # treatment above.
+    if msg_type.startswith(FALLBACK_PREFIX):
+        remainder = msg_type[len(FALLBACK_PREFIX):]
+        if remainder.endswith(".start"):
+            skill_id = remainder[:-len(".start")]
+            return f"▶ {skill_id} (fallback) is handling this"
+        if remainder.endswith(".response"):
+            skill_id = remainder[:-len(".response")]
+            if data.get("result"):
+                return f"✓ {skill_id} (fallback) finished"
+            return f"✗ {skill_id} (fallback) could not resolve"
+        return None  # ping/pong/request - not shown, see comment above
 
     # A small, deliberately curated set of core lifecycle events -
     # picked for being both common and meaningful on their own (no

@@ -153,9 +153,12 @@ on modern Python/setuptools).
   precisely so a slow `systemctl` call can never freeze the whole app.
 - **Activity**: a curated, simplified feed of what's happening on the
   bus right now - which skill is handling the request, wake word/
-  speech start-stop, global stop, and for `ovos.common_reading.*`
-  traffic specifically, which providers answered, at what confidence,
-  and whether content fetch succeeded.
+  speech start-stop, global stop, which fallback skill handled a
+  genuinely unrecognized utterance (and whether it actually resolved
+  anything - "could not resolve" for the common "sorry, I don't
+  understand" case), and for `ovos.common_reading.*` traffic
+  specifically, which providers answered, at what confidence, and
+  whether content fetch succeeded.
 - **Input**: type what you'd say to OVOS, press Enter. Up/Down arrows
   browse previously submitted utterances, shell-history style.
 

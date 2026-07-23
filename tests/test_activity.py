@@ -93,3 +93,53 @@ def test_speech_stop():
 
 def test_global_stop():
     assert summarize_message("mycroft.stop") == "⏹ global stop triggered"
+
+
+# --- fallback skill path (confirmed via live capture) ---
+
+def test_fallback_skill_start():
+    line = summarize_message(
+        "ovos.skills.fallback.ovos-skill-fallback-unknown.openvoiceos.start", {}
+    )
+    assert line == "▶ ovos-skill-fallback-unknown.openvoiceos (fallback) is handling this"
+
+
+def test_fallback_skill_response_success():
+    line = summarize_message(
+        "ovos.skills.fallback.ovos-skill-spelling.openvoiceos.response",
+        {"result": True, "fallback_handler": "SpellingSkill.handle_fallback"},
+    )
+    assert line == "✓ ovos-skill-spelling.openvoiceos (fallback) finished"
+
+
+def test_fallback_skill_response_could_not_resolve():
+    """The real, common case: ovos-skill-fallback-unknown always
+    reports result: false (it's specifically the catch-nothing-else-
+    could skill) - confirmed via live capture."""
+    line = summarize_message(
+        "ovos.skills.fallback.ovos-skill-fallback-unknown.openvoiceos.response",
+        {"result": False, "fallback_handler": "UnknownSkill.handle_fallback"},
+    )
+    assert line == "✗ ovos-skill-fallback-unknown.openvoiceos (fallback) could not resolve"
+
+
+def test_fallback_skill_id_with_dots_extracted_correctly():
+    """skill_ids routinely contain dots themselves (author.name
+    convention) - suffix-stripping, not dot-splitting, must handle
+    this correctly."""
+    line = summarize_message("ovos.skills.fallback.ovos-skill-wolfie.openvoiceos.start", {})
+    assert "ovos-skill-wolfie.openvoiceos" in line
+    assert line.startswith("▶ ovos-skill-wolfie.openvoiceos")
+
+
+def test_fallback_ping_pong_and_request_are_not_shown():
+    """Deliberately skipped - pong fires once per skill that merely
+    CLAIMS capability (often several), not the one actually invoked;
+    showing every pong would overstate how many skills did something."""
+    assert summarize_message("ovos.skills.fallback.ping", {"utterances": ["x"]}) is None
+    assert summarize_message(
+        "ovos.skills.fallback.pong", {"skill_id": "ovos-skill-wolfie.openvoiceos", "can_handle": True}
+    ) is None
+    assert summarize_message(
+        "ovos.skills.fallback.ovos-skill-fallback-unknown.openvoiceos.request", {}
+    ) is None
