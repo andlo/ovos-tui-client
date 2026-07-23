@@ -28,17 +28,18 @@ async def test_app_composes_all_four_panes(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_source_and_level_checkboxes_are_inline_and_unchecked_by_default(tmp_path):
+async def test_source_and_level_checkboxes_are_inline_and_checked_by_default(tmp_path):
     """Sources and Log Levels are compact inline checkboxes directly in
-    the main view (not a modal) - unchecked by default, per the
-    unchecked-narrows-nothing filter semantics (see app.py's module
-    docstring)."""
+    the main view (not a modal) - checked by default (unlike Skills,
+    which defaults unchecked): both are short, fixed-length lists
+    where 'everything on, uncheck what you don't want' reads
+    naturally. See app.py's module docstring for the full rationale."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         skills_cb = app.query_one("#toggle-source-skills", Checkbox)
-        assert skills_cb.value is False
+        assert skills_cb.value is True
         debug_cb = app.query_one("#toggle-level-DEBUG", Checkbox)
-        assert debug_cb.value is False
+        assert debug_cb.value is True
         label = app.query_one("#skills-status", Label)
         assert "Skills" in str(label.content)
 
@@ -263,18 +264,19 @@ async def test_nothing_checked_shows_everything_regardless_of_source_or_level(tm
 
 
 @pytest.mark.asyncio
-async def test_checking_one_source_narrows_to_only_that_source(tmp_path):
+async def test_unchecking_one_source_narrows_away_from_it(tmp_path):
     """Regression guard: before the buffer+re-render architecture,
     toggling a source only affected FUTURE lines, not already-written
-    ones. Checking 'bus' should restrict to bus lines only - skills
-    lines disappear even though they were never touched."""
+    ones. All sources are checked by default (see the checked-by-
+    default test above), so unchecking 'skills' should hide skills
+    lines while a bus line (still checked) remains."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         app.log_buffer.append(("skills", "already here before toggling"))
         app.log_buffer.append(("bus", "a bus line"))
         for src in app.log_sources:
-            if src.name == "bus":
-                src.enabled = True
+            if src.name == "skills":
+                src.enabled = False
         app._rerender_logs()
         await pilot.pause()
         view = app.query_one("#logs-view", RichLog)
@@ -284,12 +286,12 @@ async def test_checking_one_source_narrows_to_only_that_source(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_checking_info_level_narrows_to_only_info(tmp_path):
+async def test_unchecking_error_level_hides_it_but_keeps_info(tmp_path):
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         app.log_buffer.append(("skills", "module:func:1 - INFO - all good"))
         app.log_buffer.append(("skills", "module:func:2 - ERROR - something broke"))
-        app.level_enabled["INFO"] = True
+        app.level_enabled["ERROR"] = False
         app._rerender_logs()
         await pilot.pause()
         view = app.query_one("#logs-view", RichLog)

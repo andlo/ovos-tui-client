@@ -12,8 +12,8 @@ on modern Python/setuptools).
 
 ```
 ┌──────────────────────────────────────────┐
-│ Sources: [ ]bus [ ]skills [ ]audio ...    │
-│ Log Levels: [ ]DEBUG [ ]INFO ... Skills:0/0│
+│ Sources: [X]bus [X]skills [X]audio ...    │
+│ Log Levels: [X]DEBUG [X]INFO ... Skills:.. │
 │ Filter logs (free text)...                │
 │ LOGS                              scroll↕ │
 ├───────────────────────────┬───────────────┤
@@ -32,39 +32,47 @@ on modern Python/setuptools).
   `gui.log`, `enclosure.log`, `phal.log`), each with its own color.
   OVOS's own `TIMESTAMP - COMPONENT - ` prefix is stripped, and every
   `[source]` tag is padded to the same width so message text lines up
-  in one column. Lines containing `ERROR` are bolded.
+  in one column. Lines containing `ERROR` are bolded. Scrolled-up panes
+  (logs, conversation, activity) are never yanked back to the bottom by
+  incoming content - auto-scroll only re-engages once you're back at
+  the bottom yourself.
 - **Sources** and **Log Levels** (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-  are compact checkboxes directly in the main view, no modal needed -
-  each category on its own single line.
-- **F4**: opens a panel to filter by **skill** (dynamically discovered
-  the first time a skill_id is seen in the log text - best-effort, not
-  every skill-related line mentions its own skill_id explicitly). Kept
-  in a modal rather than inline since this list can grow arbitrarily
-  long as more skills are discovered, unlike sources/levels which are
-  short and fixed.
+  are compact checkboxes directly in the main view, checked by
+  default, no modal needed - each category on its own single line.
+- **Skills:** - click it, or press **F4** - opens a panel to filter by
+  skill (dynamically discovered the first time a skill_id is seen in
+  the log text - best-effort, not every skill-related line mentions
+  its own skill_id explicitly; unchecked by default, unlike Sources/
+  Levels, since this list is open-ended rather than short and fixed).
+  Kept in a modal rather than inline for that reason.
 
-  **Filter semantics - unchecked-by-default, checking narrows:**
-  an unchecked box does NOT mean "hidden" - it means "not specifically
-  filtered to". With nothing checked in a category, nothing in that
-  category is restricted and everything shows (the default, fully-open
-  state). Checking one or more boxes restricts that category to only
-  the checked ones. Applies independently per category (source/level/
-  skill), and applies retroactively to already-received lines, not
-  just new ones, same as the free-text filter.
-
-  This filtering UI has gone through several designs based on real
-  user feedback - see git history for the always-checked full rows,
-  then oversized-checkbox modals, then the checked=shown inversion.
-- **F2**: opens a services panel listing discovered `ovos-*.service`
-  systemd --user units - select one and press Enter to restart it.
-- **F3**: opens a panel listing currently loaded skills (requested via
-  the bus).
+  **Filter semantics:** an unchecked box does NOT mean "hidden" - it
+  means "not specifically filtered to". With nothing checked in a
+  category, nothing in that category is restricted and everything
+  shows. Checking one or more boxes restricts that category to only
+  the checked ones - independently per category, applying
+  retroactively to already-received lines too, same as the free-text
+  filter.
+- **F1**: keybinding reference. **F2**: services panel (restart an
+  `ovos-*.service` unit). **F3**: currently loaded skills (from the
+  bus). **F5-F8**: jump focus straight to Logs / Conversation /
+  Activity / the utterance input. **Ctrl+P**: Textual's built-in
+  command palette - every action above is also there, fuzzy-searchable,
+  for anyone who'd rather type a command than remember an F-key.
+  **Tab/Shift+Tab**: cycle focus across everything (checkboxes, panes,
+  input) - a Textual built-in, no custom code needed. **Escape**:
+  closes whatever modal is open.
+- Typing a plain character while focus is on Logs/Conversation/
+  Activity (none of which are normally typable) redirects that
+  keystroke to the utterance input instead of doing nothing - almost
+  always what was actually meant.
 - **Conversation**: what you typed (green, full line) and what OVOS
-  said back (blue, full line), auto-scrolling to the newest message.
+  said back (blue, full line).
 - **Activity**: a curated, simplified feed of what's happening on the
-  bus right now - which skill is handling the request, and for
-  `ovos.common_reading.*` traffic specifically, which providers
-  answered, at what confidence, and whether content fetch succeeded.
+  bus right now - which skill is handling the request, wake word/
+  speech start-stop, global stop, and for `ovos.common_reading.*`
+  traffic specifically, which providers answered, at what confidence,
+  and whether content fetch succeeded.
 - **Input**: type what you'd say to OVOS, press Enter. Up/Down arrows
   browse previously submitted utterances, shell-history style.
 

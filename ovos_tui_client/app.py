@@ -1,6 +1,6 @@
 """The Textual App: a 4-pane layout for testing OVOS without a
-mic/speaker, plus three modal screens (services, installed skills,
-and a skill-filter list).
+mic/speaker, plus four modal screens (help, services, installed
+skills, skill filter).
 
     ┌──────────────────────────────────────────┐
     │ Sources/Levels checkboxes (compact, one   │
@@ -17,36 +17,41 @@ Textual widgets aren't thread-safe to update directly from the
 bus-client's background thread, so incoming lines are queued and
 drained on the UI's own event loop instead.
 
-Keybindings: F2 services, F3 installed skills, F4 filter by skill
-(the one filter dimension that can't reasonably fit inline - it grows
-as new skill_ids are discovered), Escape closes any open modal.
+KEYBINDINGS - F1 help, F2 services, F3 installed skills, F4 filter by
+skill, F5-F8 jump focus to Logs/Conversation/Activity/Input, Ctrl+P
+opens Textual's built-in command palette (all the F-key actions are
+also available there, fuzzy-searchable), Escape closes any open modal.
+Tab/Shift+Tab cycle focus across everything focusable (checkboxes,
+panes, input) - this is a Textual built-in, not custom code here.
+Typing a printable character while focus is on Logs/Conversation/
+Activity (none of which are normally typable) redirects that keypress
+to the utterance input instead of doing nothing - see on_key - since
+that's almost always what was actually meant.
 
-FILTER SEMANTICS - unchecked-by-default, checking narrows:
-unlike a typical settings checklist, an UNCHECKED box here does not
-mean "hidden" - it means "not specifically filtered to". With nothing
-checked in a category (source/level/skill), nothing in that category
-is restricted and everything shows. Checking one or more boxes
-restricts that category to only the checked ones. This applies
-independently per category. Chosen after user feedback that the
-original "checked = shown, unchecked = hidden, all-checked-by-default"
-model made a fully-open view require staring at a wall of checkmarks;
-the new model keeps the common case (see everything) visually empty.
+FILTER SEMANTICS - unchecked-by-default, checking narrows (per
+category, independently): an UNCHECKED box does not mean "hidden" - it
+means "not specifically filtered to". With nothing checked in a
+category, nothing in that category is restricted and everything shows.
+Checking one or more boxes restricts that category to only the checked
+ones. Sources and Log Levels are CHECKED by default (short, fixed
+lists - "everything on, uncheck what you don't want" reads naturally);
+Skills default UNCHECKED (an open-ended, growing list - "check the few
+you care about" reads naturally instead). The underlying filter rule
+is identical either way, only the starting values differ.
 
-Filtering UI has been through several designs based on real user
-feedback - see git history for the earlier always-checked, then
-separate-modal, then oversized-checkbox iterations. Current design:
-Sources and Log Levels are compact, single-line checkbox rows directly
-in the main view (both lists are short and fixed-length, so this was
-worth the small amount of permanent vertical space); Skills stay in
-an F4 modal since that list grows arbitrarily long.
+SCROLL BEHAVIOR: all three RichLog panes (logs/conversation/activity)
+only auto-scroll to the newest line if the user is already at (or very
+near) the bottom when a new line arrives - scrolling back to read or
+copy something is never yanked back down by incoming content. See
+_write_to_log().
 """
 import argparse
 from collections import deque
 
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Header, Footer, Input, RichLog, Checkbox, Label, ListView, ListItem
 
 from ovos_tui_client.bus import OVOSBusConnection
@@ -67,6 +72,10 @@ LOG_SOURCE_COLORS = {
 }
 DEFAULT_LOG_COLOR = "white"
 
+# Widgets where typing a plain character should redirect focus to the
+# utterance input rather than doing nothing - see on_key().
+REDIRECT_TO_INPUT_IDS = {"logs-view", "conversation", "activity"}
+
 
 def format_log_line(source_name: str, line: str) -> str:
     """Colors a log line by its source, bolding it if it contains
@@ -81,6 +90,55 @@ def format_log_line(source_name: str, line: str) -> str:
     if "ERROR" in clean_line:
         text = f"[bold]{text}[/bold]"
     return text
+
+
+class HelpScreen(ModalScreen):
+    """F1 - a quick reference for every keybinding and the filter/
+    scroll behaviors that aren't otherwise obvious from the UI alone."""
+
+    CSS = """
+    HelpScreen { align: center middle; }
+    #help-dialog {
+        width: 64; height: auto; max-height: 30;
+        border: solid $accent; background: $panel; padding: 1 2;
+    }
+    #help-dialog Label { height: 1; }
+    .help-spacer { height: 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="help-dialog"):
+            yield Label("Keybindings (Esc to close)")
+            yield Label("")
+            yield Label("F1   Show this help")
+            yield Label("F2   Services (restart ovos-*.service units)")
+            yield Label("F3   Installed skills (from the bus)")
+            yield Label("F4   Filter by skill (click 'Skills:' works too)")
+            yield Label("F5   Jump focus to Logs")
+            yield Label("F6   Jump focus to Conversation")
+            yield Label("F7   Jump focus to Activity")
+            yield Label("F8   Jump focus to the utterance input")
+            yield Label("Ctrl+P   Command palette (all actions, searchable)")
+            yield Label("Tab / Shift+Tab   Cycle focus")
+            yield Label("Space / Enter   Toggle a focused checkbox")
+            yield Label("Up / Down   Browse utterance history (in the input)")
+            yield Label("")
+            yield Label("Typing anywhere in Logs/Conversation/Activity")
+            yield Label("switches focus to the utterance input automatically -")
+            yield Label("that's almost always what you meant to do.")
+            yield Label("")
+            yield Label("Filter checkboxes: unchecked = show everything in")
+            yield Label("that category. Checking one or more narrows to only")
+            yield Label("the checked ones. Sources/Levels start checked;")
+            yield Label("Skills start unchecked (it's an open-ended list).")
+            yield Label("")
+            yield Label("Scrolled-up panes never get yanked back to the")
+            yield Label("bottom by new lines - only auto-scrolls while")
+            yield Label("already at the bottom.")
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss()
 
 
 class ServicesScreen(ModalScreen):
@@ -173,15 +231,18 @@ class SkillsScreen(ModalScreen):
 
 
 class SkillFilterScreen(ModalScreen):
-    """F4 - filter which discovered skill_ids are shown. Sources and
-    Log Levels are compact inline checkboxes directly in the main view
-    now (see OVOSTUIApp.compose) since both lists are short and
+    """F4 (also reachable by clicking the 'Skills:' status label) -
+    filter which discovered skill_ids are shown. Sources and Log
+    Levels are compact inline checkboxes directly in the main view
+    (see OVOSTUIApp.compose) since both lists are short and
     fixed-length; skills stay in a modal since that list grows
     arbitrarily long as more are discovered from the log stream.
 
     Same unchecked-narrows-nothing / checked-narrows-to-checked
     semantics as the inline source/level checkboxes (see module
-    docstring). Mutates the App's own skill_enabled dict directly
+    docstring) - except Skills defaults UNCHECKED, not checked, since
+    "check the few you care about" reads naturally for a list that
+    keeps growing. Mutates the App's own skill_enabled dict directly
     (passed by reference, no separate sync-back step) and re-renders
     the log view live via self.app._rerender_logs() on every toggle.
 
@@ -221,6 +282,26 @@ class SkillFilterScreen(ModalScreen):
             self.dismiss()
 
 
+class ClickableLabel(Label):
+    """A Label that also responds to being clicked, so it can double
+    as a lightweight button without separate Button styling - used
+    for the 'Skills: N/M' status text, which opens the skill-filter
+    screen (same as pressing F4) when clicked. `can_focus = True` so
+    it also picks up a visible focus outline and participates in the
+    normal Tab cycle, useful for keyboard/no-mouse users - Enter or
+    Space on a focused Label doesn't activate it by default in
+    Textual, so on_key is added explicitly alongside on_click."""
+    can_focus = True
+
+    def on_click(self, event) -> None:
+        self.app.action_show_skill_filter()
+
+    def on_key(self, event) -> None:
+        if event.key in ("enter", "space"):
+            self.app.action_show_skill_filter()
+            event.stop()
+
+
 class OVOSTUIApp(App):
     CSS = """
     #logs-container {
@@ -239,6 +320,14 @@ class OVOSTUIApp(App):
     .filter-label {
         margin-right: 1;
         color: $text-muted;
+    }
+    #skills-status {
+        margin-right: 1;
+        color: $text-muted;
+        text-style: underline;
+    }
+    #skills-status:focus {
+        color: $accent;
     }
     #log-filter {
         height: 1;
@@ -262,9 +351,14 @@ class OVOSTUIApp(App):
 
     BINDINGS = [
         ("ctrl+c", "quit", "Quit"),
+        ("f1", "show_help", "Help"),
         ("f2", "show_services", "Services"),
         ("f3", "show_skills", "Skills"),
         ("f4", "show_skill_filter", "Skill Filter"),
+        ("f5", "focus_logs", "Logs"),
+        ("f6", "focus_conversation", "Conversation"),
+        ("f7", "focus_activity", "Activity"),
+        ("f8", "focus_input", "Input"),
     ]
 
     def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None):
@@ -276,10 +370,11 @@ class OVOSTUIApp(App):
         self.history_index = None
         self.log_buffer = deque(maxlen=LOG_BUFFER_SIZE)
         self.log_filter_text = ""
-        # False by default = "not specifically filtered to" - see the
-        # module docstring's FILTER SEMANTICS section.
-        self.level_enabled = {level: False for level in KNOWN_LOG_LEVELS}
-        self.skill_enabled = {}  # skill_id -> bool, populated dynamically as seen
+        # True by default: Sources/Levels are short, fixed-length
+        # lists where "everything on, uncheck what you don't want"
+        # reads naturally - see module docstring's FILTER SEMANTICS.
+        self.level_enabled = {level: True for level in KNOWN_LOG_LEVELS}
+        self.skill_enabled = {}  # skill_id -> bool, unchecked by default as discovered
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -290,19 +385,20 @@ class OVOSTUIApp(App):
                     yield Checkbox(src.name, value=src.enabled, id=f"toggle-source-{src.name}")
                 yield Label("Log Levels:", classes="filter-label")
                 for level in KNOWN_LOG_LEVELS:
-                    yield Checkbox(level, value=self.level_enabled.get(level, False), id=f"toggle-level-{level}")
-                yield Label("", id="skills-status")
+                    yield Checkbox(level, value=self.level_enabled.get(level, True), id=f"toggle-level-{level}")
+                yield ClickableLabel("", id="skills-status")
             yield Input(placeholder="Filter logs (free text)...", id="log-filter")
             yield RichLog(id="logs-view", wrap=False, markup=True, auto_scroll=True)
         with Horizontal(id="middle-row"):
             yield RichLog(id="conversation", wrap=True, markup=True, auto_scroll=True)
             yield RichLog(id="activity", wrap=True, markup=True, auto_scroll=True)
-        yield Input(placeholder="Type what you'd say to OVOS...", id="utterance-input")
+        yield Input(placeholder="Type what you'd say to OVOS...", id="utterance-input", select_on_focus=False)
         yield Footer()
 
     def on_mount(self) -> None:
         if not self.log_sources:
-            self.query_one("#logs-view", RichLog).write(
+            self._write_to_log(
+                self.query_one("#logs-view", RichLog),
                 f"[yellow]No known log files found"
                 + (f" in {self.log_dir}" if self.log_dir else " in any candidate directory")
                 + ". Pass --log-dir to point at the right one.[/yellow]"
@@ -314,6 +410,17 @@ class OVOSTUIApp(App):
         self.set_interval(LOG_POLL_INTERVAL, self._poll_logs)
         self.query_one("#utterance-input", Input).focus()
 
+    def _write_to_log(self, widget: RichLog, content) -> None:
+        """The one place every RichLog write goes through, for all
+        three panes (logs/conversation/activity). Only keeps
+        auto-scrolling if the user is already at (or very near) the
+        bottom - scrolling back to read or copy something is never
+        yanked back down by new content arriving. is_vertical_scroll_end
+        is checked fresh on every write, so it re-engages automatically
+        once the user scrolls back to the bottom themselves."""
+        widget.auto_scroll = widget.is_vertical_scroll_end
+        widget.write(content)
+
     def _handle_speak(self, utterance: str) -> None:
         self.call_from_thread(self._write_conversation, f"[blue]OVOS: {utterance}[/blue]")
 
@@ -321,26 +428,27 @@ class OVOSTUIApp(App):
         self.call_from_thread(self._write_activity, line)
 
     def _write_conversation(self, line: str) -> None:
-        self.query_one("#conversation", RichLog).write(line)
+        self._write_to_log(self.query_one("#conversation", RichLog), line)
 
     def _write_activity(self, line: str) -> None:
-        self.query_one("#activity", RichLog).write(line)
+        self._write_to_log(self.query_one("#activity", RichLog), line)
 
     def _update_skills_status(self) -> None:
         """Sources/Levels are now directly visible as checkboxes, so
         they need no separate status text. Skills stays behind an F4
         modal (its list can grow long), so a small trailing count +
-        hint is all that's shown for it here."""
+        hint is all that's shown for it here. The label itself is
+        clickable (ClickableLabel) as an alternative to F4."""
         try:
-            label = self.query_one("#skills-status", Label)
+            label = self.query_one("#skills-status", ClickableLabel)
         except NoMatches:
             return
         if not self.skill_enabled:
-            label.update("Skills: none seen yet")
+            label.update("Skills: none seen yet (F4)")
             return
         n_sk = len(self.skill_enabled)
         n_sk_on = sum(1 for v in self.skill_enabled.values() if v)
-        label.update(f"Skills: {n_sk_on}/{n_sk} filtered (F4)")
+        label.update(f"Skills: {n_sk_on}/{n_sk} filtered (click or F4)")
 
     def _line_passes_all_filters(self, source_name: str, line: str) -> bool:
         """The full filter chain a line must pass to be shown - see
@@ -398,7 +506,7 @@ class OVOSTUIApp(App):
                 if len(self.skill_enabled) != before:
                     new_skill_seen = True
                 if self._line_passes_all_filters(src.name, line):
-                    view.write(format_log_line(src.name, line))
+                    self._write_to_log(view, format_log_line(src.name, line))
         if new_skill_seen:
             self._update_skills_status()
 
@@ -408,8 +516,13 @@ class OVOSTUIApp(App):
         so a filter/toggle change has to replay history rather than
         just affecting future lines. Also refreshes the skills status
         label, since this is called from the skill-filter modal on
-        every toggle."""
+        every toggle. Forces auto-scroll back on for this one
+        operation regardless of prior scroll position - a filter
+        change is a deliberate action, unlike new background log
+        activity, so jumping to the (re-filtered) bottom is expected
+        here rather than something to protect the user's place from."""
         view = self.query_one("#logs-view", RichLog)
+        view.auto_scroll = True
         view.clear()
         for source_name, line in self.log_buffer:
             if self._line_passes_all_filters(source_name, line):
@@ -448,11 +561,30 @@ class OVOSTUIApp(App):
         text = event.value.strip()
         if not text:
             return
-        self.query_one("#conversation", RichLog).write(f"[green]You: {text}[/green]")
+        self._write_conversation(f"[green]You: {text}[/green]")
         self.bus.send_utterance(text)
         self.utterance_history.append(text)
         self.history_index = None
         event.input.value = ""
+
+    def get_system_commands(self, screen: Screen):
+        """Surfaces the same actions available via F1-F4 in Textual's
+        built-in command palette (Ctrl+P) too, so they're discoverable
+        by fuzzy search as well as by key - added after user feedback
+        asking whether F-key functionality could also live in the
+        palette."""
+        yield from super().get_system_commands(screen)
+        yield SystemCommand("Help: show keybindings", "Lists every keybinding (same as F1)", self.action_show_help)
+        yield SystemCommand("Services: list & restart", "Restart an ovos-*.service unit (same as F2)", self.action_show_services)
+        yield SystemCommand("Skills: show installed", "Lists currently loaded skills (same as F3)", self.action_show_skills)
+        yield SystemCommand("Skills: filter logs by skill", "Opens the skill-filter panel (same as F4)", self.action_show_skill_filter)
+        yield SystemCommand("Focus: Logs", "Jump focus to the logs pane (same as F5)", self.action_focus_logs)
+        yield SystemCommand("Focus: Conversation", "Jump focus to the conversation pane (same as F6)", self.action_focus_conversation)
+        yield SystemCommand("Focus: Activity", "Jump focus to the activity pane (same as F7)", self.action_focus_activity)
+        yield SystemCommand("Focus: Utterance input", "Jump focus to the input box (same as F8)", self.action_focus_input)
+
+    def action_show_help(self) -> None:
+        self.push_screen(HelpScreen())
 
     def action_show_services(self) -> None:
         self.push_screen(ServicesScreen())
@@ -465,8 +597,52 @@ class OVOSTUIApp(App):
     def action_show_skill_filter(self) -> None:
         self.push_screen(SkillFilterScreen(self.skill_enabled))
 
+    def action_focus_logs(self) -> None:
+        self.query_one("#logs-view", RichLog).focus()
+
+    def action_focus_conversation(self) -> None:
+        self.query_one("#conversation", RichLog).focus()
+
+    def action_focus_activity(self) -> None:
+        self.query_one("#activity", RichLog).focus()
+
+    def action_focus_input(self) -> None:
+        self.query_one("#utterance-input", Input).focus()
+
     def on_key(self, event) -> None:
         input_widget = self.query_one("#utterance-input", Input)
+
+        # Typing a plain printable character while focus is on a pane
+        # that was never meant to receive text (Logs/Conversation/
+        # Activity - none of them are Input widgets) almost certainly
+        # means the person meant to talk to OVOS and just hadn't
+        # clicked into the input box first. Redirect the keystroke
+        # there instead of silently doing nothing. Deliberately scoped
+        # to those three ids only - checkboxes' own Space-to-toggle
+        # handling must NOT be intercepted here.
+        focused_id = self.focused.id if self.focused else None
+        if focused_id in REDIRECT_TO_INPUT_IDS and event.character and event.character.isprintable():
+            input_widget.focus()
+            # insert_text_at_cursor(), not a manual `.value +=` - the
+            # latter leaves Input's internal selection/cursor state
+            # inconsistent. Real bug found via testing: Input's own
+            # _on_focus() has a built-in "select all on focus" default
+            # (select_on_focus=True), which fired AFTER this method's
+            # own code ran (the Focus message is processed on a later
+            # tick, not synchronously within this call) and silently
+            # re-selected the just-inserted text - so the VERY NEXT
+            # keystroke replaced it instead of appending (standard
+            # text-widget behavior: typing over a selection replaces
+            # it), and "hi" typed as two redirected keystrokes ended
+            # up as just "i". Fixed at the source: the utterance-input
+            # is constructed with select_on_focus=False in compose()
+            # (makes sense for a chat-style input anyway - you're
+            # almost always continuing to type, not overwriting).
+            input_widget.insert_text_at_cursor(event.character)
+            event.prevent_default()
+            event.stop()
+            return
+
         if self.focused is not input_widget:
             return
         if event.key == "up":

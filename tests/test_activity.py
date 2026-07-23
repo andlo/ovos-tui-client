@@ -77,3 +77,19 @@ def test_unrecognized_message_types_are_skipped():
     assert summarize_message("some.random.internal.event", {"foo": "bar"}) is None
     assert summarize_message("speak", {"utterance": "hello"}) is None  # already shown in conversation pane
     assert summarize_message("gui.page.show", {}) is None
+
+
+def test_wakeword_detected():
+    assert summarize_message("recognizer_loop:wakeword") == "👂 wake word detected"
+
+
+def test_speech_start():
+    assert summarize_message("mycroft.audio.speech.start") == "🔊 speaking..."
+
+
+def test_speech_stop():
+    assert summarize_message("mycroft.audio.speech.stop") == "🔇 done speaking"
+
+
+def test_global_stop():
+    assert summarize_message("mycroft.stop") == "⏹ global stop triggered"
