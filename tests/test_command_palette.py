@@ -402,6 +402,64 @@ async def test_pipeline_search_handles_empty_pipeline_gracefully(tmp_path):
         assert hits == []
 
 
+# --- PipelineCommandProvider: --mycroft-conf override (Docker/Podman
+# installs, where ovos_config's own XDG lookup finds the wrong file or
+# nothing - see build_arg_parser()'s help text and this Provider's
+# docstring for why) ---
+
+@pytest.mark.asyncio
+async def test_pipeline_uses_mycroft_conf_override_when_set(tmp_path):
+    """A real file on disk, with JSON5-style '//' comments (as real
+    mycroft.conf files commonly have) - confirms load_commented_json()
+    is actually used, not a plain json.load() that would choke on
+    them."""
+    conf_path = tmp_path / "mycroft.conf"
+    conf_path.write_text('''{
+        // this is a real mycroft.conf-style comment
+        "intents": {
+            "pipeline": ["stop_high", "ocp_high"]
+        }
+    }''')
+    app = _app_with_fake_bus(tmp_path)
+    app.mycroft_conf_override = str(conf_path)
+    async with app.run_test() as pilot:
+        provider = PipelineCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "pipeline")
+
+    texts = [str(h.match_display) for h in hits]
+    assert "Pipeline: 1. stop_high" in texts
+    assert "Pipeline: 2. ocp_high" in texts
+
+
+@pytest.mark.asyncio
+async def test_pipeline_override_takes_priority_over_ovos_config(tmp_path):
+    """When set, the override is used INSTEAD of ovos_config's own
+    lookup, not merged with it - confirms Configuration() is never
+    even called in that case."""
+    conf_path = tmp_path / "mycroft.conf"
+    conf_path.write_text('{"intents": {"pipeline": ["from_override"]}}')
+    app = _app_with_fake_bus(tmp_path)
+    app.mycroft_conf_override = str(conf_path)
+    async with app.run_test() as pilot:
+        with patch("ovos_config.config.Configuration") as mock_config:
+            provider = PipelineCommandProvider(app.screen)
+            hits = await _collect_hits(provider, "pipeline")
+            mock_config.assert_not_called()
+
+    assert "Pipeline: 1. from_override" in [str(h.match_display) for h in hits]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_override_handles_missing_file_gracefully(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    app.mycroft_conf_override = str(tmp_path / "does-not-exist.conf")
+    async with app.run_test() as pilot:
+        provider = PipelineCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "pipeline")  # must not raise
+
+    assert hits == []
+
+
 # --- SkillFilterCommandProvider: log-display skill filter, in the palette ---
 
 @pytest.mark.asyncio

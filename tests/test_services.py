@@ -2,7 +2,7 @@
 real service management is exercised here."""
 from unittest.mock import MagicMock, patch
 
-from ovos_tui_client.services import discover_services, discover_services_with_state, restart_service, stop_service, start_service
+from ovos_tui_client.services import discover_services, discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime
 
 
 def _fake_completed(stdout="", stderr="", returncode=0):
@@ -139,3 +139,39 @@ def test_discover_services_still_returns_name_only_list():
     fake_output = "ovos-core.service loaded active running X\n"
     with patch("subprocess.run", return_value=_fake_completed(stdout=fake_output)):
         assert discover_services() == ["ovos-core.service"]
+
+
+# --- detect_container_runtime() (confirmed against a real podman container during development) ---
+
+def test_detect_container_runtime_finds_ovos_named_containers():
+    fake_output = "ovos-core-test\nsome-other-container\nhivemind-relay\n"
+    with patch("subprocess.run", return_value=_fake_completed(stdout=fake_output)):
+        assert detect_container_runtime() == ["hivemind-relay", "ovos-core-test"]
+
+
+def test_detect_container_runtime_returns_empty_when_no_matching_containers():
+    fake_output = "some-other-container\nanother-one\n"
+    with patch("subprocess.run", return_value=_fake_completed(stdout=fake_output)):
+        assert detect_container_runtime() == []
+
+
+def test_detect_container_runtime_returns_empty_when_neither_binary_available():
+    with patch("subprocess.run", side_effect=FileNotFoundError()):
+        assert detect_container_runtime() == []
+
+
+def test_detect_container_runtime_falls_back_from_docker_to_podman():
+    """docker not installed (FileNotFoundError) but podman is and has a
+    match - confirms the fallback actually tries the second binary
+    rather than giving up after the first failure."""
+    call_count = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        call_count["n"] += 1
+        if cmd[0] == "docker":
+            raise FileNotFoundError()
+        return _fake_completed(stdout="ovos-messagebus\n")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        assert detect_container_runtime() == ["ovos-messagebus"]
+    assert call_count["n"] == 2

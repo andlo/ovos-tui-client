@@ -180,13 +180,52 @@ ovos-tui
 Connects to `127.0.0.1:8181` by default. Options:
 
 ```bash
-ovos-tui --host 192.168.1.50 --port 8181 --lang da-dk --log-dir ~/.local/state/mycroft
+ovos-tui --host 192.168.1.50 --port 8181 --lang da-dk --log-dir ~/.local/state/mycroft --mycroft-conf ~/ovos/config/mycroft.conf
 ```
 
 - `--log-dir`: the log directory is auto-detected against a list of
   known candidate paths (which vary by OVOS install method). If nothing
   is found, the logs pane says so - pass this to point at the right
   directory explicitly.
+- `--mycroft-conf`: path to a specific `mycroft.conf` for the `Pipeline: `
+  palette entries to read. Only needed on Docker/Podman installs
+  (`ovos-installer`'s "containers" method, or `ovos-docker` directly) -
+  confirmed via `ovos-docker`'s own compose files that the real, live
+  config commonly lives at a host path like `~/ovos/config/mycroft.conf`
+  (configurable per-install), not the standard
+  `~/.config/mycroft/mycroft.conf` `ovos-config` looks for by default.
+  Without this, `Pipeline: ` may read the wrong file or find nothing on
+  a Docker install - it won't crash, but it won't be accurate either.
+  This direct-read path tolerates the same JSON5-style `//` comments a
+  real `mycroft.conf` has, but skips `ovos-config`'s own config-layering
+  (system/user/web-cache merge) - a reasonable trade-off for a quick
+  lookup.
+
+### Docker/Podman installs
+
+`ovos-tui-client` itself runs on the host, not inside the same
+containers, so a few things behave differently on a Docker/Podman
+install (confirmed against `ovos-docker`'s own documentation and a
+locally-run container, not just inferred):
+
+- **Logs**: usually fine without any extra flags - `ovos-docker`
+  installs commonly volume-mount the same conventional
+  `~/.local/state/mycroft` path this tool already checks first, and
+  the official `ovos-logs` debugging tool relies on that same
+  assumption. If the install was configured with `"logs": {"path":
+  "stdout"}` (a documented `ovos-docker` recommendation for
+  container-log-based debugging) instead, there are no log FILES at
+  all - this tool will correctly report "no logs found", and
+  `docker compose logs` / `docker logs <container>` are the right
+  tools for that case instead.
+- **Services**: `systemctl --user` genuinely has nothing to find,
+  since OVOS runs as containers, not systemd units, in this mode. The
+  boot sequence detects this (checking `docker ps` / `podman ps` for
+  OVOS-named containers) and says so explicitly rather than showing a
+  bare, unexplained "none found" - but starting/stopping/restarting a
+  container from here isn't supported yet (see the open issue for
+  this).
+- **Pipeline**: see `--mycroft-conf` above.
 
 ## Why not just fix ovos-cli-client / neon-cli-client?
 

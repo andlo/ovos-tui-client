@@ -66,7 +66,7 @@ from ovos_tui_client.logs import (
     find_log_dir, discover_log_sources, line_matches_filter, strip_log_prefix,
     extract_log_level, extract_skill_id, KNOWN_LOG_NAMES, KNOWN_LOG_LEVELS,
 )
-from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service
+from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime
 from ovos_tui_client.state import load_filter_state, save_filter_state
 
 LOG_POLL_INTERVAL = 0.5  # seconds
@@ -190,7 +190,27 @@ class PipelineCommandProvider(Provider):
     reading mycroft.conf is fast/local, and pipeline order essentially
     never changes without an OVOS restart, so there's no staleness
     concern worth caching against. Uses ovos_config (respects OVOS's
-    own config layering) rather than parsing the raw file.
+    own config layering) by default - rather than parsing the raw file
+    - UNLESS --mycroft-conf was given (see build_arg_parser()), in
+    which case that specific file is read directly instead (still
+    tolerating JSON5-style '//' comments via the same
+    load_commented_json() helper ovos_config itself uses internally,
+    not a plain json.load()).
+
+    The override exists because ovos_config's own XDG-based lookup
+    doesn't know about Docker/Podman installs: confirmed via
+    ovos-docker's own compose files that the real, live mycroft.conf
+    commonly lives at a host path like ~/ovos/config/mycroft.conf
+    (configurable per-install via the compose stack's CONFIG_FOLDER
+    variable) rather than the standard ~/.config/mycroft/mycroft.conf
+    ovos_config looks for on the host by default - since
+    ovos-tui-client itself typically runs on the host, not inside the
+    same containers, it has no way to know that non-standard path
+    without being told. The direct-read fallback doesn't get
+    ovos_config's config-layering (system/user/web-cache merge) - a
+    reasonable trade-off for a quick lookup, and clearly indicated in
+    the resulting message so it's never mistaken for the full,
+    layered picture.
 
     Read-only - toggling stages on/off would mean writing to
     mycroft.conf itself, which needs its own careful design pass (see
@@ -203,8 +223,13 @@ class PipelineCommandProvider(Provider):
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
         try:
-            from ovos_config.config import Configuration
-            pipeline = Configuration().get("intents", {}).get("pipeline", [])
+            if self.app.mycroft_conf_override:
+                from json_database.utils import load_commented_json
+                conf = load_commented_json(self.app.mycroft_conf_override)
+                pipeline = (conf or {}).get("intents", {}).get("pipeline", [])
+            else:
+                from ovos_config.config import Configuration
+                pipeline = Configuration().get("intents", {}).get("pipeline", [])
         except Exception:
             return
         for i, stage in enumerate(pipeline, start=1):
@@ -433,13 +458,14 @@ class OVOSTUIApp(App):
 
     COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider, PipelineCommandProvider}
 
-    def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None):
+    def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None, mycroft_conf_override=None):
         super().__init__()
         self.host = host
         self.port = port
         self.bus = OVOSBusConnection(host=host, port=port, lang=lang)
         self.log_dir = find_log_dir(override=log_dir_override)
         self.log_sources = discover_log_sources(self.log_dir)
+        self.mycroft_conf_override = mycroft_conf_override
         self.utterance_history = []
         self.history_index = None
         self.log_buffer = deque(maxlen=LOG_BUFFER_SIZE)
@@ -583,7 +609,17 @@ class OVOSTUIApp(App):
         call_from_thread() only guarantees THIS call finishes before
         returning, not that no other thread's call can be scheduled in
         between two of THIS thread's separate calls. One call = one
-        atomic write, no other thread's output can land inside it."""
+        atomic write, no other thread's output can land inside it.
+
+        When systemd finds nothing, this checks for a Docker/Podman
+        install before settling on a bare "none found" - a confirmed
+        real gap: OVOS installed via ovos-docker runs everything as
+        containers, not systemd --user units, so systemctl genuinely
+        has nothing to report there, and "none found" alone reads like
+        something's broken rather than "this is a different kind of
+        install". Only detection + an honest message, not container
+        start/stop/restart - see detect_container_runtime()'s own
+        docstring for why that's separate, larger, tracked work."""
         services = discover_services_with_state()
         if services:
             lines = ["Services:"]
@@ -592,7 +628,15 @@ class OVOSTUIApp(App):
                 lines.append(f"    {name} {state}")
             self.call_from_thread(self._write_status, "\n".join(lines))
         else:
-            self.call_from_thread(self._write_status, "Services: none found")
+            containers = detect_container_runtime()
+            if containers:
+                lines = ["Services: not managed via systemd - looks like a Docker/Podman install:"]
+                for name in containers:
+                    lines.append(f"    {name}")
+                lines.append("    (start/stop/restart from here isn't supported yet for containers - see `docker/podman ps`)")
+                self.call_from_thread(self._write_status, "\n".join(lines))
+            else:
+                self.call_from_thread(self._write_status, "Services: none found")
         self.call_from_thread(self._finish_startup)
 
     def _write_to_log(self, widget: RichLog, content) -> None:
@@ -1053,12 +1097,13 @@ def build_arg_parser():
     parser.add_argument("--port", type=int, default=8181, help="messagebus port (default: 8181)")
     parser.add_argument("--lang", default="en-us", help="BCP-47 language code for typed utterances (default: en-us)")
     parser.add_argument("--log-dir", default=None, help="override log directory auto-detection")
+    parser.add_argument("--mycroft-conf", default=None, help="path to a specific mycroft.conf to read for 'Pipeline: ' (bypasses ovos-config's own XDG-based lookup - needed on Docker/Podman installs, where the real config commonly lives at a host path like ~/ovos/config/mycroft.conf rather than the standard ~/.config/mycroft/mycroft.conf ovos-config looks for by default)")
     return parser
 
 
 def run():
     args = build_arg_parser().parse_args()
-    app = OVOSTUIApp(host=args.host, port=args.port, lang=args.lang, log_dir_override=args.log_dir)
+    app = OVOSTUIApp(host=args.host, port=args.port, lang=args.lang, log_dir_override=args.log_dir, mycroft_conf_override=args.mycroft_conf)
     app.run()
 
 
