@@ -16,20 +16,20 @@ The four panes in text form, for anywhere images don't render (a
 plain-text README viewer, `pip show`, etc):
 
 ```
-┌──────────────────────────────────────────┐
-│ Sources: [X]bus [X]skills [X]audio ...    │
+┌────────────────────────────────────────────┐
+│ Sources: [X]bus [X]skills [X]audio ...     │
 │ Log Levels: [X]DEBUG [X]INFO ... Skills:.. │
-│ Filter logs (free text)...                │
-│ LOGS                              scroll↕ │
-├───────────────────────────┬───────────────┤
+│ Filter logs (free text)...                 │
+│ LOGS                              scroll↕  │
+├────────────────────────────┬───────────────┤
 │ CONVERSATION (2/3)         │ ACTIVITY (1/3)│
 │ You: read me a grimm story │ 🔍 pipeline:  │
 │ OVOS: Here's Cinderella... │ asking all... │
-│                             │ 📥 grimm-tale │
-│                             │ s: "Cindere.. │
-├───────────────────────────┴───────────────┤
+│                            │ 📥 grimm-tale │
+│                            │ s: "Cindere.. │
+├────────────────────────────┴───────────────┤
 │ > _                                        │
-└──────────────────────────────────────────┘
+└────────────────────────────────────────────┘
 ```
 
 Four panes at once: raw logs, a normal back-and-forth conversation, a live simplified feed of what's happening behind the scenes, and a text input that stands in for your voice. Everything updates in real time as OVOS processes what you type.
