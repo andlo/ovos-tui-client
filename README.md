@@ -1,20 +1,14 @@
 # ovos-tui-client
 
-**🚧 Actively under development - expect frequent changes.** This is a
-young project with ongoing design iteration (see git history/tags for
-the pace of change); pin a specific version if you need stability, or
-just `pip install --upgrade` regularly to stay current.
+A split-pane terminal UI for talking to and debugging [OpenVoiceOS](https://www.openvoiceos.org/) without a microphone or speaker - type what you'd say, read what OVOS says back, and watch exactly what's happening on the message bus while it happens.
 
-A split-pane terminal UI for testing OVOS without a mic/speaker - a
-lightweight replacement for the unmaintained `ovos-cli-client` and the
-broken `neon-cli-client` (whose `pyyaml~=5.4` dependency fails to build
-on modern Python/setuptools).
+Actively maintained. The core experience is stable today and it's a solid, working replacement for the old CLI clients - see the [comparison](#why-not-just-fix-ovos-cli-client--neon-cli-client) below. It'll keep picking up refinements and fixes, but you don't need to wait for a "1.0" to get real use out of it.
 
 [![Tests](https://github.com/andlo/ovos-tui-client/actions/workflows/test.yml/badge.svg)](https://github.com/andlo/ovos-tui-client/actions/workflows/test.yml)
 [![PyPI version](https://img.shields.io/pypi/v/ovos-tui-client.svg)](https://pypi.org/project/ovos-tui-client/)
 [![ovos-cli-client](https://img.shields.io/pypi/v/ovos-cli-client.svg?label=ovos-cli-client)](https://pypi.org/project/ovos-cli-client/)
 
-## Layout
+## What it looks like
 
 ```
 ┌──────────────────────────────────────────┐
@@ -33,137 +27,27 @@ on modern Python/setuptools).
 └──────────────────────────────────────────┘
 ```
 
-- **Logs**: tails every recognized OVOS service log file it finds
-  (`bus.log`, `skills.log`, `audio.log`/`media.log`, `voice.log`,
-  `gui.log`, `enclosure.log`, `phal.log`), each with its own color.
-  OVOS's own `TIMESTAMP - COMPONENT - ` prefix is stripped, and every
-  `[source]` tag is padded to the same width so message text lines up
-  in one column. Lines containing `ERROR` are bolded. Scrolled-up panes
-  (logs, conversation, activity) are never yanked back to the bottom by
-  incoming content - auto-scroll only re-engages once you're back at
-  the bottom yourself.
-- **Sources** and **Log Levels** (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-  are compact checkboxes directly in the main view, checked by
-  default, no modal needed - each category on its own single line.
-- **Skills:** - click it, or press Enter when it's focused - opens the
-  Command Palette, where "Log: Skill" filters the log display
-  by skill_id (dynamically discovered the first time a skill_id is
-  seen in the log text - best-effort, not every skill-related line
-  mentions its own skill_id explicitly; unchecked by default, unlike
-  Sources/Levels, since this list is open-ended rather than short and
-  fixed). No modal for this anymore - see the Command Palette section
-  below.
+Four panes at once: raw logs, a normal back-and-forth conversation, a live simplified feed of what's happening behind the scenes, and a text input that stands in for your voice. Everything updates in real time as OVOS processes what you type.
 
-  **Filter semantics:** an unchecked box does NOT mean "hidden" - it
-  means "not specifically filtered to". With nothing checked in a
-  category, nothing in that category is restricted and everything
-  shows. Checking one or more boxes restricts that category to only
-  the checked ones - independently per category, applying
-  retroactively to already-received lines too, same as the free-text
-  filter. Choices persist across sessions (`~/.config/ovos-tui-client/
-  state.json`), saved on quit.
-- **F1**: toggles Textual's own built-in help panel - a genuine side
-  panel docked to the right, not a popup - combining this project's
-  own explanatory text (filter semantics, scroll behavior, the
-  no-popup-windows design) with a live, always-accurate list of every
-  current keybinding. No custom-built help screen to maintain
-  separately and let go stale. **F5-F8**: jump focus straight to
-  Logs / Conversation / Activity / the utterance input. There's no
-  F2/Services, F3/Skills, or F4/Skill-filter shortcut anymore -
-  service management, installed-skill listing/activation, AND the
-  log-display skill filter all moved entirely into the Command
-  Palette (below), with results written to the **conversation pane**
-  (dim/grey text) instead of a popup - this tool avoids modal windows
-  wherever an action doesn't inherently need its own screen.
-- **Ctrl+P**: Textual's command palette - meant as a way to talk to/
-  control OVOS directly ("bagom"/behind the scenes), not just a
-  launcher for this tool's own popup screens. Every F1/F5-F8 action is
-  there too, fuzzy-searchable, but it also goes further. The palette
-  itself has no native grouping/submenus (confirmed - it's a flat
-  fuzzy-matched list in every command-palette implementation, not just
-  Textual's), so related commands share a literal prefix instead, so
-  typing that prefix clusters them together - and every action below
-  runs immediately, filtered in place as you type, with its result
-  written to the conversation pane - **no popup windows**:
-  - **`Log: `** - toggle any source/level/skill directly, e.g. "Log:
-    Source: skills", "Log: Level: ERROR", "Log:
-    Skill: ovos-skill-horoscope..." - same effect as clicking the
-    checkbox, without leaving the palette. Once at least one skill_id
-    has been seen, "Log: Select all skills" / "Log: Deselect all
-    skills" are also available for bulk toggling.
-  - **`Service: `** - "Service: Restart ovos-core.service", "Service:
-    Stop ...", "Service: Start ..." - one hit per discovered
-    `ovos-*.service` unit, but **only for actions that make sense for
-    its current state**: a running service offers Stop/Restart but
-    not Start; a stopped one offers only Start (determined from
-    `systemctl`'s own ACTIVE column). Fuzzy-matched as you type (e.g.
-    "restart co" narrows straight to `ovos-core.service`). Selecting
-    one runs it immediately; the result ("ovos-core.service:
-    restarted", or the failure reason) appears in the conversation
-    pane.
-  - **`Skill: `** - one entry per known skill, current state shown in
-    the title - "Skill: skill_id (Active)" or "Skill: skill_id
-    (Inactive)" - selecting it toggles (Deactivate if currently
-    Active, Activate if currently Inactive), same "state in title,
-    selecting toggles" convention as `Log:` above. An unknown state
-    shows both Activate and Deactivate explicitly instead, since
-    there's no current state to toggle from. The list is populated
-    once at startup via the bus (`skillmanager.list` - confirmed
-    directly against a live OVOS instance that its response really
-    does carry per-skill active state, not just names), not refetched
-    per keystroke. Fire-and-forget (see `bus.py`'s honesty note on
-    `activate_skill()`/`deactivate_skill()` - based on the documented
-    mycroft-core convention) - the conversation-pane line confirms the
-    request was *sent*, not that OVOS applied it; the local cache
-    updates optimistically so the next search reflects the change
-    immediately. No separate "list installed skills" command anymore -
-    typing "skill" already shows every one of them.
-  - **`Pipeline: `** - one entry per stage in `mycroft.conf`'s
-    `intents.pipeline` array, numbered in order - "Pipeline: 1.
-    stop_high", "Pipeline: 2. ovos-common-reading-pipeline-plugin",
-    etc, via `ovos-config` (respects config layering). Read-only -
-    pipeline order is static config, not something with a live bus
-    toggle; selecting an entry just confirms which stage you found.
-  - Textual's own default **"Screenshot"** and **"Keys"** commands are
-    filtered out - Screenshot isn't useful for this tool; Keys is
-    Textual's own default trigger for exactly the same show-help-panel
-    action "Help: Toggle panel" already calls, so keeping both would
-    just be two entries doing the same thing.
-  **Tab/Shift+Tab**: cycle focus across everything (checkboxes, panes,
-  input) - a Textual built-in, no custom code needed. **Escape**:
-  closes whatever modal is open. Every palette entry is a single line
-  - no separate description text underneath; where a command has
-  state worth showing (checked/unchecked, active/inactive), it's
-  embedded right in the title instead.
-- Typing a plain character while focus is on Logs/Conversation/
-  Activity (none of which are normally typable) redirects that
-  keystroke to the utterance input instead of doing nothing - almost
-  always what was actually meant.
-- **Conversation**: what you typed (green), what OVOS said back
-  (blue), and dim/grey status lines for everything above (startup
-  connection info, service actions, skill list/activate/deactivate
-  results) - distinct styling so status lines don't compete for
-  attention with the actual conversation. Startup itself narrates as
-  a compact boot sequence - version number, which log sources were
-  found, a "Services:" block listing each `ovos-*.service` unit and
-  whether it's Active/Inactive, and a skill count split into
-  active/inactive - ending in "OK ready." only once both of the
-  async/background startup steps (service-state check, skill lookup)
-  have genuinely finished, not just been kicked off, so it doesn't
-  appear before its own result does. The UI itself is
-  interactive from the moment those steps are kicked off, not after -
-  the service-state check in particular runs on a background thread
-  precisely so a slow `systemctl` call can never freeze the whole app.
-- **Activity**: a curated, simplified feed of what's happening on the
-  bus right now - which skill is handling the request, wake word/
-  speech start-stop, global stop, which fallback skill handled a
-  genuinely unrecognized utterance (and whether it actually resolved
-  anything - "could not resolve" for the common "sorry, I don't
-  understand" case), and for `ovos.common_reading.*` traffic
-  specifically, which providers answered, at what confidence, and
-  whether content fetch succeeded.
-- **Input**: type what you'd say to OVOS, press Enter. Up/Down arrows
-  browse previously submitted utterances, shell-history style.
+## What it does
+
+- **Logs** - tails every OVOS service log it can find (bus, skills, audio, voice, GUI, PHAL, etc), color-coded by source, timestamps stripped for readability, errors bolded. Filter by source, log level, free text, or a specific skill - any combination, live, without restarting anything (with nothing checked in a category everything shows; checking one or more narrows to just those). Scroll up to read something and new lines won't yank you back down.
+- **Conversation** - what you typed and what OVOS said back, plus quiet status lines for everything else this tool does (service restarts, skill toggles, startup info) kept visually distinct so they don't clutter the actual conversation.
+- **Activity** - a simplified, human-readable feed of what's happening on the bus right now: which skill is handling the request, wake word and speech start/stop, which fallback skill caught something nothing else understood (and whether it actually resolved anything), and for content-reading requests specifically, which providers answered and at what confidence.
+- **A searchable command palette** (`Ctrl+P`) for everything else - restart a stuck service, activate or deactivate a skill, check the intent pipeline order, or toggle any log filter - all searchable by typing, with results appearing right in the conversation pane instead of popup windows. A help panel (`F1`) covers the rest of the keybindings.
+- Type what you'd say and press Enter, same as talking to a real OVOS device. Up/Down arrows browse what you've typed before, like shell history.
+
+## Why this is worth having
+
+Testing OVOS by voice means dealing with wake-word misfires, STT mistakes, and no visibility into *why* something did or didn't happen. Typing directly and watching the activity feed skips all of that - and makes some genuinely hard-to-see things visible:
+
+- **See which skill actually answered - and which ones tried and gave up.** Ask a factual question and watch each candidate skill respond in real time, including the ones that came back empty - useful for figuring out why you got a weird or unhelpful answer instead of a good one.
+- **Catch vocabulary gaps as you find them.** Type a phrasing you'd expect to work; if nothing responds, or the wrong skill claims it, that's immediately visible instead of a silent failure you'd only notice by accident.
+- **Understand fallback behavior.** When nothing matches normally, OVOS asks a chain of fallback skills whether they can help - the activity feed shows exactly which one stepped in, and whether it actually resolved anything or just apologized.
+- **Check the intent pipeline order without digging through config files.** Search "pipeline" in the command palette to see every matching stage in the exact order OVOS evaluates them.
+- **Restart a stuck service in two keystrokes**, without switching to another terminal.
+
+None of this requires working audio hardware, a wake word, or STT accuracy getting in the way - just type.
 
 ## Install
 
@@ -187,45 +71,31 @@ ovos-tui --host 192.168.1.50 --port 8181 --lang da-dk --log-dir ~/.local/state/m
   known candidate paths (which vary by OVOS install method). If nothing
   is found, the logs pane says so - pass this to point at the right
   directory explicitly.
-- `--mycroft-conf`: path to a specific `mycroft.conf` for the `Pipeline: `
-  palette entries to read. Only needed on Docker/Podman installs
-  (`ovos-installer`'s "containers" method, or `ovos-docker` directly) -
-  confirmed via `ovos-docker`'s own compose files that the real, live
-  config commonly lives at a host path like `~/ovos/config/mycroft.conf`
-  (configurable per-install), not the standard
-  `~/.config/mycroft/mycroft.conf` `ovos-config` looks for by default.
-  Without this, `Pipeline: ` may read the wrong file or find nothing on
-  a Docker install - it won't crash, but it won't be accurate either.
-  This direct-read path tolerates the same JSON5-style `//` comments a
-  real `mycroft.conf` has, but skips `ovos-config`'s own config-layering
-  (system/user/web-cache merge) - a reasonable trade-off for a quick
-  lookup.
+- `--mycroft-conf`: path to a specific `mycroft.conf` for the pipeline
+  view in the command palette to read. Only needed on Docker/Podman
+  installs (see below) - without it, the pipeline view may read the
+  wrong file or find nothing on those installs. It won't crash, but it
+  won't be accurate either.
 
 ### Docker/Podman installs
 
-`ovos-tui-client` itself runs on the host, not inside the same
-containers, so a few things behave differently on a Docker/Podman
-install (confirmed against `ovos-docker`'s own documentation and a
-locally-run container, not just inferred):
+This tool runs on the host, not inside the same containers OVOS runs
+in, so a couple of things need extra attention on a Docker/Podman
+install:
 
-- **Logs**: usually fine without any extra flags - `ovos-docker`
-  installs commonly volume-mount the same conventional
-  `~/.local/state/mycroft` path this tool already checks first, and
-  the official `ovos-logs` debugging tool relies on that same
-  assumption. If the install was configured with `"logs": {"path":
-  "stdout"}` (a documented `ovos-docker` recommendation for
-  container-log-based debugging) instead, there are no log FILES at
-  all - this tool will correctly report "no logs found", and
-  `docker compose logs` / `docker logs <container>` are the right
-  tools for that case instead.
-- **Services**: `systemctl --user` genuinely has nothing to find,
-  since OVOS runs as containers, not systemd units, in this mode. The
-  boot sequence detects this (checking `docker ps` / `podman ps` for
-  OVOS-named containers) and says so explicitly rather than showing a
-  bare, unexplained "none found" - but starting/stopping/restarting a
-  container from here isn't supported yet (see the open issue for
-  this).
-- **Pipeline**: see `--mycroft-conf` above.
+- **Logs** usually work without any extra flags - the common volume
+  mount convention lines up with what this tool already looks for
+  first. If the install is configured to send logs to the container's
+  own stdout instead of a file (a documented option for
+  container-log-based debugging), there are no log files to find at
+  all - this tool will say so clearly, and `docker logs`/`docker
+  compose logs` are the right tool for that case instead.
+- **Services** run as containers, not background services this tool
+  can query the usual way - it detects this and says so explicitly,
+  listing the running containers, rather than just showing an
+  unexplained empty result. Restarting a container from here isn't
+  supported yet.
+- **Pipeline** - see `--mycroft-conf` above.
 
 ## Why not just fix ovos-cli-client / neon-cli-client?
 
@@ -242,8 +112,7 @@ version with no prebuilt wheel for modern Python and a build script
 incompatible with current `setuptools` (workaround: pin
 `setuptools<58` first).
 
-Building this tool instead avoids both dependency chains (just
-`textual` + `ovos-bus-client`, both actively maintained), and adds
+Building this tool instead avoids both dependency chains, and adds
 genuinely useful features - toggleable/filterable logs, service
 restart, a simplified activity feed - neither of the above has.
 
