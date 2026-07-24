@@ -1,7 +1,7 @@
 """Tests for the Textual App using Textual's Pilot testing framework -
 simulates keypresses/input against a real (but headless) running app,
 with a fake bus connection so no real messagebus is needed."""
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from textual.widgets import RichLog, Input, Label, Checkbox
@@ -73,10 +73,36 @@ async def test_no_log_sources_shows_a_helpful_message(tmp_path):
     empty_dir.mkdir()
     app = OVOSTUIApp(log_dir_override=str(empty_dir))
     app.bus = MagicMock()
-    async with app.run_test() as pilot:
-        # should not crash, and the logs view should have SOME content
-        # (the "no logs found" notice) rather than being silently empty
-        assert app.log_sources == []
+    with patch("ovos_tui_client.app.detect_container_runtime", return_value=[]):
+        async with app.run_test() as pilot:
+            # should not crash, and the logs view should have SOME
+            # content (the "no logs found" notice) rather than being
+            # silently empty
+            assert app.log_sources == []
+            text = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
+            assert "no known log files found" in text.lower()
+            assert "docker" not in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_no_log_sources_on_a_docker_install_explains_stdout_logging(tmp_path):
+    """Confirmed via ovos-docker's own documentation (not just
+    inferred): the official sample mycroft.conf sets "logs": {"path":
+    "stdout"} - meaning on an install that follows that guide as
+    written, there are no log files on the host at all, ever. The
+    message here needs to actually say that, not a generic "no logs
+    found" that reads like something's broken rather than "this is a
+    different kind of install"."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    app = OVOSTUIApp(log_dir_override=str(empty_dir))
+    app.bus = MagicMock()
+    with patch("ovos_tui_client.app.detect_container_runtime", return_value=["ovos-core", "ovos-audio"]):
+        async with app.run_test() as pilot:
+            text = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
+            assert "docker" in text.lower() or "podman" in text.lower()
+            assert "stdout" in text.lower()
+            assert "docker logs" in text.lower() or "docker compose logs" in text.lower()
 
 
 # --- format_log_line: per-source color + padding + ERROR bolding + timestamp/component stripping ---

@@ -86,21 +86,26 @@ ovos-tui --host 192.168.1.50 --port 8181 --lang da-dk --log-dir ~/.local/state/m
 
 This tool runs on the host, not inside the same containers OVOS runs
 in, so a couple of things need extra attention on a Docker/Podman
-install:
+install - the notes below are based on reading `ovos-docker`'s own
+documentation directly, not guessed at:
 
-- **Logs** usually work without any extra flags - the common volume
-  mount convention lines up with what this tool already looks for
-  first. If the install is configured to send logs to the container's
-  own stdout instead of a file (a documented option for
-  container-log-based debugging), there are no log files to find at
-  all - this tool will say so clearly, and `docker logs`/`docker
-  compose logs` are the right tool for that case instead.
+- **Logs likely won't show anything without extra steps.**
+  `ovos-docker`'s own sample `mycroft.conf` sets `"logs": {"path":
+  "stdout"}` - on an install that follows that guide as written, there
+  are no log files on the host filesystem at all, ever, only container
+  stdout. This tool detects a Docker/Podman install in that case and
+  says so explicitly, pointing at `docker logs <container>` / `docker
+  compose logs -f` - it can't tail container stdout itself yet (open
+  issue, would need to run those commands as a subprocess and treat
+  their output as another log source).
 - **Services** run as containers, not background services this tool
   can query the usual way - it detects this and says so explicitly,
   listing the running containers, rather than just showing an
   unexplained empty result. Restarting a container from here isn't
   supported yet.
-- **Pipeline** - see `--mycroft-conf` above.
+- **Pipeline** - see `--mycroft-conf` above; also confirmed against
+  `ovos-docker`'s real `.env` variables (`OVOS_CONFIG_FOLDER`,
+  default `/home/ovos/ovos/config`), not assumed.
 
 ## Why not just fix ovos-cli-client / neon-cli-client?
 

@@ -550,12 +550,38 @@ class OVOSTUIApp(App):
         self._write_status(f"ovos-tui-client v{_ovos_tui_version()}")
 
         if not self.log_sources:
-            self._write_to_log(
-                self.query_one("#logs-view", RichLog),
-                f"[yellow]No known log files found"
-                + (f" in {self.log_dir}" if self.log_dir else " in any candidate directory")
-                + ". Pass --log-dir to point at the right one.[/yellow]"
-            )
+            # CONFIRMED (not just inferred): the official ovos-docker
+            # documentation's own sample mycroft.conf sets
+            # "logs": {"path": "stdout"} - meaning on an install that
+            # follows that guide as written, there are NO log files on
+            # the host at all, ever, regardless of --log-dir. Earlier
+            # versions of this tool assumed "usually fine, matches the
+            # systemd convention" - that assumption was wrong, found
+            # via reading ovos-docker's own docs properly rather than
+            # guessing. Detecting the container runtime here so the
+            # message actually explains what to do next, instead of a
+            # bare "no logs found" that reads like something's broken.
+            # See issue #22/#36 for the bigger, not-yet-built fix
+            # (tailing `docker/podman logs` directly as an alternative
+            # log source, so this tool could show container-log-only
+            # setups too, not just explain their absence).
+            containers = detect_container_runtime()
+            if containers:
+                msg = (
+                    "[yellow]No log files found, but this looks like a Docker/Podman "
+                    "install - if mycroft.conf has \"logs\": {\"path\": \"stdout\"} "
+                    "(the setup ovos-docker's own docs suggest), there are no log "
+                    "files on the host at all. Use `docker logs <container>` / "
+                    "`docker compose logs -f` instead - this tool can't show "
+                    "container-stdout logs yet.[/yellow]"
+                )
+            else:
+                msg = (
+                    f"[yellow]No known log files found"
+                    + (f" in {self.log_dir}" if self.log_dir else " in any candidate directory")
+                    + ". Pass --log-dir to point at the right one.[/yellow]"
+                )
+            self._write_to_log(self.query_one("#logs-view", RichLog), msg)
             self._write_status("Logs found and loaded: none")
         else:
             names = ", ".join(src.name for src in self.log_sources)
