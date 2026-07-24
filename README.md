@@ -10,6 +10,11 @@ Actively maintained. The core experience is stable today and it's a solid, worki
 
 ## What it looks like
 
+![ovos-tui-client screenshot](https://raw.githubusercontent.com/andlo/ovos-tui-client/main/ovos-tui-client.png)
+
+The four panes in text form, for anywhere images don't render (a
+plain-text README viewer, `pip show`, etc):
+
 ```
 ┌──────────────────────────────────────────┐
 │ Sources: [X]bus [X]skills [X]audio ...    │
