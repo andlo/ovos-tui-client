@@ -94,13 +94,17 @@ documentation directly, not guessed at:
   install that follows that guide as written, there are no log files
   on the host filesystem at all, only container stdout. When this tool
   finds no log files but detects a Docker/Podman install, it
-  automatically bridges each container's `docker logs -f` (or
-  `podman logs -f`) into a temp file and tails that instead - the
-  Sources: checkboxes then show the actual container names
-  (`ovos_core`, `ovos_audio`, etc) rather than the usual `skills`/
-  `audio`/etc, since there's no fully-confirmed container-name ->
-  service-name mapping to translate through. Bridge processes are
-  cleaned up on quit. If bridging isn't possible for some reason (no
+  automatically bridges each container's `docker logs -f` (or `podman
+  logs -f`) into the same small set of log files a normal install
+  already produces - `skills.log`, `audio.log`, `voice.log`, etc,
+  grouped by container name pattern (every `ovos_skill_*` container
+  lands in `skills.log` together, `ovos_audio` in `audio.log`, and so
+  on; anything unrecognized goes to `other.log`) - not one file/
+  checkbox per container. Confirmed against a real ovos-docker install
+  with 26 running containers: this keeps the Sources: checkboxes down
+  to a handful of familiar categories with the usual colors, instead
+  of two dozen individually-named ones. Bridge processes are cleaned
+  up on quit. If bridging isn't possible for some reason (no
   `docker`/`podman` binary available), it says so explicitly instead
   and points at `docker logs <container>` / `docker compose logs -f`
   directly.

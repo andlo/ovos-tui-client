@@ -118,10 +118,11 @@ async def test_no_log_sources_on_a_docker_install_explains_stdout_logging(tmp_pa
 @pytest.mark.asyncio
 async def test_no_log_sources_bridges_docker_containers_when_possible(tmp_path):
     """The success path: start_container_log_bridges() actually
-    returns process handles (mocked here - real subprocess behavior is
-    covered separately in test_services.py) - the app should pick up
-    the bridged sources and NOT show the "no logs found" fallback
-    message at all."""
+    returns process handles (mocked here - real subprocess behavior,
+    including the container-name -> category grouping, is covered
+    separately in test_services.py) - the app should pick up the
+    bridged sources and NOT show the "no logs found" fallback message
+    at all."""
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
     app = OVOSTUIApp(log_dir_override=str(empty_dir))
@@ -135,16 +136,20 @@ async def test_no_log_sources_bridges_docker_containers_when_possible(tmp_path):
         # test can predict ahead of time - so writing it here, once
         # on_mount() passes in the real path, is the reliable way to
         # populate it before the (unmocked) discover_log_sources() call
-        # right after this one runs)
+        # right after this one runs). "ovos_core" categorizes to
+        # "skills" (see categorize_container_name()), so the file is
+        # named skills.log, not ovos_core.log - matching how the real
+        # bridge now groups containers into the same small set of
+        # filenames a normal install already uses.
         target_dir.mkdir(parents=True, exist_ok=True)
-        (target_dir / "ovos_core.log").write_text("")
+        (target_dir / "skills.log").write_text("")
         return [fake_proc]
 
     with patch("ovos_tui_client.app.detect_container_runtime", return_value=["ovos_core"]), \
          patch("ovos_tui_client.app.start_container_log_bridges", side_effect=fake_bridge):
         async with app.run_test() as pilot:
             assert len(app.log_sources) == 1
-            assert app.log_sources[0].name == "ovos_core"
+            assert app.log_sources[0].name == "skills"
             assert app.log_bridge_handles == [fake_proc]
             conv = app.query_one("#conversation", RichLog)
             conv_text = "\n".join(str(line) for line in conv.lines)

@@ -2,7 +2,7 @@
 real service management is exercised here."""
 from unittest.mock import MagicMock, patch
 
-from ovos_tui_client.services import discover_services, discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges
+from ovos_tui_client.services import discover_services, discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges, categorize_container_name
 
 
 def _fake_completed(stdout="", stderr="", returncode=0):
@@ -182,12 +182,70 @@ def test_detect_container_runtime_falls_back_from_docker_to_podman():
 # podman container during development - these tests cover the
 # subprocess-management logic itself, mocked)
 
+# --- categorize_container_name(): maps real ovos-docker container
+# names (confirmed against a real, running install) to the same
+# category names file-based installs already use ---
+
+def test_categorize_container_name_skills():
+    assert categorize_container_name("ovos_skill_wikihow") == "skills"
+    assert categorize_container_name("ovos_skill_date_time") == "skills"
+    assert categorize_container_name("ovos_core") == "skills"
+
+
+def test_categorize_container_name_audio():
+    assert categorize_container_name("ovos_audio") == "audio"
+
+
+def test_categorize_container_name_voice():
+    assert categorize_container_name("ovos_listener") == "voice"
+
+
+def test_categorize_container_name_bus():
+    assert categorize_container_name("ovos_messagebus") == "bus"
+
+
+def test_categorize_container_name_phal():
+    assert categorize_container_name("ovos_phal") == "phal"
+    assert categorize_container_name("ovos_phal_admin") == "phal"
+
+
+def test_categorize_container_name_gui():
+    assert categorize_container_name("ovos_gui_websocket") == "gui"
+
+
+def test_categorize_container_name_falls_back_to_other():
+    """Real container names seen on a live install that don't map to
+    a known category - ovos_cli (a debug/interactive tool, not a
+    logging service) and ovos_plugin_ggwave (an audio-data-over-sound
+    plugin, not one of the core categories)."""
+    assert categorize_container_name("ovos_cli") == "other"
+    assert categorize_container_name("ovos_plugin_ggwave") == "other"
+
+
 def test_start_container_log_bridges_spawns_one_process_per_container(tmp_path):
     with patch("subprocess.run", return_value=_fake_completed(returncode=0)):
         with patch("subprocess.Popen") as mock_popen:
             handles = start_container_log_bridges(["ovos_core", "ovos_audio"], tmp_path)
     assert mock_popen.call_count == 2
     assert len(handles) == 2
+
+
+def test_start_container_log_bridges_groups_same_category_containers_into_one_file(tmp_path):
+    """The actual point of this design: on a real ovos-docker install
+    there can be 15-25 individual skill containers - all of them must
+    append to the SAME skills.log, not create 15-25 separate files/
+    checkboxes for what's conceptually one category."""
+    with patch("subprocess.run", return_value=_fake_completed(returncode=0)):
+        with patch("subprocess.Popen") as mock_popen:
+            start_container_log_bridges(
+                ["ovos_skill_wikihow", "ovos_skill_weather", "ovos_skill_wolfie"], tmp_path
+            )
+    # 3 separate `docker logs -f` processes (one per container - each
+    # needs its own subprocess, docker can't merge streams itself)...
+    assert mock_popen.call_count == 3
+    # ...but all writing to the same single file
+    stdout_targets = {call.kwargs["stdout"].name for call in mock_popen.call_args_list}
+    assert stdout_targets == {str(tmp_path / "skills.log")}
 
 
 def test_start_container_log_bridges_uses_docker_logs_dash_f_with_container_name(tmp_path):

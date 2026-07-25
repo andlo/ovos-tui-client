@@ -157,14 +157,70 @@ def _find_container_binary():
     return None
 
 
+def categorize_container_name(name):
+    """Maps a Docker/Podman container name to the SAME category names
+    file-based installs already use (see logs.py's KNOWN_LOG_NAMES) -
+    "skills", "audio", "voice", "bus", "phal", "gui" - or "other" if it
+    doesn't recognizably fit one of those.
+
+    This exists so start_container_log_bridges() (below) can make
+    Docker/Podman container logs land in the exact same small,
+    familiar set of log files a normal systemd/venv install already
+    produces - "skills.log", "audio.log", etc - rather than one file
+    per container (which on a real ovos-docker install is easily 15-25
+    separate files/checkboxes for what's conceptually still just a
+    handful of categories). Confirmed directly against a real,
+    running ovos-docker install's actual container names (ovos_core,
+    ovos_audio, ovos_listener, ovos_messagebus, ovos_phal,
+    ovos_phal_admin, ovos_skill_*, plus a few - ovos_cli,
+    ovos_plugin_ggwave - that don't map to anything and land in
+    "other").
+
+    Pattern-matched, not an exhaustive lookup table - "ovos_skill_"
+    (any suffix) always maps to "skills", matching how every
+    individual skill already shares ONE skills.log file on a normal
+    install, not one file per skill. "ovos_core" also maps to
+    "skills" specifically because its own log content (intent-service/
+    pipeline handling) is exactly what already lands in skills.log on
+    a normal install - confirmed by comparing real log line prefixes
+    between a systemd install and this container's own output."""
+    n = name.lower()
+    if n.startswith("ovos_skill") or n == "ovos_core":
+        return "skills"
+    if n == "ovos_audio":
+        return "audio"
+    if n == "ovos_listener":
+        return "voice"
+    if n == "ovos_messagebus":
+        return "bus"
+    if n.startswith("ovos_phal"):
+        return "phal"
+    if "gui" in n:
+        return "gui"
+    return "other"
+
+
 def start_container_log_bridges(container_names, target_dir):
-    """For each container name, starts 'docker logs -f <name>' (or
-    podman, whichever detect_container_runtime() would have used) with
-    its combined stdout+stderr redirected into target_dir/<name>.log -
-    then that directory can be handed to discover_log_sources() and
-    treated exactly like any other log directory, reusing 100% of the
-    existing file-tailing/filtering machinery. No new "log source"
-    abstraction needed inside the app itself.
+    """Bridges Docker/Podman container stdout into the SAME small set
+    of log files a normal file-based install already produces
+    (skills.log, audio.log, voice.log, bus.log, phal.log, plus
+    other.log for anything uncategorized - see
+    categorize_container_name() above) - not one file per container.
+    Then that directory can be handed to discover_log_sources() (its
+    DEFAULT KNOWN_LOG_NAMES, no override needed) and treated exactly
+    like any other log directory, reusing 100% of the existing
+    file-tailing/coloring/filtering machinery, including the Sources:
+    checkboxes actually being a small, meaningful set instead of one
+    checkbox per container.
+
+    Multiple containers sharing a category (most commonly "skills" -
+    every ovos_skill_* container) each get their OWN `docker logs -f`
+    subprocess, but all of them append to the SAME shared file -
+    concurrent appends from separate processes are safe here without
+    explicit locking, since POSIX guarantees a single write() to a
+    file opened with O_APPEND is atomic as long as it's smaller than
+    PIPE_BUF (4096 bytes on Linux) - true for any normal single log
+    line.
 
     This exists because a confirmed real gap (see the discussion that
     led here): on a Docker/Podman install following ovos-docker's own
@@ -173,15 +229,6 @@ def start_container_log_bridges(container_names, target_dir):
     bridges that gap by making container stdout look like an ordinary
     log file, rather than teaching the app a second, parallel way to
     receive log lines.
-
-    Log source NAMES intentionally come from the container names
-    themselves (e.g. "ovos_core", "ovos_audio"), not a hardcoded
-    container->service mapping - the exact mapping isn't fully
-    confirmed for every core service (see issue #24's own notes on
-    this), and guessing wrong would silently mislabel things. Using
-    the container's own name sidesteps that entirely: whatever it's
-    actually called is what shows up, no mapping table to get wrong or
-    keep in sync as ovos-docker's own naming evolves.
 
     Returns a list of subprocess.Popen handles - the caller owns their
     lifecycle and MUST terminate them (e.g. on app quit); they are not
@@ -193,7 +240,8 @@ def start_container_log_bridges(container_names, target_dir):
     target_dir.mkdir(parents=True, exist_ok=True)
     handles = []
     for name in container_names:
-        log_path = target_dir / f"{name}.log"
+        category = categorize_container_name(name)
+        log_path = target_dir / f"{category}.log"
         log_file = open(log_path, "a")
         try:
             proc = subprocess.Popen(

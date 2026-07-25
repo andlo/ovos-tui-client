@@ -578,7 +578,16 @@ class OVOSTUIApp(App):
                 self.log_bridge_handles = start_container_log_bridges(containers, bridge_dir)
                 if self.log_bridge_handles:
                     self.log_dir = bridge_dir
-                    self.log_sources = discover_log_sources(bridge_dir, names=containers)
+                    # No `names=` override here - start_container_log_
+                    # bridges() groups containers into the SAME
+                    # skills.log/audio.log/etc filenames a normal
+                    # install already uses (see
+                    # categorize_container_name()), not one file per
+                    # container, so the default KNOWN_LOG_NAMES
+                    # already finds them - same coloring, same
+                    # Sources: checkboxes, no special-casing needed
+                    # here at all.
+                    self.log_sources = discover_log_sources(bridge_dir)
                     bridged = True
                     self._write_status(
                         f"No log files, but bridged {len(containers)} Docker/Podman "

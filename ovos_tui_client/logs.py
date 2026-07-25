@@ -32,6 +32,7 @@ CANDIDATE_LOG_DIRS = [
 # since which one exists depends on install age.
 KNOWN_LOG_NAMES = [
     "bus", "skills", "audio", "media", "voice", "gui", "enclosure", "phal",
+    "other",  # Docker/Podman bridge catch-all - see services.py's categorize_container_name()
 ]
 
 
