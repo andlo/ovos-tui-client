@@ -109,13 +109,26 @@ documentation directly, not guessed at:
   and points at `docker logs <container>` / `docker compose logs -f`
   directly.
 - **Services** run as containers, not background services this tool
-  can query the usual way - it detects this and says so explicitly,
-  listing the running containers, rather than just showing an
+  can query the usual way - it detects this and says so explicitly
+  (with a count, not a list of every container name - `docker ps`/
+  `podman ps` already exists for that), rather than just showing an
   unexplained empty result. Restarting a container from here isn't
   supported yet.
+- **Skills** - `Skill: ` activate/deactivate can be very limited on a
+  distributed, one-container-per-skill install: `skillmanager.list`
+  (the bus message this relies on) only reports skills loaded in the
+  same process as whichever component answers it, which on this kind
+  of install is basically nothing - confirmed directly against a real
+  install. Not a bug in this tool specifically; there isn't currently
+  a bus message with full visibility across a distributed skill
+  deployment (tracked in issue #26).
 - **Pipeline** - see `--mycroft-conf` above; also confirmed against
   `ovos-docker`'s real `.env` variables (`OVOS_CONFIG_FOLDER`,
   default `/home/ovos/ovos/config`), not assumed.
+- One real quirk worth knowing about: on some installs `ovos-messagebus`
+  runs as a native binary that logs via stdout/the systemd journal
+  rather than a file - if a `bus` source never shows up even though
+  everything else does, that's likely why, not a bug here.
 
 ## Why not just fix ovos-cli-client / neon-cli-client?
 
