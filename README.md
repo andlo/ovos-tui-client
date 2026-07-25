@@ -170,16 +170,23 @@ is a real, deliberate security tradeoff - it hands this container
 effective control over the host's whole Docker daemon - so it's
 opt-in, not a default.
 
-If mounted, the container's own non-root user often won't have
-permission to use the socket as-is (confirmed: a plain UID match
-alone isn't enough under rootless Podman specifically - your exact
-fix may vary by host setup). `--user root` on `docker run` is the
-usual quick fix for a standard `dockerd` install where the socket is
-`root:docker`-owned; matching the host's `docker` group GID is the
-more targeted alternative if running as root isn't appealing. Exact
-behavior depends on your host's specific Docker/Podman setup enough
-that it's worth just trying it and adjusting rather than treating any
-one fix here as guaranteed.
+If mounted, the container's own non-root user won't have permission to
+use the socket as-is. `--user root` on `docker run` fixes this on a
+standard `dockerd` install (confirmed working) - matching the group
+GID owning the socket instead is the more targeted alternative if
+running as root isn't appealing:
+
+```bash
+docker run -it --rm --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  --user root \
+  ghcr.io/andlo/ovos-tui-client:latest
+```
+
+Confirmed NOT sufficient on its own under rootless Podman specifically
+(even `--user root` didn't help there in testing) - if you're on
+Podman rather than a standard root-owned `dockerd` socket, this may
+need more digging into your specific setup.
 
 Images are tagged by version (`:0.1.17`) and `:latest`, built and
 published automatically on every release.
