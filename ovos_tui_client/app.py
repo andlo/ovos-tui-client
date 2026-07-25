@@ -71,7 +71,7 @@ from ovos_tui_client.logs import (
     extract_log_level, extract_skill_id, KNOWN_LOG_NAMES, KNOWN_LOG_LEVELS,
 )
 from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges
-from ovos_tui_client.state import load_filter_state, save_filter_state
+from ovos_tui_client.state import load_filter_state, save_filter_state, load_input_history, save_input_history
 
 LOG_POLL_INTERVAL = 0.5  # seconds
 LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
@@ -512,7 +512,14 @@ class OVOSTUIApp(App):
                     # Sources: checkboxes, no special-casing needed
                     # here at all.
                     self.log_sources = discover_log_sources(bridge_dir)
-        self.utterance_history = []
+        # Restored from disk (see state.py) so Up/Down-arrow browsing
+        # still has last session's utterances available, not just
+        # whatever gets typed in THIS session - previously reset to
+        # empty every launch. history_index stays None (not "at the
+        # oldest saved entry") so the FIRST Up press lands on the most
+        # recent saved utterance, matching how it already behaves
+        # within a single session.
+        self.utterance_history = load_input_history()
         self.history_index = None
         self.log_buffer = deque(maxlen=LOG_BUFFER_SIZE)
         self.log_filter_text = ""
@@ -980,12 +987,21 @@ class OVOSTUIApp(App):
         (F3), and Skill-filter (F4) modals are gone entirely, replaced
         by palette entries + conversation-pane output.
 
-        Textual's own default 'Screenshot' and 'Keys' commands are
-        filtered out (see the loop below). Screenshot isn't useful for
-        this tool. Keys is filtered because it's the exact same
+        Textual's own default 'Keys' command (titled "Show keys and
+        help panel" in the actual palette, not literally "Keys" -
+        confirmed directly; a previous version of this filter checked
+        for "Keys" and "Screenshot" as exact titles, which never
+        actually matched either real title and silently filtered
+        nothing at all) is filtered out below - it's the exact same
         show-help-panel action our own 'Help: Toggle panel' entry
-        below already calls - keeping both would just be two entries
-        doing the same thing under different names.
+        already calls, so keeping both would just be two entries doing
+        the same thing under different names. 'Screenshot' (titled
+        "Save screenshot" - saves an SVG snapshot of the current
+        terminal view) is deliberately kept: an earlier pass through
+        this file tried to filter it out as "not useful for this
+        tool", but that's been reconsidered - an SVG capture of
+        exactly what's on screen is a genuinely handy way to save or
+        share a specific debugging moment.
 
         No separate description/help line under any entry - state
         (checked/unchecked, active/inactive) is embedded directly in
@@ -994,7 +1010,7 @@ class OVOSTUIApp(App):
         already work. One line per command everywhere, nothing more
         than necessary shown."""
         for cmd in super().get_system_commands(screen):
-            if cmd.title not in ("Screenshot", "Keys"):
+            if "help panel" not in cmd.title.lower():
                 yield cmd
         yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
         yield SystemCommand("Focus: Logs", "", self.action_focus_logs)
@@ -1102,16 +1118,18 @@ class OVOSTUIApp(App):
         self.query_one("#utterance-input", Input).focus()
 
     async def action_quit(self) -> None:
-        """Overrides Textual's default just to save filter state first
-        (state.py) - so Sources/Levels/Skills choices survive to the
-        next session. save_filter_state() never raises, so this can't
-        turn a normal quit into a crash. Also terminates any Docker/
-        Podman log-bridge subprocesses (see on_mount()'s docstring
-        note on start_container_log_bridges()) - without this they'd
-        be orphaned, continuing to run and write to a temp directory
-        nobody's reading from anymore."""
+        """Overrides Textual's default just to save filter state and
+        input history first (state.py) - so Sources/Levels/Skills
+        choices and Up/Down-arrow utterance history both survive to
+        the next session. Neither save function ever raises, so this
+        can't turn a normal quit into a crash. Also terminates any
+        Docker/Podman log-bridge subprocesses (see on_mount()'s
+        docstring note on start_container_log_bridges()) - without
+        this they'd be orphaned, continuing to run and write to a temp
+        directory nobody's reading from anymore."""
         checked_sources = {s.name: s.enabled for s in self.log_sources}
         save_filter_state(checked_sources, dict(self.level_enabled), dict(self.skill_enabled))
+        save_input_history(self.utterance_history)
         stop_container_log_bridges(self.log_bridge_handles)
         await super().action_quit()
 

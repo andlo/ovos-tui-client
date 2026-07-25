@@ -306,22 +306,27 @@ async def test_log_toggle_titles_share_a_common_prefix_for_palette_grouping(tmp_
         assert any("Level" in t for t in log_titles)
 
 
-# --- Screenshot command filtered out ---
+# --- Screenshot command available ---
 
 @pytest.mark.asyncio
-async def test_screenshot_command_is_filtered_out(tmp_path):
-    """Textual's default 'Screenshot' system command is noise for this
-    tool - explicitly removed."""
+async def test_screenshot_command_is_available(tmp_path):
+    """Textual's default screenshot system command (real title: "Save
+    screenshot", not literally "Screenshot" - confirmed directly) used
+    to be filtered out here as "not useful for this tool" -
+    reconsidered: it's a genuinely handy way to save/share a specific
+    debugging moment, and Textual already provides it for free, so
+    it's no longer filtered."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
-        assert "Screenshot" not in titles
+        assert any("screenshot" in t.lower() for t in titles)
 
 
 @pytest.mark.asyncio
 async def test_other_textual_defaults_are_not_filtered(tmp_path):
-    """Confirms the filter is specific to 'Screenshot', not a blanket
-    removal of Textual's own defaults (e.g. Quit/Theme should stay)."""
+    """Confirms the filter is specific to 'Keys' (redundant with our
+    own 'Help: Toggle panel'), not a blanket removal of Textual's own
+    defaults (e.g. Quit/Theme/Screenshot should stay)."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
@@ -511,19 +516,20 @@ async def test_skill_filter_search_has_no_hits_when_none_discovered_yet(tmp_path
         assert hits == []
 
 
-# --- Textual defaults filtered: Screenshot AND Keys ---
+# --- Textual defaults filtered: Keys only (Screenshot stays) ---
 
 @pytest.mark.asyncio
 async def test_keys_command_is_filtered_out(tmp_path):
-    """'Keys' is Textual's own default trigger for the exact same
-    show-help-panel action our own 'Help: Toggle panel' entry already
-    calls - keeping both would just be two entries doing the same
-    thing under different names."""
+    """The 'help panel' toggle command (real title: "Show keys and help
+    panel", not literally "Keys" - confirmed directly) is Textual's own
+    default trigger for the exact same show-help-panel action our own
+    'Help: Toggle panel' entry already calls - keeping both would just
+    be two entries doing the same thing under different names."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
-        assert "Keys" not in titles
-        assert "Screenshot" not in titles
+        assert not any("help panel" in t.lower() and t != "Help: Toggle panel" for t in titles)
+        assert any("screenshot" in t.lower() for t in titles)
 
 
 # --- boot-sequence narration + version number ---

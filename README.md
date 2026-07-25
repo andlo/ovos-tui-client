@@ -205,7 +205,7 @@ Confirmed NOT sufficient on its own under rootless Podman specifically
 Podman rather than a standard root-owned `dockerd` socket, this may
 need more digging into your specific setup.
 
-Images are tagged by version (`:0.1.19`) and `:latest`, built and
+Images are tagged by version (`:0.1.20`) and `:latest`, built and
 published automatically on every release.
 
 ## Why not just fix ovos-cli-client / neon-cli-client?
