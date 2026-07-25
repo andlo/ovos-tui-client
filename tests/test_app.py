@@ -164,7 +164,7 @@ async def test_no_log_sources_bridges_docker_containers_when_possible(tmp_path):
             assert app.log_bridge_handles == [fake_proc]
             conv = app.query_one("#conversation", RichLog)
             conv_text = "\n".join(str(line) for line in conv.lines)
-            assert "bridged" in conv_text.lower()
+            assert "containers in use" in conv_text.lower()
 
 
 @pytest.mark.asyncio
@@ -195,6 +195,29 @@ async def test_bridged_sources_get_real_sources_checkboxes(tmp_path):
             checkbox = app.query_one("#toggle-source-skills", Checkbox)
             assert checkbox is not None
             assert checkbox.value is True  # Sources start checked, per existing filter semantics
+
+
+@pytest.mark.asyncio
+async def test_services_boot_line_on_containers_does_not_enumerate_every_one(tmp_path):
+    """The Services: boot line used to list every single detected
+    container name, one per line - unwieldy on a real ovos-docker
+    install (confirmed: 26 containers = 26 lines just for this one
+    status message). Now states the count and the one relevant fact
+    (start/stop not supported here yet) without the enumeration -
+    `docker ps`/`podman ps` is the right place to see the full list
+    if actually needed."""
+    app = _app_with_fake_bus(tmp_path)
+    container_names = [f"ovos_skill_{i}" for i in range(26)]
+    with patch("ovos_tui_client.app.discover_services_with_state", return_value=[]), \
+         patch("ovos_tui_client.app.detect_container_runtime", return_value=container_names):
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            conv = app.query_one("#conversation", RichLog)
+            text = "\n".join(str(line) for line in conv.lines)
+            assert "26 container" in text.lower()
+            assert "start/stop" in text.lower()
+            for name in container_names:
+                assert name not in text
 
 
 @pytest.mark.asyncio

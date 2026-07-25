@@ -599,8 +599,8 @@ class OVOSTUIApp(App):
             # docstring note for why) - just report the outcome now
             # that the conversation pane actually exists to write to.
             self._write_status(
-                f"No log files, but bridged {len(self._bridge_containers_detected)} Docker/Podman "
-                f"container(s) via `logs -f` instead - see issue #24"
+                f"Containers in use ({len(self._bridge_containers_detected)} found) - "
+                f"bridging logs via `logs -f` - see issue #24"
             )
         elif not self.log_sources:
             # Three-tier message, most precise first:
@@ -715,11 +715,11 @@ class OVOSTUIApp(App):
         else:
             containers = detect_container_runtime()
             if containers:
-                lines = ["Services: not managed via systemd - looks like a Docker/Podman install:"]
-                for name in containers:
-                    lines.append(f"    {name}")
-                lines.append("    (start/stop/restart from here isn't supported yet for containers - see `docker/podman ps`)")
-                self.call_from_thread(self._write_status, "\n".join(lines))
+                self.call_from_thread(
+                    self._write_status,
+                    f"Services: {len(containers)} container(s) in use - "
+                    f"start/stop from here isn't supported yet for containers"
+                )
             else:
                 self.call_from_thread(self._write_status, "Services: none found")
         self.call_from_thread(self._finish_startup)
