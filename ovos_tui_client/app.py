@@ -78,7 +78,11 @@ LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped 
 SOURCE_TAG_WIDTH = max(len(name) for name in KNOWN_LOG_NAMES)
 
 LOG_SOURCE_COLORS = {
-    "bus": "magenta", "skills": "green", "audio": "yellow", "media": "yellow",
+    # bus is deliberately muted (bright_black, not a vivid color) - bus
+    # traffic is by far the highest-volume, most constant category, so
+    # giving it a loud color would dominate the pane visually far more
+    # than its actual importance warrants.
+    "bus": "bright_black", "skills": "green", "audio": "yellow", "media": "yellow",
     "voice": "cyan", "gui": "blue", "enclosure": "white", "phal": "red",
 }
 DEFAULT_LOG_COLOR = "white"
