@@ -101,14 +101,21 @@ async def test_no_log_sources_on_a_docker_install_explains_stdout_logging(tmp_pa
     forcing that path rather than depending on whatever this sandbox's
     own real docker/podman happens to do with a nonexistent
     container). is_stdout_only_logging() is also explicitly mocked to
-    False so the test exercises the tier-2 wording specifically."""
+    False so the test exercises the tier-2 wording specifically.
+
+    detect_container_runtime()/start_container_log_bridges() are now
+    called from __init__(), not on_mount() (see __init__'s own
+    docstring note on why - compose() runs before on_mount() and
+    needs self.log_sources to already be correct) - so the patches
+    must wrap the OVOSTUIApp(...) construction itself, not just
+    run_test()."""
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
-    app = OVOSTUIApp(log_dir_override=str(empty_dir))
-    app.bus = MagicMock()
     with patch("ovos_tui_client.app.detect_container_runtime", return_value=["ovos-core", "ovos-audio"]), \
          patch("ovos_tui_client.app.start_container_log_bridges", return_value=[]), \
          patch("ovos_tui_client.app.is_stdout_only_logging", return_value=False):
+        app = OVOSTUIApp(log_dir_override=str(empty_dir))
+        app.bus = MagicMock()
         async with app.run_test() as pilot:
             text = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
             assert "docker" in text.lower() or "podman" in text.lower()
@@ -122,19 +129,21 @@ async def test_no_log_sources_bridges_docker_containers_when_possible(tmp_path):
     including the container-name -> category grouping, is covered
     separately in test_services.py) - the app should pick up the
     bridged sources and NOT show the "no logs found" fallback message
-    at all."""
+    at all.
+
+    Bridging now happens in __init__() (see that docstring note), so
+    the OVOSTUIApp(...) construction itself must be inside the patch
+    block, not just run_test()."""
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
-    app = OVOSTUIApp(log_dir_override=str(empty_dir))
-    app.bus = MagicMock()
     fake_proc = MagicMock()
 
     def fake_bridge(container_names, target_dir):
         # simulates what the real function would have done: create
-        # the log file(s) in whatever temp dir on_mount() actually
+        # the log file(s) in whatever temp dir __init__() actually
         # created (a real tempfile.mkdtemp() call, not something this
         # test can predict ahead of time - so writing it here, once
-        # on_mount() passes in the real path, is the reliable way to
+        # __init__() passes in the real path, is the reliable way to
         # populate it before the (unmocked) discover_log_sources() call
         # right after this one runs). "ovos_core" categorizes to
         # "skills" (see categorize_container_name()), so the file is
@@ -147,6 +156,8 @@ async def test_no_log_sources_bridges_docker_containers_when_possible(tmp_path):
 
     with patch("ovos_tui_client.app.detect_container_runtime", return_value=["ovos_core"]), \
          patch("ovos_tui_client.app.start_container_log_bridges", side_effect=fake_bridge):
+        app = OVOSTUIApp(log_dir_override=str(empty_dir))
+        app.bus = MagicMock()
         async with app.run_test() as pilot:
             assert len(app.log_sources) == 1
             assert app.log_sources[0].name == "skills"
@@ -157,21 +168,53 @@ async def test_no_log_sources_bridges_docker_containers_when_possible(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_bridged_sources_get_real_sources_checkboxes(tmp_path):
+    """Real bug found via live testing on an actual ovos-docker
+    install: bridging used to happen in on_mount(), but compose()
+    (which builds the Sources: checkboxes FROM self.log_sources at
+    that point in time) runs BEFORE on_mount() - so self.log_sources
+    ended up correctly populated, but zero checkboxes ever existed for
+    it; the Sources: row was simply empty despite log tailing actually
+    working. Moving the bridge attempt into __init__() (before
+    compose() ever runs) fixes this - this test is the direct
+    regression check for it."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    fake_proc = MagicMock()
+
+    def fake_bridge(container_names, target_dir):
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / "skills.log").write_text("")
+        return [fake_proc]
+
+    with patch("ovos_tui_client.app.detect_container_runtime", return_value=["ovos_core"]), \
+         patch("ovos_tui_client.app.start_container_log_bridges", side_effect=fake_bridge):
+        app = OVOSTUIApp(log_dir_override=str(empty_dir))
+        app.bus = MagicMock()
+        async with app.run_test() as pilot:
+            checkbox = app.query_one("#toggle-source-skills", Checkbox)
+            assert checkbox is not None
+            assert checkbox.value is True  # Sources start checked, per existing filter semantics
+
+
+@pytest.mark.asyncio
 async def test_no_log_sources_with_confirmed_stdout_logging_is_definitive(tmp_path):
     """Tier 1 - is_stdout_only_logging() confirmed True (read directly
     from mycroft.conf via ovos_utils.log, not inferred from container
     detection) - the message should be worded as a fact, not a guess."""
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
-    app = OVOSTUIApp(log_dir_override=str(empty_dir))
-    app.bus = MagicMock()
     # detect_container_runtime() is mocked here too (returning []) only
     # to keep the unrelated Services: boot line deterministic in this
     # test - it's a separate code path (_check_services_worker) that
     # calls the same function for a different purpose, not something
-    # this test's own logs-message logic depends on.
+    # this test's own logs-message logic depends on. Still needs to
+    # wrap construction since __init__() also calls it now (to decide
+    # whether to attempt bridging).
     with patch("ovos_tui_client.app.detect_container_runtime", return_value=[]), \
          patch("ovos_tui_client.app.is_stdout_only_logging", return_value=True):
+        app = OVOSTUIApp(log_dir_override=str(empty_dir))
+        app.bus = MagicMock()
         async with app.run_test() as pilot:
             text = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
             assert "stdout" in text.lower()

@@ -479,7 +479,38 @@ class OVOSTUIApp(App):
         self.log_dir = find_log_dir(override=log_dir_override, is_local=self.is_local)
         self.log_sources = discover_log_sources(self.log_dir)
         self.mycroft_conf_override = mycroft_conf_override
-        self.log_bridge_handles = []  # subprocess.Popen list from start_container_log_bridges(), see on_mount()/action_quit()
+        self.log_bridge_handles = []  # subprocess.Popen list from start_container_log_bridges(), see action_quit()
+        # Real bug found via live testing on an actual ovos-docker
+        # install: this Docker/Podman log-bridge attempt used to live
+        # in on_mount(), but compose() (which builds the Sources:
+        # checkboxes FROM self.log_sources) runs BEFORE on_mount() -
+        # so even though bridging correctly populated self.log_sources
+        # eventually, it was always too late for the checkboxes to
+        # ever be built for the bridged sources. Confirmed directly:
+        # log_sources showed the right names, but zero Sources:
+        # checkboxes existed for them at all. Moved here instead,
+        # since __init__ runs before compose() and there's nothing
+        # UI-dependent about starting the bridge itself (only the
+        # conversation-pane MESSAGE about it needs to wait for
+        # on_mount(), once the widgets actually exist - see there).
+        self._bridge_containers_detected = []
+        if not self.log_sources:
+            self._bridge_containers_detected = detect_container_runtime()
+            if self._bridge_containers_detected:
+                bridge_dir = Path(tempfile.mkdtemp(prefix="ovos-tui-docker-logs-"))
+                self.log_bridge_handles = start_container_log_bridges(self._bridge_containers_detected, bridge_dir)
+                if self.log_bridge_handles:
+                    self.log_dir = bridge_dir
+                    # No `names=` override here - start_container_log_
+                    # bridges() groups containers into the SAME
+                    # skills.log/audio.log/etc filenames a normal
+                    # install already uses (see
+                    # categorize_container_name()), not one file per
+                    # container, so the default KNOWN_LOG_NAMES
+                    # already finds them - same coloring, same
+                    # Sources: checkboxes, no special-casing needed
+                    # here at all.
+                    self.log_sources = discover_log_sources(bridge_dir)
         self.utterance_history = []
         self.history_index = None
         self.log_buffer = deque(maxlen=LOG_BUFFER_SIZE)
@@ -563,84 +594,57 @@ class OVOSTUIApp(App):
            well-intentioned."""
         self._write_status(f"ovos-tui-client v{_ovos_tui_version()}")
 
-        if not self.log_sources:
-            # Try the Docker/Podman log bridge FIRST (see
-            # start_container_log_bridges()'s own docstring) whenever
-            # a container install is plausible - only falls through to
-            # an explanatory message if that genuinely doesn't pan out
-            # (no docker/podman binary despite containers being
-            # visible, or no containers at all). Both tiers below are
-            # "is a container install plausible", not "is it
-            # confirmed" - is_stdout_only_logging() being True doesn't
-            # change whether the bridge is worth trying, it just
-            # changes how the FALLBACK message is worded if the bridge
-            # itself doesn't work out.
-            bridged = False
-            containers = detect_container_runtime()
-            if containers:
-                bridge_dir = Path(tempfile.mkdtemp(prefix="ovos-tui-docker-logs-"))
-                self.log_bridge_handles = start_container_log_bridges(containers, bridge_dir)
-                if self.log_bridge_handles:
-                    self.log_dir = bridge_dir
-                    # No `names=` override here - start_container_log_
-                    # bridges() groups containers into the SAME
-                    # skills.log/audio.log/etc filenames a normal
-                    # install already uses (see
-                    # categorize_container_name()), not one file per
-                    # container, so the default KNOWN_LOG_NAMES
-                    # already finds them - same coloring, same
-                    # Sources: checkboxes, no special-casing needed
-                    # here at all.
-                    self.log_sources = discover_log_sources(bridge_dir)
-                    bridged = True
-                    self._write_status(
-                        f"No log files, but bridged {len(containers)} Docker/Podman "
-                        f"container(s) via `logs -f` instead - see issue #24"
-                    )
-
-            if not bridged:
-                # Three-tier message, most precise first:
-                # 1. is_stdout_only_logging() - a DEFINITIVE answer,
-                #    not a guess: reads the actual configured
-                #    logging.path via ovos_utils.log (only meaningful
-                #    when self.is_local - see __init__'s note).
-                # 2. detect_container_runtime() - a real Docker/Podman
-                #    install detected (but the bridge attempt above
-                #    still didn't work out, e.g. no docker/podman
-                #    binary actually runnable despite containers being
-                #    listed) - an informed guess, worded accordingly.
-                # 3. generic fallback - genuinely no idea, point at
-                #    --log-dir.
-                if is_stdout_only_logging(is_local=self.is_local):
-                    msg = (
-                        "[yellow]No log files - logging.path is configured as \"stdout\" "
-                        "(confirmed from mycroft.conf, not guessed), and no Docker/Podman "
-                        "container could be bridged either. Use `docker logs <container>` / "
-                        "`docker compose logs -f` directly instead.[/yellow]"
-                    )
-                elif containers:
-                    msg = (
-                        "[yellow]No log files found, and bridging the detected Docker/Podman "
-                        "container(s) didn't work out (no usable `docker`/`podman` binary?) - "
-                        "use `docker logs <container>` / `docker compose logs -f` directly "
-                        "instead.[/yellow]"
-                    )
-                else:
-                    msg = (
-                        f"[yellow]No known log files found"
-                        + (f" in {self.log_dir}" if self.log_dir else " in any candidate directory")
-                        + ". Pass --log-dir to point at the right one.[/yellow]"
-                    )
-                self._write_to_log(self.query_one("#logs-view", RichLog), msg)
-
-            if self.log_sources:
-                names = ", ".join(src.name for src in self.log_sources)
-                self._write_status(f"Logs found and loaded: {names}")
+        if self.log_bridge_handles:
+            # Bridging already happened in __init__() (see that
+            # docstring note for why) - just report the outcome now
+            # that the conversation pane actually exists to write to.
+            self._write_status(
+                f"No log files, but bridged {len(self._bridge_containers_detected)} Docker/Podman "
+                f"container(s) via `logs -f` instead - see issue #24"
+            )
+        elif not self.log_sources:
+            # Three-tier message, most precise first:
+            # 1. is_stdout_only_logging() - a DEFINITIVE answer,
+            #    not a guess: reads the actual configured
+            #    logging.path via ovos_utils.log (only meaningful
+            #    when self.is_local - see __init__'s note).
+            # 2. self._bridge_containers_detected - a real Docker/
+            #    Podman install was detected in __init__ (but bridging
+            #    still didn't work out, e.g. no docker/podman binary
+            #    actually runnable despite containers being listed) -
+            #    an informed guess, worded accordingly.
+            # 3. generic fallback - genuinely no idea, point at
+            #    --log-dir.
+            if is_stdout_only_logging(is_local=self.is_local):
+                msg = (
+                    "[yellow]No log files - logging.path is configured as \"stdout\" "
+                    "(confirmed from mycroft.conf, not guessed), and no Docker/Podman "
+                    "container could be bridged either. Use `docker logs <container>` / "
+                    "`docker compose logs -f` directly instead.[/yellow]"
+                )
+            elif self._bridge_containers_detected:
+                msg = (
+                    "[yellow]No log files found, and bridging the detected Docker/Podman "
+                    "container(s) didn't work out (no usable `docker`/`podman` binary?) - "
+                    "use `docker logs <container>` / `docker compose logs -f` directly "
+                    "instead.[/yellow]"
+                )
             else:
-                self._write_status("Logs found and loaded: none")
-        else:
+                msg = (
+                    f"[yellow]No known log files found"
+                    + (f" in {self.log_dir}" if self.log_dir else " in any candidate directory")
+                    + ". Pass --log-dir to point at the right one.[/yellow]"
+                )
+            self._write_to_log(self.query_one("#logs-view", RichLog), msg)
+
+        # Always reports the FINAL state, regardless of which branch
+        # above ran (normal discovery, successful bridging, or
+        # neither) - one line, no duplicated logic.
+        if self.log_sources:
             names = ", ".join(src.name for src in self.log_sources)
             self._write_status(f"Logs found and loaded: {names}")
+        else:
+            self._write_status("Logs found and loaded: none")
         self._update_skills_status()
 
         self.bus.on_speak(self._handle_speak)
