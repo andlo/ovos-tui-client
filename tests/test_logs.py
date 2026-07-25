@@ -231,8 +231,16 @@ def test_find_log_dir_override_skips_ovos_utils_too(tmp_path):
 def test_find_log_dir_handles_ovos_utils_import_error_gracefully(tmp_path):
     """ovos_utils is a real dependency now, but this must not hard-crash
     if it's ever genuinely unavailable in some environment - falls
-    through to guessing instead."""
-    with patch("builtins.__import__", side_effect=ImportError("no ovos_utils")):
+    through to guessing instead.
+
+    Patches get_log_paths() to raise ImportError WHEN CALLED (still
+    caught, since the call itself happens inside the same try/except
+    ImportError block as the import statement in find_log_dir()) -
+    NOT via mocking builtins.__import__ globally, which is too blunt
+    an instrument: it also breaks unittest.mock.patch's own internal
+    machinery (patch() needs to import things too), a real failure
+    seen in CI on Python 3.9 specifically."""
+    with patch("ovos_utils.log.get_log_paths", side_effect=ImportError("no ovos_utils")):
         with patch("ovos_tui_client.logs.CANDIDATE_LOG_DIRS", []):
             result = find_log_dir(is_local=True)  # must not raise
     assert result is None
