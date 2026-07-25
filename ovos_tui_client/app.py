@@ -995,23 +995,22 @@ class OVOSTUIApp(App):
         nothing at all) is filtered out below - it's the exact same
         show-help-panel action our own 'Help: Toggle panel' entry
         already calls, so keeping both would just be two entries doing
-        the same thing under different names. 'Screenshot' (titled
-        "Save screenshot" - saves an SVG snapshot of the current
-        terminal view) is deliberately kept: an earlier pass through
-        this file tried to filter it out as "not useful for this
-        tool", but that's been reconsidered - an SVG capture of
-        exactly what's on screen is a genuinely handy way to save or
-        share a specific debugging moment.
+        the same thing under different names.
 
-        No separate description/help line under any entry - state
-        (checked/unchecked, active/inactive) is embedded directly in
-        the title text instead (e.g. "Log: Source: skills
-        (checked)"), matching how the dynamic Provider-based entries
-        already work. One line per command everywhere, nothing more
-        than necessary shown."""
+        Textual's own default 'Save screenshot' command is ALSO
+        filtered out here, replaced with our own below - not because
+        the feature isn't wanted (it is), but because Textual's own
+        version saves to the current working directory by default,
+        which real testing confirmed fails with "Failed to save
+        screenshot" whenever that directory isn't writable - reliably
+        the case inside the companion container specifically (WORKDIR
+        /app is root-owned, the container runs as a non-root user).
+        Our replacement passes an explicit, always-writable path
+        (the user's home directory) instead."""
         for cmd in super().get_system_commands(screen):
-            if "help panel" not in cmd.title.lower():
+            if "help panel" not in cmd.title.lower() and cmd.title != "Save screenshot":
                 yield cmd
+        yield SystemCommand("Save screenshot", "", self._save_screenshot)
         yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
         yield SystemCommand("Focus: Logs", "", self.action_focus_logs)
         yield SystemCommand("Focus: Conversation", "", self.action_focus_conversation)
@@ -1083,6 +1082,29 @@ class OVOSTUIApp(App):
         for skill_id in self.skill_enabled:
             self.skill_enabled[skill_id] = False
         self._rerender_logs()
+
+    def _save_screenshot(self) -> None:
+        """Replacement for Textual's own default 'Save screenshot'
+        command - see get_system_commands()'s docstring for why this
+        exists instead of just using Textual's built-in one directly
+        (it defaults to the current working directory, which real
+        testing confirmed isn't reliably writable, especially inside
+        the companion container). Home directory instead - always
+        exists, always writable by the user running this tool, and is
+        already where this tool keeps its own state (state.py).
+
+        Scheduled via set_timer(), same as Textual's own version -
+        matters because the command palette itself is still visually
+        on screen at the exact moment this callback fires, and would
+        otherwise end up IN the screenshot rather than showing the app
+        underneath it."""
+        def _do_save():
+            try:
+                path = self.deliver_screenshot(path=str(Path.home()))
+                self._write_status(f"Screenshot saved to {path}" if path else "Screenshot saved")
+            except Exception as e:
+                self._write_status(f"Failed to save screenshot: {e}")
+        self.set_timer(0.1, _do_save)
 
     def action_toggle_help_panel(self) -> None:
         """F1 (and 'Help: Toggle panel' in the Command Palette) toggle

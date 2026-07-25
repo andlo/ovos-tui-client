@@ -315,11 +315,49 @@ async def test_screenshot_command_is_available(tmp_path):
     to be filtered out here as "not useful for this tool" -
     reconsidered: it's a genuinely handy way to save/share a specific
     debugging moment, and Textual already provides it for free, so
-    it's no longer filtered."""
+    it's no longer filtered - though see the next test, it's actually
+    OUR OWN replacement command by this point, not Textual's default
+    one directly (same title, different implementation)."""
     app = _app_with_fake_bus(tmp_path)
     async with app.run_test() as pilot:
         titles = [cmd.title for cmd in app.get_system_commands(app.screen)]
         assert any("screenshot" in t.lower() for t in titles)
+
+
+@pytest.mark.asyncio
+async def test_save_screenshot_uses_home_directory_not_cwd(tmp_path):
+    """Real bug found via live testing: Textual's own default 'Save
+    screenshot' command saves to the current working directory, which
+    isn't reliably writable - confirmed failing inside the companion
+    container specifically (WORKDIR /app is root-owned, container runs
+    as a non-root user), with a real "Failed to save screenshot" error
+    shown to the user. Our own replacement command passes an explicit
+    home-directory path instead - this confirms it does, without
+    actually writing a real screenshot file (deliver_screenshot itself
+    is Textual's own, already-tested machinery, not something this
+    project needs to re-verify)."""
+    from pathlib import Path
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        with patch.object(app, "deliver_screenshot", return_value="/home/fake/screenshot.svg") as mock_deliver:
+            app._save_screenshot()
+            await pilot.pause(0.2)  # the real command schedules via set_timer(0.1, ...)
+        mock_deliver.assert_called_once_with(path=str(Path.home()))
+        conv = app.query_one("#conversation", RichLog)
+        text = "\n".join(str(line) for line in conv.lines)
+        assert "screenshot.svg" in text.lower() or "saved" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_save_screenshot_reports_failure_without_crashing(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        with patch.object(app, "deliver_screenshot", side_effect=OSError("disk full")):
+            app._save_screenshot()
+            await pilot.pause(0.2)  # must not raise
+        conv = app.query_one("#conversation", RichLog)
+        text = "\n".join(str(line) for line in conv.lines)
+        assert "failed" in text.lower()
 
 
 @pytest.mark.asyncio
