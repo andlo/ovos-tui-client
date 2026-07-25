@@ -600,7 +600,7 @@ class OVOSTUIApp(App):
             # that the conversation pane actually exists to write to.
             self._write_status(
                 f"Containers in use ({len(self._bridge_containers_detected)} found) - "
-                f"bridging logs via `logs -f` - see issue #24"
+                f"bridging logs via `logs -f`"
             )
         elif not self.log_sources:
             # Three-tier message, most precise first:
