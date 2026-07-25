@@ -1069,6 +1069,17 @@ class OVOSTUIApp(App):
         self.bus.send_utterance(text)
         self.utterance_history.append(text)
         self.history_index = None
+        # Real bug found via user testing: selecting an example from
+        # the Command Palette correctly appended to utterance_history
+        # (confirmed above), but Up-arrow afterward did nothing -
+        # _navigate_history()'s own focus check (`if self.focused is
+        # not input_widget: return`) silently no-ops unless the input
+        # box itself has keyboard focus, and closing the palette
+        # doesn't reliably leave focus there. Explicitly re-focusing
+        # here makes history browsing work right after EITHER path
+        # (typing+Enter already had focus naturally; this covers the
+        # palette-selection path where it wasn't guaranteed).
+        self.query_one("#utterance-input", Input).focus()
 
     def get_system_commands(self, screen: Screen):
         """Surfaces the same actions available via F1/F5-F8 in

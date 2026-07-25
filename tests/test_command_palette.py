@@ -8,7 +8,7 @@ Provider/glue layer, not systemctl or the real bus."""
 from unittest.mock import MagicMock, patch
 
 import pytest
-from textual.widgets import RichLog
+from textual.widgets import RichLog, Input
 
 from ovos_tui_client.app import OVOSTUIApp, ServiceCommandProvider, SkillCommandProvider, PipelineCommandProvider, ExampleCommandProvider
 
@@ -272,6 +272,28 @@ async def test_selecting_an_example_sends_it_like_a_typed_utterance(tmp_path):
         conv = app.query_one("#conversation", RichLog)
         text = "\n".join(str(line) for line in conv.lines)
         assert "what's the weather?" in text
+
+
+@pytest.mark.asyncio
+async def test_selecting_an_example_returns_focus_to_the_input_box(tmp_path):
+    """Real bug found via user testing: selecting an example DID
+    correctly append to utterance_history (confirmed by the sibling
+    test above), but pressing Up afterward did nothing - the Up/Down
+    handler's own focus check silently no-ops unless the input box
+    itself has keyboard focus, and closing the Command Palette doesn't
+    reliably leave focus there. _send_utterance() now explicitly
+    re-focuses the input box, so history browsing works right after
+    selecting an example, not just after typing+Enter."""
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_examples = {"ovos-skill-weather.openvoiceos": ["what's the weather?"]}
+    async with app.run_test() as pilot:
+        provider = ExampleCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "weather")
+        hits[0].command()
+        await pilot.pause()
+
+        input_widget = app.query_one("#utterance-input", Input)
+        assert app.focused is input_widget
 
 
 @pytest.mark.asyncio
