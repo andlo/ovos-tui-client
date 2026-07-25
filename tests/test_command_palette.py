@@ -219,6 +219,11 @@ async def test_selecting_deactivate_calls_bus_deactivate_skill_no_popup(tmp_path
 
 @pytest.mark.asyncio
 async def test_example_search_yields_one_hit_per_example(tmp_path):
+    """Real feedback after live testing: with 172 real examples across
+    23 skills, telling several apart by content alone got hard fast -
+    each hit's title now includes the skill's own short name too
+    ("Example: naptime: Go to sleep", not just "Example: Go to
+    sleep")."""
     app = _app_with_fake_bus(tmp_path)
     app.skill_examples = {
         "ovos-skill-weather.openvoiceos": ["what's the weather?", "will it rain tomorrow?"],
@@ -228,8 +233,8 @@ async def test_example_search_yields_one_hit_per_example(tmp_path):
         hits = await _collect_hits(provider, "Example")  # shared literal prefix, matches both
 
         texts = [str(h.match_display) for h in hits]
-        assert "Example: what's the weather?" in texts
-        assert "Example: will it rain tomorrow?" in texts
+        assert "Example: weather: what's the weather?" in texts
+        assert "Example: weather: will it rain tomorrow?" in texts
 
 
 @pytest.mark.asyncio

@@ -41,6 +41,24 @@ def guess_module_name(skill_id: str) -> str:
     return base.replace("-", "_")
 
 
+def short_skill_name(skill_id: str) -> str:
+    """skill_id -> a short, readable name for display, e.g.
+    "ovos-skill-naptime.openvoiceos" -> "naptime". Strips the same
+    trailing ".<author>" segment as guess_module_name() above, plus a
+    leading "ovos-skill-"/"ovos_skill_" prefix if present - just for
+    how this shows up in the Command Palette ("Example: naptime: Go to
+    sleep" reads a lot better than repeating the full skill_id for
+    every single example), not used for the actual module lookup
+    (guess_module_name() still does that separately, on the full
+    skill_id, since stripping the prefix here is purely cosmetic and
+    shouldn't risk feeding a mangled name into an import lookup)."""
+    base = skill_id.rsplit(".", 1)[0] if "." in skill_id else skill_id
+    for prefix in ("ovos-skill-", "ovos_skill_"):
+        if base.lower().startswith(prefix):
+            return base[len(prefix):]
+    return base
+
+
 def find_skill_examples(skill_id: str, lang: str = "en-us") -> list:
     """Returns the "examples" list from skill_id's own skill.json, or
     [] if the skill isn't importable on this machine (Docker/Podman

@@ -72,7 +72,7 @@ from ovos_tui_client.logs import (
 )
 from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges
 from ovos_tui_client.state import load_filter_state, save_filter_state, load_input_history, save_input_history
-from ovos_tui_client.skill_examples import find_skill_examples
+from ovos_tui_client.skill_examples import find_skill_examples, short_skill_name
 
 LOG_POLL_INTERVAL = 0.5  # seconds
 LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
@@ -422,13 +422,22 @@ class ExampleCommandProvider(Provider):
     during search() - the cache-or-nothing approach keeps this
     Provider's search() as fast and synchronous as every other one
     here, matching the existing pattern rather than introducing the
-    one Provider that might block on file I/O mid-keystroke."""
+    one Provider that might block on file I/O mid-keystroke.
+
+    Each hit's title includes the skill's own short name ("Example:
+    naptime: Go to sleep", not just "Example: Go to sleep") via
+    skill_examples.short_skill_name() - with 172 real examples across
+    23 skills on a real install, telling several apart by content
+    alone gets hard fast, and the short name (skill_id with the
+    common "ovos-skill-"/".openvoiceos"-style noise stripped) is far
+    more scannable than repeating the full skill_id for every line."""
 
     async def search(self, query: str) -> Hits:
         matcher = self.matcher(query)
         for skill_id, examples in self.app.skill_examples.items():
+            name = short_skill_name(skill_id)
             for example in examples:
-                command_text = f"Example: {example}"
+                command_text = f"Example: {name}: {example}"
                 score = matcher.match(command_text)
                 if score > 0:
                     yield Hit(

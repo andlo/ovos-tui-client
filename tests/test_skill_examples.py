@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ovos_tui_client.skill_examples import guess_module_name, find_skill_examples
+from ovos_tui_client.skill_examples import guess_module_name, find_skill_examples, short_skill_name
 
 
 # --- guess_module_name() ---
@@ -133,3 +133,25 @@ def test_find_skill_examples_filters_non_string_entries(tmp_path):
 def test_find_skill_examples_never_raises_on_unexpected_import_error():
     with patch("importlib.util.find_spec", side_effect=ImportError("boom")):
         assert find_skill_examples("ovos-skill-broken.andlo") == []
+
+
+# --- short_skill_name() ---
+
+def test_short_skill_name_strips_ovos_skill_prefix_and_author_suffix():
+    assert short_skill_name("ovos-skill-naptime.openvoiceos") == "naptime"
+
+
+def test_short_skill_name_handles_multi_word_skill_names():
+    assert short_skill_name("ovos-skill-andersen-tales.andlo") == "andersen-tales"
+
+
+def test_short_skill_name_leaves_non_matching_prefixes_alone():
+    """Not every skill necessarily follows the "ovos-skill-" naming
+    convention - if it doesn't, this should still return something
+    sensible (the author-suffix-stripped skill_id as-is) rather than
+    mangling it by stripping a prefix that was never actually there."""
+    assert short_skill_name("weird-custom-name.andlo") == "weird-custom-name"
+
+
+def test_short_skill_name_handles_no_author_suffix():
+    assert short_skill_name("ovos-skill-naptime") == "naptime"
