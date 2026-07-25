@@ -1,6 +1,7 @@
 """Tests for the Textual App using Textual's Pilot testing framework -
 simulates keypresses/input against a real (but headless) running app,
 with a fake bus connection so no real messagebus is needed."""
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -511,3 +512,98 @@ async def test_checking_one_skill_narrows_to_only_that_skill(tmp_path):
         rendered = "\n".join(str(line) for line in view.lines)
         assert "grimm-tales" in rendered
         assert "andersen-tales" not in rendered
+
+
+# --- --web / --web-host / --web-port / _detect_outbound_ip() / run() ---
+
+def test_build_arg_parser_web_flags_default_off():
+    from ovos_tui_client.app import build_arg_parser
+    args = build_arg_parser().parse_args([])
+    assert args.web is False
+    assert args.web_host is None
+    assert args.web_port == 8000
+
+
+def test_build_arg_parser_web_flags_parsed():
+    from ovos_tui_client.app import build_arg_parser
+    args = build_arg_parser().parse_args(["--web", "--web-host", "10.0.0.5", "--web-port", "9000"])
+    assert args.web is True
+    assert args.web_host == "10.0.0.5"
+    assert args.web_port == 9000
+
+
+def test_detect_outbound_ip_returns_a_string():
+    """Not asserting a specific IP (genuinely environment-dependent) -
+    just that it returns something usable and never raises, including
+    in a sandboxed/restricted-network environment where the real
+    detection might fail and fall back to 127.0.0.1."""
+    from ovos_tui_client.app import _detect_outbound_ip
+    result = _detect_outbound_ip()
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+def test_detect_outbound_ip_falls_back_on_socket_error():
+    from ovos_tui_client.app import _detect_outbound_ip
+    with patch("socket.socket") as mock_socket_cls:
+        mock_socket_cls.return_value.connect.side_effect = OSError("network unreachable")
+        result = _detect_outbound_ip()
+    assert result == "127.0.0.1"
+
+
+def test_run_web_exits_cleanly_with_a_clear_message_if_textual_serve_missing(monkeypatch, capsys):
+    """textual-serve is an optional extra (pip install
+    ovos-tui-client[web]) - --web without it installed must fail with
+    a clear, actionable message, not an ugly ImportError traceback."""
+    from ovos_tui_client import app as app_module
+    monkeypatch.setattr(sys, "argv", ["ovos-tui", "--web"])
+    with patch.dict(sys.modules, {"textual_serve.server": None}):
+        with pytest.raises(SystemExit) as exc_info:
+            app_module.run()
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "textual-serve" in captured.err
+    assert "pip install" in captured.err
+
+
+def test_run_web_builds_command_and_starts_server(monkeypatch):
+    """Confirms the underlying ovos-tui command line is correctly
+    reassembled (host/port/lang always included, optional flags only
+    when actually given) and handed to textual_serve.server.Server,
+    rather than testing the real Server (which would actually try to
+    bind a port and launch a subprocess)."""
+    from ovos_tui_client import app as app_module
+    monkeypatch.setattr(sys, "argv", [
+        "ovos-tui", "--web", "--web-host", "10.0.0.5", "--web-port", "9000",
+        "--host", "192.168.1.1", "--port", "8181", "--lang", "da-dk",
+        "--mycroft-conf", "/tmp/my conf.json",
+    ])
+    fake_server_cls = MagicMock()
+    fake_module = MagicMock()
+    fake_module.Server = fake_server_cls
+    with patch.dict(sys.modules, {"textual_serve.server": fake_module}):
+        app_module.run()
+
+    fake_server_cls.assert_called_once()
+    _, kwargs = fake_server_cls.call_args
+    assert kwargs["host"] == "10.0.0.5"
+    assert kwargs["port"] == 9000
+    assert "--host 192.168.1.1" in kwargs["command"]
+    assert "--port 8181" in kwargs["command"]
+    assert "--lang da-dk" in kwargs["command"]
+    assert "'/tmp/my conf.json'" in kwargs["command"]  # shlex-quoted, path has a space
+    fake_server_cls.return_value.serve.assert_called_once()
+
+
+def test_run_web_auto_detects_host_when_not_given(monkeypatch):
+    from ovos_tui_client import app as app_module
+    monkeypatch.setattr(sys, "argv", ["ovos-tui", "--web"])
+    fake_server_cls = MagicMock()
+    fake_module = MagicMock()
+    fake_module.Server = fake_server_cls
+    with patch.dict(sys.modules, {"textual_serve.server": fake_module}):
+        with patch("ovos_tui_client.app._detect_outbound_ip", return_value="203.0.113.5"):
+            app_module.run()
+
+    _, kwargs = fake_server_cls.call_args
+    assert kwargs["host"] == "203.0.113.5"

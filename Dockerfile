@@ -41,7 +41,7 @@ COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 COPY setup.py version.py requirements.txt README.md ./
 COPY ovos_tui_client/ ./ovos_tui_client/
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ".[web]"
 
 # Non-root user - no reason this needs root for the normal case (bus
 # connection, volume-mounted config/logs). If the Docker socket IS

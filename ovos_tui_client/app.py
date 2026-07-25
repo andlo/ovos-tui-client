@@ -50,6 +50,7 @@ _write_to_log().
 """
 import argparse
 import importlib.metadata
+import sys
 import tempfile
 from collections import deque
 from pathlib import Path
@@ -1187,12 +1188,61 @@ def build_arg_parser():
     parser.add_argument("--port", type=int, default=8181, help="messagebus port (default: 8181)")
     parser.add_argument("--lang", default="en-us", help="BCP-47 language code for typed utterances (default: en-us)")
     parser.add_argument("--log-dir", default=None, help="override log directory auto-detection")
-    parser.add_argument("--mycroft-conf", default=None, help="path to a specific mycroft.conf to read for 'Pipeline: ' (bypasses ovos-config's own XDG-based lookup - needed on Docker/Podman installs, where the real config commonly lives at a host path like ~/ovos/config/mycroft.conf rather than the standard ~/.config/mycroft/mycroft.conf ovos-config looks for by default)")
+    parser.add_argument("--mycroft-conf", default=None, help="path to a specific mycroft.conf for the pipeline view to read (default: auto-detected - only needed on some Docker/Podman installs, see README)")
+    parser.add_argument("--web", action="store_true", help="serve this tool as a web app instead of running in this terminal - needs 'pip install ovos-tui-client[web]', see README")
+    parser.add_argument("--web-host", default=None, help="address the web server is reachable at (default: auto-detected - see README, guessing wrong here breaks the page's styling/JS)")
+    parser.add_argument("--web-port", type=int, default=8000, help="port for the web server (default: 8000) - see --web")
     return parser
+
+
+def _detect_outbound_ip():
+    """Best-effort local IP detection for --web-host's default - the
+    standard trick of opening a UDP 'connection' to a public address
+    (nothing is actually sent - UDP has no handshake) purely to ask the
+    OS which local interface/IP it would route through, then reading
+    that back. Falls back to '127.0.0.1' (won't be reachable from
+    another machine, but won't crash the server either) if this
+    genuinely fails, e.g. no network route configured at all."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except OSError:
+        return "127.0.0.1"
 
 
 def run():
     args = build_arg_parser().parse_args()
+    if args.web:
+        try:
+            from textual_serve.server import Server
+        except ImportError:
+            print(
+                "--web needs textual-serve, which isn't installed. "
+                "Install it with: pip install ovos-tui-client[web]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        web_host = args.web_host or _detect_outbound_ip()
+        # Rebuilds the equivalent plain (non---web) command line to
+        # hand to textual-serve, which launches it in a subprocess per
+        # visitor - shlex.quote() on every value, not just the ones
+        # that look risky today, since --mycroft-conf in particular is
+        # a user-supplied filesystem path that can contain spaces.
+        import shlex
+        parts = ["ovos-tui", "--host", args.host, "--port", str(args.port), "--lang", args.lang]
+        if args.log_dir:
+            parts += ["--log-dir", args.log_dir]
+        if args.mycroft_conf:
+            parts += ["--mycroft-conf", args.mycroft_conf]
+        command = " ".join(shlex.quote(p) for p in parts)
+        print(f"Serving on http://{web_host}:{args.web_port}")
+        Server(command=command, host=web_host, port=args.web_port).serve()
+        return
     app = OVOSTUIApp(host=args.host, port=args.port, lang=args.lang, log_dir_override=args.log_dir, mycroft_conf_override=args.mycroft_conf)
     app.run()
 

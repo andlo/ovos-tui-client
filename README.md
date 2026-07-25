@@ -86,6 +86,20 @@ ovos-tui --host 192.168.1.50 --port 8181 --lang da-dk --log-dir ~/.local/state/m
   wrong file or find nothing on those installs. It won't crash, but it
   won't be accurate either.
 
+### Running as a web app instead of in a terminal
+
+```bash
+pip install ovos-tui-client[web]
+ovos-tui --web
+```
+
+Visit the printed URL in a browser and use the exact same interface -
+no separate app, just this one running on a server instead of your
+own terminal. `--web-port` sets the port (default `8000`); `--web-host`
+sets which address it's reachable at (auto-detected if you don't set
+it, since guessing wrong here shows a broken, unstyled page instead of
+a clear error).
+
 ### Docker/Podman installs
 
 This tool runs on the host, not inside the same containers OVOS runs
@@ -151,7 +165,10 @@ specifically, joining that stack's own compose network and pointing
 usually the better fit if this is meant to run alongside it long-term.
 Pass this tool's own flags after the image name, same as the pip
 install - e.g. `docker run -it --rm --network host
-ghcr.io/andlo/ovos-tui-client:latest --lang da-dk`.
+ghcr.io/andlo/ovos-tui-client:latest --lang da-dk`. `--web` works here
+too (see above) - `--network host` is the reliable choice for it, so
+the auto-detected address is the host's real one, not an internal
+container-only address a browser outside can't reach.
 
 If the same volumes `ovos_core` uses for config/logs are mounted into
 this container too (`-v`/compose `volumes:`, matching whatever paths
@@ -188,7 +205,7 @@ Confirmed NOT sufficient on its own under rootless Podman specifically
 Podman rather than a standard root-owned `dockerd` socket, this may
 need more digging into your specific setup.
 
-Images are tagged by version (`:0.1.18`) and `:latest`, built and
+Images are tagged by version (`:0.1.19`) and `:latest`, built and
 published automatically on every release.
 
 ## Why not just fix ovos-cli-client / neon-cli-client?
