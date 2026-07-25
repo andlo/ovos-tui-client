@@ -89,15 +89,21 @@ in, so a couple of things need extra attention on a Docker/Podman
 install - the notes below are based on reading `ovos-docker`'s own
 documentation directly, not guessed at:
 
-- **Logs likely won't show anything without extra steps.**
-  `ovos-docker`'s own sample `mycroft.conf` sets `"logs": {"path":
-  "stdout"}` - on an install that follows that guide as written, there
-  are no log files on the host filesystem at all, ever, only container
-  stdout. This tool detects a Docker/Podman install in that case and
-  says so explicitly, pointing at `docker logs <container>` / `docker
-  compose logs -f` - it can't tail container stdout itself yet (open
-  issue, would need to run those commands as a subprocess and treat
-  their output as another log source).
+- **Logs work even with no log files on the host.** `ovos-docker`'s own
+  sample `mycroft.conf` sets `"logs": {"path": "stdout"}` - on an
+  install that follows that guide as written, there are no log files
+  on the host filesystem at all, only container stdout. When this tool
+  finds no log files but detects a Docker/Podman install, it
+  automatically bridges each container's `docker logs -f` (or
+  `podman logs -f`) into a temp file and tails that instead - the
+  Sources: checkboxes then show the actual container names
+  (`ovos_core`, `ovos_audio`, etc) rather than the usual `skills`/
+  `audio`/etc, since there's no fully-confirmed container-name ->
+  service-name mapping to translate through. Bridge processes are
+  cleaned up on quit. If bridging isn't possible for some reason (no
+  `docker`/`podman` binary available), it says so explicitly instead
+  and points at `docker logs <container>` / `docker compose logs -f`
+  directly.
 - **Services** run as containers, not background services this tool
   can query the usual way - it detects this and says so explicitly,
   listing the running containers, rather than just showing an

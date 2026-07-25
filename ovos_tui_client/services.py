@@ -138,3 +138,86 @@ def detect_container_runtime():
         if matching:
             return sorted(matching)
     return []
+
+
+def _find_container_binary():
+    """Returns 'docker' or 'podman', whichever actually works, or None.
+    Separate from detect_container_runtime() (which already does this
+    same detection internally) because that function's return contract
+    is just a list of names - existing callers/tests depend on that
+    shape, so this doesn't change it, at the cost of re-doing the
+    detection once more here."""
+    for binary in ("docker", "podman"):
+        try:
+            result = subprocess.run([binary, "ps"], capture_output=True, timeout=5)
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+            continue
+        if result.returncode == 0:
+            return binary
+    return None
+
+
+def start_container_log_bridges(container_names, target_dir):
+    """For each container name, starts 'docker logs -f <name>' (or
+    podman, whichever detect_container_runtime() would have used) with
+    its combined stdout+stderr redirected into target_dir/<name>.log -
+    then that directory can be handed to discover_log_sources() and
+    treated exactly like any other log directory, reusing 100% of the
+    existing file-tailing/filtering machinery. No new "log source"
+    abstraction needed inside the app itself.
+
+    This exists because a confirmed real gap (see the discussion that
+    led here): on a Docker/Podman install following ovos-docker's own
+    documented example config ("logs": {"path": "stdout"}), there are
+    no log files anywhere on the host - only container stdout. This
+    bridges that gap by making container stdout look like an ordinary
+    log file, rather than teaching the app a second, parallel way to
+    receive log lines.
+
+    Log source NAMES intentionally come from the container names
+    themselves (e.g. "ovos_core", "ovos_audio"), not a hardcoded
+    container->service mapping - the exact mapping isn't fully
+    confirmed for every core service (see issue #24's own notes on
+    this), and guessing wrong would silently mislabel things. Using
+    the container's own name sidesteps that entirely: whatever it's
+    actually called is what shows up, no mapping table to get wrong or
+    keep in sync as ovos-docker's own naming evolves.
+
+    Returns a list of subprocess.Popen handles - the caller owns their
+    lifecycle and MUST terminate them (e.g. on app quit); they are not
+    cleaned up automatically here. Returns [] immediately (no
+    processes started) if neither docker nor podman is available."""
+    binary = _find_container_binary()
+    if binary is None:
+        return []
+    target_dir.mkdir(parents=True, exist_ok=True)
+    handles = []
+    for name in container_names:
+        log_path = target_dir / f"{name}.log"
+        log_file = open(log_path, "a")
+        try:
+            proc = subprocess.Popen(
+                [binary, "logs", "-f", "--tail", "0", name],
+                stdout=log_file, stderr=subprocess.STDOUT,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+            log_file.close()
+            continue
+        handles.append(proc)
+    return handles
+
+
+def stop_container_log_bridges(handles):
+    """Terminates every subprocess started by start_container_log_bridges()
+    - call this on app quit. Gives each a moment to exit cleanly before
+    force-killing, and never raises even if a process already exited on
+    its own (e.g. the container itself stopped)."""
+    for proc in handles:
+        if proc.poll() is not None:
+            continue  # already exited
+        proc.terminate()
+    for proc in handles:
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()

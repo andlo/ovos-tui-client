@@ -50,7 +50,9 @@ _write_to_log().
 """
 import argparse
 import importlib.metadata
+import tempfile
 from collections import deque
+from pathlib import Path
 from functools import partial
 
 from textual import work
@@ -64,9 +66,10 @@ from textual.widgets import Header, Footer, Input, RichLog, Checkbox, Label, Lis
 from ovos_tui_client.bus import OVOSBusConnection
 from ovos_tui_client.logs import (
     find_log_dir, discover_log_sources, line_matches_filter, strip_log_prefix,
+    is_stdout_only_logging,
     extract_log_level, extract_skill_id, KNOWN_LOG_NAMES, KNOWN_LOG_LEVELS,
 )
-from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime
+from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges
 from ovos_tui_client.state import load_filter_state, save_filter_state
 
 LOG_POLL_INTERVAL = 0.5  # seconds
@@ -462,10 +465,17 @@ class OVOSTUIApp(App):
         super().__init__()
         self.host = host
         self.port = port
+        # ovos_utils.log's own config-based discovery (find_log_dir's
+        # primary method - see logs.py's module docstring) resolves
+        # the LOCAL machine's config, so it's only meaningful when
+        # actually talking to a local OVOS instance - a remote --host
+        # connection has no relationship to this machine's own config.
+        self.is_local = host in ("127.0.0.1", "localhost", "::1")
         self.bus = OVOSBusConnection(host=host, port=port, lang=lang)
-        self.log_dir = find_log_dir(override=log_dir_override)
+        self.log_dir = find_log_dir(override=log_dir_override, is_local=self.is_local)
         self.log_sources = discover_log_sources(self.log_dir)
         self.mycroft_conf_override = mycroft_conf_override
+        self.log_bridge_handles = []  # subprocess.Popen list from start_container_log_bridges(), see on_mount()/action_quit()
         self.utterance_history = []
         self.history_index = None
         self.log_buffer = deque(maxlen=LOG_BUFFER_SIZE)
@@ -550,39 +560,71 @@ class OVOSTUIApp(App):
         self._write_status(f"ovos-tui-client v{_ovos_tui_version()}")
 
         if not self.log_sources:
-            # CONFIRMED (not just inferred): the official ovos-docker
-            # documentation's own sample mycroft.conf sets
-            # "logs": {"path": "stdout"} - meaning on an install that
-            # follows that guide as written, there are NO log files on
-            # the host at all, ever, regardless of --log-dir. Earlier
-            # versions of this tool assumed "usually fine, matches the
-            # systemd convention" - that assumption was wrong, found
-            # via reading ovos-docker's own docs properly rather than
-            # guessing. Detecting the container runtime here so the
-            # message actually explains what to do next, instead of a
-            # bare "no logs found" that reads like something's broken.
-            # See issue #22/#36 for the bigger, not-yet-built fix
-            # (tailing `docker/podman logs` directly as an alternative
-            # log source, so this tool could show container-log-only
-            # setups too, not just explain their absence).
+            # Try the Docker/Podman log bridge FIRST (see
+            # start_container_log_bridges()'s own docstring) whenever
+            # a container install is plausible - only falls through to
+            # an explanatory message if that genuinely doesn't pan out
+            # (no docker/podman binary despite containers being
+            # visible, or no containers at all). Both tiers below are
+            # "is a container install plausible", not "is it
+            # confirmed" - is_stdout_only_logging() being True doesn't
+            # change whether the bridge is worth trying, it just
+            # changes how the FALLBACK message is worded if the bridge
+            # itself doesn't work out.
+            bridged = False
             containers = detect_container_runtime()
             if containers:
-                msg = (
-                    "[yellow]No log files found, but this looks like a Docker/Podman "
-                    "install - if mycroft.conf has \"logs\": {\"path\": \"stdout\"} "
-                    "(the setup ovos-docker's own docs suggest), there are no log "
-                    "files on the host at all. Use `docker logs <container>` / "
-                    "`docker compose logs -f` instead - this tool can't show "
-                    "container-stdout logs yet.[/yellow]"
-                )
+                bridge_dir = Path(tempfile.mkdtemp(prefix="ovos-tui-docker-logs-"))
+                self.log_bridge_handles = start_container_log_bridges(containers, bridge_dir)
+                if self.log_bridge_handles:
+                    self.log_dir = bridge_dir
+                    self.log_sources = discover_log_sources(bridge_dir, names=containers)
+                    bridged = True
+                    self._write_status(
+                        f"No log files, but bridged {len(containers)} Docker/Podman "
+                        f"container(s) via `logs -f` instead - see issue #24"
+                    )
+
+            if not bridged:
+                # Three-tier message, most precise first:
+                # 1. is_stdout_only_logging() - a DEFINITIVE answer,
+                #    not a guess: reads the actual configured
+                #    logging.path via ovos_utils.log (only meaningful
+                #    when self.is_local - see __init__'s note).
+                # 2. detect_container_runtime() - a real Docker/Podman
+                #    install detected (but the bridge attempt above
+                #    still didn't work out, e.g. no docker/podman
+                #    binary actually runnable despite containers being
+                #    listed) - an informed guess, worded accordingly.
+                # 3. generic fallback - genuinely no idea, point at
+                #    --log-dir.
+                if is_stdout_only_logging(is_local=self.is_local):
+                    msg = (
+                        "[yellow]No log files - logging.path is configured as \"stdout\" "
+                        "(confirmed from mycroft.conf, not guessed), and no Docker/Podman "
+                        "container could be bridged either. Use `docker logs <container>` / "
+                        "`docker compose logs -f` directly instead.[/yellow]"
+                    )
+                elif containers:
+                    msg = (
+                        "[yellow]No log files found, and bridging the detected Docker/Podman "
+                        "container(s) didn't work out (no usable `docker`/`podman` binary?) - "
+                        "use `docker logs <container>` / `docker compose logs -f` directly "
+                        "instead.[/yellow]"
+                    )
+                else:
+                    msg = (
+                        f"[yellow]No known log files found"
+                        + (f" in {self.log_dir}" if self.log_dir else " in any candidate directory")
+                        + ". Pass --log-dir to point at the right one.[/yellow]"
+                    )
+                self._write_to_log(self.query_one("#logs-view", RichLog), msg)
+
+            if self.log_sources:
+                names = ", ".join(src.name for src in self.log_sources)
+                self._write_status(f"Logs found and loaded: {names}")
             else:
-                msg = (
-                    f"[yellow]No known log files found"
-                    + (f" in {self.log_dir}" if self.log_dir else " in any candidate directory")
-                    + ". Pass --log-dir to point at the right one.[/yellow]"
-                )
-            self._write_to_log(self.query_one("#logs-view", RichLog), msg)
-            self._write_status("Logs found and loaded: none")
+                self._write_status("Logs found and loaded: none")
         else:
             names = ", ".join(src.name for src in self.log_sources)
             self._write_status(f"Logs found and loaded: {names}")
@@ -1045,9 +1087,14 @@ class OVOSTUIApp(App):
         """Overrides Textual's default just to save filter state first
         (state.py) - so Sources/Levels/Skills choices survive to the
         next session. save_filter_state() never raises, so this can't
-        turn a normal quit into a crash."""
+        turn a normal quit into a crash. Also terminates any Docker/
+        Podman log-bridge subprocesses (see on_mount()'s docstring
+        note on start_container_log_bridges()) - without this they'd
+        be orphaned, continuing to run and write to a temp directory
+        nobody's reading from anymore."""
         checked_sources = {s.name: s.enabled for s in self.log_sources}
         save_filter_state(checked_sources, dict(self.level_enabled), dict(self.skill_enabled))
+        stop_container_log_bridges(self.log_bridge_handles)
         await super().action_quit()
 
     def on_key(self, event) -> None:

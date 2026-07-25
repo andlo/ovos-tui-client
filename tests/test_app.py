@@ -92,17 +92,99 @@ async def test_no_log_sources_on_a_docker_install_explains_stdout_logging(tmp_pa
     written, there are no log files on the host at all, ever. The
     message here needs to actually say that, not a generic "no logs
     found" that reads like something's broken rather than "this is a
-    different kind of install"."""
+    different kind of install".
+
+    This is the fallback message for when the log BRIDGE itself
+    doesn't work out (no usable docker/podman binary despite
+    containers being listed - mocked here via
+    start_container_log_bridges returning [], deterministically
+    forcing that path rather than depending on whatever this sandbox's
+    own real docker/podman happens to do with a nonexistent
+    container). is_stdout_only_logging() is also explicitly mocked to
+    False so the test exercises the tier-2 wording specifically."""
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
     app = OVOSTUIApp(log_dir_override=str(empty_dir))
     app.bus = MagicMock()
-    with patch("ovos_tui_client.app.detect_container_runtime", return_value=["ovos-core", "ovos-audio"]):
+    with patch("ovos_tui_client.app.detect_container_runtime", return_value=["ovos-core", "ovos-audio"]), \
+         patch("ovos_tui_client.app.start_container_log_bridges", return_value=[]), \
+         patch("ovos_tui_client.app.is_stdout_only_logging", return_value=False):
         async with app.run_test() as pilot:
             text = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
             assert "docker" in text.lower() or "podman" in text.lower()
-            assert "stdout" in text.lower()
             assert "docker logs" in text.lower() or "docker compose logs" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_no_log_sources_bridges_docker_containers_when_possible(tmp_path):
+    """The success path: start_container_log_bridges() actually
+    returns process handles (mocked here - real subprocess behavior is
+    covered separately in test_services.py) - the app should pick up
+    the bridged sources and NOT show the "no logs found" fallback
+    message at all."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    app = OVOSTUIApp(log_dir_override=str(empty_dir))
+    app.bus = MagicMock()
+    fake_proc = MagicMock()
+
+    def fake_bridge(container_names, target_dir):
+        # simulates what the real function would have done: create
+        # the log file(s) in whatever temp dir on_mount() actually
+        # created (a real tempfile.mkdtemp() call, not something this
+        # test can predict ahead of time - so writing it here, once
+        # on_mount() passes in the real path, is the reliable way to
+        # populate it before the (unmocked) discover_log_sources() call
+        # right after this one runs)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / "ovos_core.log").write_text("")
+        return [fake_proc]
+
+    with patch("ovos_tui_client.app.detect_container_runtime", return_value=["ovos_core"]), \
+         patch("ovos_tui_client.app.start_container_log_bridges", side_effect=fake_bridge):
+        async with app.run_test() as pilot:
+            assert len(app.log_sources) == 1
+            assert app.log_sources[0].name == "ovos_core"
+            assert app.log_bridge_handles == [fake_proc]
+            conv = app.query_one("#conversation", RichLog)
+            conv_text = "\n".join(str(line) for line in conv.lines)
+            assert "bridged" in conv_text.lower()
+
+
+@pytest.mark.asyncio
+async def test_no_log_sources_with_confirmed_stdout_logging_is_definitive(tmp_path):
+    """Tier 1 - is_stdout_only_logging() confirmed True (read directly
+    from mycroft.conf via ovos_utils.log, not inferred from container
+    detection) - the message should be worded as a fact, not a guess."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    app = OVOSTUIApp(log_dir_override=str(empty_dir))
+    app.bus = MagicMock()
+    # detect_container_runtime() is mocked here too (returning []) only
+    # to keep the unrelated Services: boot line deterministic in this
+    # test - it's a separate code path (_check_services_worker) that
+    # calls the same function for a different purpose, not something
+    # this test's own logs-message logic depends on.
+    with patch("ovos_tui_client.app.detect_container_runtime", return_value=[]), \
+         patch("ovos_tui_client.app.is_stdout_only_logging", return_value=True):
+        async with app.run_test() as pilot:
+            text = "\n".join(str(line) for line in app.query_one("#logs-view", RichLog).lines)
+            assert "stdout" in text.lower()
+            assert "confirmed" in text.lower()
+            assert "docker logs" in text.lower() or "docker compose logs" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_is_local_true_for_localhost_variants():
+    for host in ("127.0.0.1", "localhost", "::1"):
+        app = OVOSTUIApp(host=host)
+        assert app.is_local is True
+
+
+@pytest.mark.asyncio
+async def test_is_local_false_for_a_remote_host():
+    app = OVOSTUIApp(host="192.168.1.50")
+    assert app.is_local is False
 
 
 # --- format_log_line: per-source color + padding + ERROR bolding + timestamp/component stripping ---

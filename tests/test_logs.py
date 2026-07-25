@@ -1,9 +1,12 @@
 """Tests for log discovery and tailing - the part of this tool most
 worth being paranoid about, since the log directory location varies by
 OVOS install method and isn't reliably documented."""
+from unittest.mock import patch
+
 from ovos_tui_client.logs import (
     LogSource, find_log_dir, discover_log_sources, line_matches_filter,
     strip_log_prefix, extract_log_level, extract_skill_id, CANDIDATE_LOG_DIRS,
+    is_stdout_only_logging,
 )
 
 
@@ -169,3 +172,89 @@ def test_extract_skill_id_finds_kwarg_style_reference():
 def test_extract_skill_id_returns_none_when_absent():
     line = "ovos_core.intent_services.service:handle_utterance:450 - INFO - Parsing utterance: ['stop']"
     assert extract_skill_id(line) is None
+
+
+# --- find_log_dir(): ovos_utils.log as primary discovery, guess list as fallback ---
+# (confirmed against a real live install, see issue #25's investigation - this
+# resolves through ovos-config's own config layering, the same resolution
+# OVOS's own services use, not a guess)
+
+def test_find_log_dir_uses_ovos_utils_result_when_local_and_files_exist(tmp_path):
+    (tmp_path / "skills.log").write_text("")
+    with patch("ovos_utils.log.get_log_paths", return_value={str(tmp_path)}):
+        result = find_log_dir(is_local=True)
+    assert result == tmp_path
+
+
+def test_find_log_dir_falls_back_to_guess_list_when_ovos_utils_finds_nothing_real(tmp_path):
+    """ovos_utils reports a path, but it doesn't actually contain any
+    known log files (e.g. stale config) - should fall through to
+    guessing rather than returning a directory with nothing useful."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    with patch("ovos_utils.log.get_log_paths", return_value={str(empty_dir)}):
+        with patch("ovos_tui_client.logs.CANDIDATE_LOG_DIRS", []):
+            result = find_log_dir(is_local=True)
+    assert result is None
+
+
+def test_find_log_dir_skips_stdout_entries_from_ovos_utils(tmp_path):
+    """"stdout" is a real, valid value get_log_paths() can return (see
+    is_stdout_only_logging()) - it's not a directory and must never be
+    treated as one."""
+    (tmp_path / "skills.log").write_text("")
+    with patch("ovos_utils.log.get_log_paths", return_value={"stdout", str(tmp_path)}):
+        result = find_log_dir(is_local=True)
+    assert result == tmp_path
+
+
+def test_find_log_dir_skips_ovos_utils_entirely_when_not_local(tmp_path):
+    """A remote --host connection - ovos_utils would resolve the LOCAL
+    machine's own config, unrelated to a log directory on a different
+    host this tool has no filesystem access to at all."""
+    (tmp_path / "skills.log").write_text("")
+    with patch("ovos_utils.log.get_log_paths", return_value={str(tmp_path)}) as mock_get_paths:
+        with patch("ovos_tui_client.logs.CANDIDATE_LOG_DIRS", []):
+            result = find_log_dir(is_local=False)
+    mock_get_paths.assert_not_called()
+    assert result is None
+
+
+def test_find_log_dir_override_skips_ovos_utils_too(tmp_path):
+    (tmp_path / "skills.log").write_text("")
+    with patch("ovos_utils.log.get_log_paths") as mock_get_paths:
+        result = find_log_dir(override=str(tmp_path), is_local=True)
+    mock_get_paths.assert_not_called()
+    assert result == tmp_path
+
+
+def test_find_log_dir_handles_ovos_utils_import_error_gracefully(tmp_path):
+    """ovos_utils is a real dependency now, but this must not hard-crash
+    if it's ever genuinely unavailable in some environment - falls
+    through to guessing instead."""
+    with patch("builtins.__import__", side_effect=ImportError("no ovos_utils")):
+        with patch("ovos_tui_client.logs.CANDIDATE_LOG_DIRS", []):
+            result = find_log_dir(is_local=True)  # must not raise
+    assert result is None
+
+
+# --- is_stdout_only_logging(): a definitive answer, not an inference ---
+
+def test_is_stdout_only_logging_true_when_configured(tmp_path):
+    with patch("ovos_utils.log.get_log_paths", return_value={"stdout"}):
+        assert is_stdout_only_logging(is_local=True) is True
+
+
+def test_is_stdout_only_logging_false_when_real_paths_configured(tmp_path):
+    with patch("ovos_utils.log.get_log_paths", return_value={str(tmp_path)}):
+        assert is_stdout_only_logging(is_local=True) is False
+
+
+def test_is_stdout_only_logging_false_when_not_local():
+    """Meaningless for a remote connection - see find_log_dir()'s own
+    note on why. Must not even attempt the (irrelevant) local
+    resolution."""
+    with patch("ovos_utils.log.get_log_paths", return_value={"stdout"}) as mock_get_paths:
+        result = is_stdout_only_logging(is_local=False)
+    mock_get_paths.assert_not_called()
+    assert result is False

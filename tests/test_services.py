@@ -2,7 +2,7 @@
 real service management is exercised here."""
 from unittest.mock import MagicMock, patch
 
-from ovos_tui_client.services import discover_services, discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime
+from ovos_tui_client.services import discover_services, discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges
 
 
 def _fake_completed(stdout="", stderr="", returncode=0):
@@ -175,3 +175,74 @@ def test_detect_container_runtime_falls_back_from_docker_to_podman():
     with patch("subprocess.run", side_effect=fake_run):
         assert detect_container_runtime() == ["ovos-messagebus"]
     assert call_count["n"] == 2
+
+
+# --- start_container_log_bridges()/stop_container_log_bridges() ---
+# (mechanism confirmed working end-to-end against a real, locally-run
+# podman container during development - these tests cover the
+# subprocess-management logic itself, mocked)
+
+def test_start_container_log_bridges_spawns_one_process_per_container(tmp_path):
+    with patch("subprocess.run", return_value=_fake_completed(returncode=0)):
+        with patch("subprocess.Popen") as mock_popen:
+            handles = start_container_log_bridges(["ovos_core", "ovos_audio"], tmp_path)
+    assert mock_popen.call_count == 2
+    assert len(handles) == 2
+
+
+def test_start_container_log_bridges_uses_docker_logs_dash_f_with_container_name(tmp_path):
+    with patch("subprocess.run", return_value=_fake_completed(returncode=0)):
+        with patch("subprocess.Popen") as mock_popen:
+            start_container_log_bridges(["ovos_core"], tmp_path)
+    cmd = mock_popen.call_args[0][0]
+    assert cmd[0] in ("docker", "podman")
+    assert "logs" in cmd
+    assert "-f" in cmd
+    assert cmd[-1] == "ovos_core"
+
+
+def test_start_container_log_bridges_creates_the_target_directory(tmp_path):
+    target = tmp_path / "not-yet-created"
+    with patch("subprocess.run", return_value=_fake_completed(returncode=0)):
+        with patch("subprocess.Popen"):
+            start_container_log_bridges(["ovos_core"], target)
+    assert target.is_dir()
+
+
+def test_start_container_log_bridges_returns_empty_when_no_binary_available():
+    with patch("subprocess.run", side_effect=FileNotFoundError()):
+        handles = start_container_log_bridges(["ovos_core"], "/tmp/whatever")
+    assert handles == []
+
+
+def test_start_container_log_bridges_skips_a_container_on_popen_failure(tmp_path):
+    """One container's docker/podman invocation fails to even start
+    (e.g. a transient error) - shouldn't take down the others."""
+    with patch("subprocess.run", return_value=_fake_completed(returncode=0)):
+        with patch("subprocess.Popen", side_effect=[OSError("boom"), MagicMock()]):
+            handles = start_container_log_bridges(["broken", "ovos_core"], tmp_path)
+    assert len(handles) == 1
+
+
+def test_stop_container_log_bridges_terminates_running_processes():
+    proc = MagicMock()
+    proc.poll.return_value = None  # still running
+    stop_container_log_bridges([proc])
+    proc.terminate.assert_called_once()
+    proc.wait.assert_called_once()
+
+
+def test_stop_container_log_bridges_skips_already_exited_processes():
+    proc = MagicMock()
+    proc.poll.return_value = 0  # already exited
+    stop_container_log_bridges([proc])
+    proc.terminate.assert_not_called()
+
+
+def test_stop_container_log_bridges_force_kills_after_timeout():
+    import subprocess as subprocess_module
+    proc = MagicMock()
+    proc.poll.return_value = None
+    proc.wait.side_effect = subprocess_module.TimeoutExpired(cmd="x", timeout=3)
+    stop_container_log_bridges([proc])
+    proc.kill.assert_called_once()

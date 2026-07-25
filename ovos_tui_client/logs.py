@@ -1,12 +1,17 @@
 """Log discovery and tailing for the OVOS TUI client.
 
-Deliberately does NOT hardcode a single log directory - OVOS's actual
-log location varies by install method (ovos-installer venv install,
-Docker, raspOVOS, distro packaging) and has used different XDG-style
-paths across versions. Instead this scans a list of known candidate
-directories and only reports the ones that actually contain recognized
-*.log files, with a CLI override always available for anything this
-list doesn't anticipate.
+Primary discovery is via ovos_utils.log's get_log_paths() - resolves
+through ovos-config's own config layering, the same resolution OVOS's
+own services use, not a guess (confirmed directly against a live
+install). Falls back to a guessed CANDIDATE_LOG_DIRS list only when
+that's unavailable (ovos_utils genuinely missing) or not applicable
+(a remote --host connection, where ovos_utils would resolve the LOCAL
+machine's config, unrelated to a log directory on a different host)
+- OVOS's actual log location has genuinely varied by install method
+(ovos-installer venv install, Docker, raspOVOS, distro packaging) and
+across versions historically, which is why a fallback guess list still
+exists at all. A CLI override is always available for anything neither
+path anticipates.
 """
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -64,13 +69,40 @@ class LogSource:
         return [line for line in new_data.splitlines() if line.strip()]
 
 
-def find_log_dir(override=None):
-    """Returns the first candidate directory that actually contains at
-    least one recognized *.log file, or None if none do. `override`,
-    if given, is trusted as-is without the "must contain a known log"
-    check - the user explicitly pointed here."""
+def find_log_dir(override=None, is_local=True):
+    """Returns the first directory that actually contains at least one
+    recognized *.log file, or None if none do. `override`, if given,
+    is trusted as-is without the "must contain a known log" check -
+    the user explicitly pointed here.
+
+    Tries the REAL, configured log path first (via ovos_utils.log's
+    get_log_paths(), which resolves through ovos-config's own config
+    layering - the exact same resolution OVOS's own services use, not
+    a guess), falling back to the CANDIDATE_LOG_DIRS guess list only
+    if that's unavailable or doesn't pan out. ovos_utils is already a
+    transitive dependency via ovos-bus-client, so this costs nothing
+    extra to try.
+
+    is_local=False (this tool connected to a remote --host, not
+    localhost) skips the ovos_utils path entirely and goes straight to
+    guessing - ovos_utils.log resolves the LOCAL machine's own config,
+    which has no relationship to a log directory on a different host
+    this tool has no filesystem access to at all."""
     if override:
         return Path(override).expanduser()
+
+    if is_local:
+        try:
+            from ovos_utils.log import get_log_paths
+            for candidate in get_log_paths():
+                if candidate == "stdout":
+                    continue  # see is_stdout_only_logging() - nothing to tail here
+                path = Path(candidate).expanduser()
+                if path.is_dir() and any((path / f"{name}.log").exists() for name in KNOWN_LOG_NAMES):
+                    return path
+        except ImportError:
+            pass  # ovos_utils genuinely unavailable - fall through to guessing
+
     for candidate in CANDIDATE_LOG_DIRS:
         path = Path(candidate).expanduser()
         if not path.is_dir():
@@ -80,11 +112,35 @@ def find_log_dir(override=None):
     return None
 
 
-def discover_log_sources(log_dir):
-    """Builds a LogSource for every KNOWN_LOG_NAMES file that actually
-    exists in log_dir. Returns [] if log_dir is None or contains none
-    of them - callers should treat that as 'no logs found, ask the
-    user for --log-dir' rather than crashing.
+def is_stdout_only_logging(is_local=True):
+    """True if the REAL, configured logging.path is literally "stdout"
+    - confirmed directly (not inferred from "no files found + a
+    container happens to be running") via ovos_utils.log's own config
+    resolution. Only meaningful for a local connection - see
+    find_log_dir()'s own note on why remote hosts skip this."""
+    if not is_local:
+        return False
+    try:
+        from ovos_utils.log import get_log_paths
+        return "stdout" in get_log_paths()
+    except ImportError:
+        return False
+
+
+def discover_log_sources(log_dir, names=None):
+    """Builds a LogSource for every name (default: KNOWN_LOG_NAMES)
+    whose <name>.log file actually exists in log_dir. Returns [] if
+    log_dir is None or contains none of them - callers should treat
+    that as 'no logs found, ask the user for --log-dir' rather than
+    crashing.
+
+    `names` defaults to KNOWN_LOG_NAMES (the normal case), but can be
+    overridden - used for the Docker/Podman log-bridge case (see
+    services.py's start_container_log_bridges()), where the relevant
+    filenames are container names (e.g. "ovos_core"), not the fixed
+    service-name list, since there's no fully-confirmed
+    container-name -> service-name mapping to rely on instead (see
+    issue #24's own notes on that).
 
     Each LogSource starts its _offset at the file's CURRENT size (end
     of file), not 0 - a real bug found via testing: starting at 0
@@ -100,7 +156,7 @@ def discover_log_sources(log_dir):
     if log_dir is None:
         return []
     sources = []
-    for name in KNOWN_LOG_NAMES:
+    for name in (names if names is not None else KNOWN_LOG_NAMES):
         path = log_dir / f"{name}.log"
         if path.exists():
             sources.append(LogSource(name=name, path=path, _offset=path.stat().st_size))

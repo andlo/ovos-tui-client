@@ -8,3 +8,12 @@
 textual>=0.60
 ovos-bus-client
 ovos-config
+# >=0.8.0 floor: get_log_paths()/get_log_path() (used for real,
+# config-based log discovery - see logs.py) don't exist at all on
+# older ovos-utils - confirmed directly: 0.0.38 lacks them entirely,
+# 0.8.4 (the version actually running on a real, confirmed-working
+# install) and 0.8.5 both have them. Missing the functions is handled
+# gracefully at runtime (falls back to the guessed candidate-dir list,
+# see find_log_dir()) rather than crashing, but this floor means that
+# fallback path shouldn't normally be needed.
+ovos-utils>=0.8.0
