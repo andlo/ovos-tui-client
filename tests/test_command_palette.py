@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from textual.widgets import RichLog
 
-from ovos_tui_client.app import OVOSTUIApp, ServiceCommandProvider, SkillCommandProvider, PipelineCommandProvider
+from ovos_tui_client.app import OVOSTUIApp, ServiceCommandProvider, SkillCommandProvider, PipelineCommandProvider, ExampleCommandProvider
 
 
 def _app_with_fake_bus(tmp_path):
@@ -213,6 +213,72 @@ async def test_selecting_deactivate_calls_bus_deactivate_skill_no_popup(tmp_path
         await pilot.pause()
 
         app.bus.deactivate_skill.assert_called_once_with("ovos-skill-grimm-tales.andlo")
+
+
+# --- ExampleCommandProvider: real example utterances from skill_examples cache ---
+
+@pytest.mark.asyncio
+async def test_example_search_yields_one_hit_per_example(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_examples = {
+        "ovos-skill-weather.openvoiceos": ["what's the weather?", "will it rain tomorrow?"],
+    }
+    async with app.run_test() as pilot:
+        provider = ExampleCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "Example")  # shared literal prefix, matches both
+
+        texts = [str(h.match_display) for h in hits]
+        assert "Example: what's the weather?" in texts
+        assert "Example: will it rain tomorrow?" in texts
+
+
+@pytest.mark.asyncio
+async def test_example_search_matches_across_skills(tmp_path):
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_examples = {
+        "ovos-skill-weather.openvoiceos": ["what's the weather?"],
+        "ovos-skill-andersen-tales.andlo": ["read me the story about the little mermaid"],
+    }
+    async with app.run_test() as pilot:
+        provider = ExampleCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "mermaid")
+
+        texts = [str(h.match_display) for h in hits]
+        assert any("mermaid" in t for t in texts)
+        assert not any("weather" in t for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_selecting_an_example_sends_it_like_a_typed_utterance(tmp_path):
+    """Confirms the shared _send_utterance() path is actually used -
+    same conversation-pane line, same bus call, same history append as
+    typing it and pressing Enter would produce, not some separate,
+    parallel mechanism."""
+    app = _app_with_fake_bus(tmp_path)
+    app.skill_examples = {"ovos-skill-weather.openvoiceos": ["what's the weather?"]}
+    async with app.run_test() as pilot:
+        provider = ExampleCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "weather")
+        hits[0].command()
+        await pilot.pause()
+
+        app.bus.send_utterance.assert_called_once_with("what's the weather?")
+        assert "what's the weather?" in app.utterance_history
+        conv = app.query_one("#conversation", RichLog)
+        text = "\n".join(str(line) for line in conv.lines)
+        assert "what's the weather?" in text
+
+
+@pytest.mark.asyncio
+async def test_example_search_has_no_hits_when_cache_is_empty(tmp_path):
+    """Not an error - just nothing to offer yet if skill_examples
+    hasn't finished loading (or found nothing), same as
+    SkillCommandProvider's own empty-cache handling."""
+    app = _app_with_fake_bus(tmp_path)
+    async with app.run_test() as pilot:
+        provider = ExampleCommandProvider(app.screen)
+        hits = await _collect_hits(provider, "anything")
+        assert hits == []
 
 
 # --- "Skill: List installed" removed - see test_navigation.py's

@@ -72,6 +72,7 @@ from ovos_tui_client.logs import (
 )
 from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges
 from ovos_tui_client.state import load_filter_state, save_filter_state, load_input_history, save_input_history
+from ovos_tui_client.skill_examples import find_skill_examples
 
 LOG_POLL_INTERVAL = 0.5  # seconds
 LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
@@ -395,6 +396,48 @@ class SkillCommandProvider(Provider):
         self.app._write_status(f"{skill_id}: {label.lower()} requested")
 
 
+class ExampleCommandProvider(Provider):
+    """Command Palette provider (Ctrl+P) offering real example
+    utterances pulled from installed skills' own skill.json files
+    (skill_examples.py) - "Example: read me the story about the little
+    mermaid" style entries built from what a skill's own author
+    actually wrote as a sample phrase, not made up. Selecting one
+    sends it exactly as if it had been typed and Enter pressed
+    (App._send_utterance() - the same method on_input_submitted itself
+    calls), landing in the conversation pane and utterance history
+    like any other utterance.
+
+    Hits read from OVOSTUIApp.skill_examples, a cache populated once
+    by _refresh_skill_examples() (see on_mount()) - same reasoning as
+    SkillCommandProvider's installed_skills cache above: reading every
+    installed skill's skill.json on every keystroke would mean
+    repeated file I/O per character typed, not just a bus round-trip.
+    If the cache is still empty (nothing successfully found yet - see
+    skill_examples.py's own docstring for why that's the normal,
+    expected case on a Docker/Podman install, not an error), this
+    simply has no hits to offer, same as SkillCommandProvider's own
+    empty-cache handling.
+
+    Deliberately does NOT try to fetch examples on demand per skill
+    during search() - the cache-or-nothing approach keeps this
+    Provider's search() as fast and synchronous as every other one
+    here, matching the existing pattern rather than introducing the
+    one Provider that might block on file I/O mid-keystroke."""
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        for skill_id, examples in self.app.skill_examples.items():
+            for example in examples:
+                command_text = f"Example: {example}"
+                score = matcher.match(command_text)
+                if score > 0:
+                    yield Hit(
+                        score,
+                        matcher.highlight(command_text),
+                        partial(self.app._send_utterance, example),
+                    )
+
+
 class OVOSTUIApp(App):
     CSS = """
     #logs-container {
@@ -464,7 +507,7 @@ class OVOSTUIApp(App):
     # renumbering F5+ to fill the gap - no benefit to disrupting keys
     # that already work.
 
-    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider, PipelineCommandProvider}
+    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider, PipelineCommandProvider, ExampleCommandProvider}
 
     def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None, mycroft_conf_override=None):
         super().__init__()
@@ -529,6 +572,7 @@ class OVOSTUIApp(App):
         self.level_enabled = {level: True for level in KNOWN_LOG_LEVELS}
         self.skill_enabled = {}  # skill_id -> bool, unchecked by default as discovered
         self.installed_skills = {}  # skill_id -> active (True/False/None) - see _refresh_installed_skills()
+        self.skill_examples = {}  # skill_id -> list of example utterances - see _refresh_skill_examples()
 
         # Restores filter choices from a previous session (state.py) -
         # only for sources/levels that still exist on THIS run (a
@@ -664,7 +708,19 @@ class OVOSTUIApp(App):
 
         self._startup_steps_remaining = 2
         self._check_services_worker()
-        self._refresh_installed_skills(on_complete=self._finish_startup)
+        self._refresh_installed_skills(on_complete=self._after_installed_skills_known)
+
+    def _after_installed_skills_known(self) -> None:
+        """Runs once _refresh_installed_skills() has populated
+        self.installed_skills - kicks off _refresh_skill_examples()
+        (which needs that populated first, to know which skill_ids to
+        look examples up for) alongside calling _finish_startup() as
+        before. The two are independent from here on: skill_examples
+        loading doesn't block 'OK ready.' (see that method's own
+        docstring for why), it just happens to need to START after
+        this specific point."""
+        self._refresh_skill_examples()
+        self._finish_startup()
 
     def _finish_startup(self) -> None:
         """Called once each of the two async/off-thread startup steps
@@ -823,6 +879,40 @@ class OVOSTUIApp(App):
                 self.call_from_thread(on_complete)
         self.bus.list_skills(_on_result)
 
+    @work(thread=True)
+    def _refresh_skill_examples(self) -> None:
+        """Populates self.skill_examples (ExampleCommandProvider's
+        source) via skill_examples.find_skill_examples() for every
+        skill_id currently in self.installed_skills - so this must run
+        AFTER _refresh_installed_skills() has actually populated that,
+        not in parallel with it (see on_mount(), where this is chained
+        via that method's own on_complete callback).
+
+        @work(thread=True), same reasoning as _check_services_worker()
+        above: this does real file I/O (reading each installed skill's
+        skill.json, potentially dozens of them) which would otherwise
+        block the main UI thread exactly like the log-backlog freeze
+        bug already fixed elsewhere in this project - not a bus
+        round-trip like installed_skills itself, so it can't reuse
+        that method's own callback-based async pattern.
+
+        Deliberately NOT part of the startup-completion count
+        (_startup_steps_remaining) that gates 'OK ready.' - unlike
+        services/skills, an empty or still-loading skill_examples cache
+        isn't a problem ExampleCommandProvider needs to guard against
+        with anything more than 'no hits yet' (same as
+        SkillCommandProvider's own empty-cache handling), so there's
+        no reason to make the person wait for this specifically before
+        the tool is usable. Silently becomes available whenever it's
+        done, same principle as everything else that isn't strictly
+        required for a working session."""
+        results = {}
+        for skill_id in list(self.installed_skills.keys()):
+            examples = find_skill_examples(skill_id, lang=self.bus.lang)
+            if examples:
+                results[skill_id] = examples
+        self.call_from_thread(setattr, self, "skill_examples", results)
+
 
 
     def _update_skills_status(self) -> None:
@@ -955,11 +1045,21 @@ class OVOSTUIApp(App):
         text = event.value.strip()
         if not text:
             return
+        self._send_utterance(text)
+        event.input.value = ""
+
+    def _send_utterance(self, text: str) -> None:
+        """The actual "say this to OVOS" action - shared by typing
+        into the input box and pressing Enter (on_input_submitted,
+        above) AND by selecting an "Example: ..." entry from the
+        Command Palette (ExampleCommandProvider, below), so an example
+        behaves exactly like typing it yourself, not some separate,
+        parallel path that could drift out of sync with what actually
+        happens when you type."""
         self._write_conversation(f"[green]You: {text}[/green]")
         self.bus.send_utterance(text)
         self.utterance_history.append(text)
         self.history_index = None
-        event.input.value = ""
 
     def get_system_commands(self, screen: Screen):
         """Surfaces the same actions available via F1/F5-F8 in

@@ -39,7 +39,7 @@ Four panes at once: raw logs, a normal back-and-forth conversation, a live simpl
 - **Logs** - tails every OVOS service log it can find (bus, skills, audio, voice, GUI, PHAL, etc), color-coded by source, timestamps stripped for readability, errors bolded. Filter by source, log level, free text, or a specific skill - any combination, live, without restarting anything (with nothing checked in a category everything shows; checking one or more narrows to just those). Scroll up to read something and new lines won't yank you back down.
 - **Conversation** - what you typed and what OVOS said back, plus quiet status lines for everything else this tool does (service restarts, skill toggles, startup info) kept visually distinct so they don't clutter the actual conversation.
 - **Activity** - a simplified, human-readable feed of what's happening on the bus right now: which skill is handling the request, wake word and speech start/stop, which fallback skill caught something nothing else understood (and whether it actually resolved anything), and for content-reading requests specifically, which providers answered and at what confidence.
-- **A searchable command palette** (`Ctrl+P`) for everything else - restart a stuck service, activate or deactivate a skill, check the intent pipeline order, or toggle any log filter - all searchable by typing, with results appearing right in the conversation pane instead of popup windows. A help panel (`F1`) covers the rest of the keybindings.
+- **A searchable command palette** (`Ctrl+P`) for everything else - restart a stuck service, activate or deactivate a skill, check the intent pipeline order, browse real example phrases pulled from installed skills' own metadata (search "Example"), or toggle any log filter - all searchable by typing, with results appearing right in the conversation pane instead of popup windows. A help panel (`F1`) covers the rest of the keybindings.
 - Type what you'd say and press Enter, same as talking to a real OVOS device. Up/Down arrows browse what you've typed before, like shell history.
 
 ## Why this is worth having
@@ -205,7 +205,7 @@ Confirmed NOT sufficient on its own under rootless Podman specifically
 Podman rather than a standard root-owned `dockerd` socket, this may
 need more digging into your specific setup.
 
-Images are tagged by version (`:0.1.21`) and `:latest`, built and
+Images are tagged by version (`:0.1.22`) and `:latest`, built and
 published automatically on every release.
 
 ## Why not just fix ovos-cli-client / neon-cli-client?
