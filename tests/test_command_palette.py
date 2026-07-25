@@ -407,7 +407,14 @@ async def test_save_screenshot_uses_home_directory_not_cwd(tmp_path):
     async with app.run_test() as pilot:
         with patch.object(app, "deliver_screenshot", return_value="/home/fake/screenshot.svg") as mock_deliver:
             app._save_screenshot()
-            await pilot.pause(0.2)  # the real command schedules via set_timer(0.1, ...)
+            # Real, confirmed flakiness: 0.2s here raced against the
+            # command's own set_timer(0.1, ...) and lost on a Python
+            # 3.9 CI runner once (the timer hadn't fired yet by the
+            # time this returned) despite comfortably passing locally
+            # and on other Python versions - a 10x margin over the
+            # timer's own delay should be enough headroom that this
+            # doesn't recur even under CI load/scheduling jitter.
+            await pilot.pause(1.0)
         mock_deliver.assert_called_once_with(path=str(Path.home()))
         conv = app.query_one("#conversation", RichLog)
         text = "\n".join(str(line) for line in conv.lines)
@@ -420,7 +427,7 @@ async def test_save_screenshot_reports_failure_without_crashing(tmp_path):
     async with app.run_test() as pilot:
         with patch.object(app, "deliver_screenshot", side_effect=OSError("disk full")):
             app._save_screenshot()
-            await pilot.pause(0.2)  # must not raise
+            await pilot.pause(1.0)  # must not raise - see the sibling test's own comment on why 1.0s
         conv = app.query_one("#conversation", RichLog)
         text = "\n".join(str(line) for line in conv.lines)
         assert "failed" in text.lower()
