@@ -158,7 +158,30 @@ this container too (`-v`/compose `volumes:`, matching whatever paths
 that install already uses), this tool sees the real files directly at
 their normal locations - no `--mycroft-conf` override or log-bridging
 needed at all in that case, the same as a native install would.
-Images are tagged by version (`:0.1.16`) and `:latest`, built and
+
+**Log bridging and Services: detection need the Docker/Podman socket
+mounted in too**, since this tool shells out to `docker ps`/`docker
+logs -f` - the image includes the `docker` CLI, but without the socket
+(`-v /var/run/docker.sock:/var/run/docker.sock`) there's nothing for
+it to talk to, and this tool quietly finds nothing rather than
+erroring (confirmed via live testing: logs/services just show empty,
+same as if there were genuinely no containers). Mounting the socket
+is a real, deliberate security tradeoff - it hands this container
+effective control over the host's whole Docker daemon - so it's
+opt-in, not a default.
+
+If mounted, the container's own non-root user often won't have
+permission to use the socket as-is (confirmed: a plain UID match
+alone isn't enough under rootless Podman specifically - your exact
+fix may vary by host setup). `--user root` on `docker run` is the
+usual quick fix for a standard `dockerd` install where the socket is
+`root:docker`-owned; matching the host's `docker` group GID is the
+more targeted alternative if running as root isn't appealing. Exact
+behavior depends on your host's specific Docker/Podman setup enough
+that it's worth just trying it and adjusting rather than treating any
+one fix here as guaranteed.
+
+Images are tagged by version (`:0.1.17`) and `:latest`, built and
 published automatically on every release.
 
 ## Why not just fix ovos-cli-client / neon-cli-client?
