@@ -60,6 +60,10 @@ None of this requires working audio hardware, a wake word, or STT accuracy getti
 pip install ovos-tui-client
 ```
 
+A container image is also published on every release - see
+[Docker/Podman companion image](#dockerpodman-companion-image) below
+if that fits your setup better.
+
 ## Usage
 
 ```bash
@@ -129,6 +133,33 @@ documentation directly, not guessed at:
   runs as a native binary that logs via stdout/the systemd journal
   rather than a file - if a `bus` source never shows up even though
   everything else does, that's likely why, not a bug here.
+
+### Docker/Podman companion image
+
+Unlike every other OVOS container (audio, listener, messagebus, each
+skill), this one isn't a background service - it's an interactive
+terminal tool, so it needs a TTY attached to actually draw anything:
+
+```bash
+docker run -it --rm --network host ghcr.io/andlo/ovos-tui-client:latest
+```
+
+`--network host` is the simplest way to reach a messagebus already
+listening on the host's `127.0.0.1:8181`; on an `ovos-docker` install
+specifically, joining that stack's own compose network and pointing
+`--host` at the messagebus container's name instead works too, and is
+usually the better fit if this is meant to run alongside it long-term.
+Pass this tool's own flags after the image name, same as the pip
+install - e.g. `docker run -it --rm --network host
+ghcr.io/andlo/ovos-tui-client:latest --lang da-dk`.
+
+If the same volumes `ovos_core` uses for config/logs are mounted into
+this container too (`-v`/compose `volumes:`, matching whatever paths
+that install already uses), this tool sees the real files directly at
+their normal locations - no `--mycroft-conf` override or log-bridging
+needed at all in that case, the same as a native install would.
+Images are tagged by version (`:0.1.16`) and `:latest`, built and
+published automatically on every release.
 
 ## Why not just fix ovos-cli-client / neon-cli-client?
 
