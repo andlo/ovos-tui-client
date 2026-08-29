@@ -96,9 +96,39 @@ ovos-tui --web
 Visit the printed URL in a browser and use the exact same interface -
 no separate app, just this one running on a server instead of your
 own terminal. `--web-port` sets the port (default `8000`); `--web-host`
-sets which address it's reachable at (auto-detected if you don't set
+sets the address this **binds to** (auto-detected if you don't set
 it, since guessing wrong here shows a broken, unstyled page instead of
 a clear error).
+
+#### When `--web-host` can't be both the bind address and the reachable one
+
+`--web-host` doubles as the address baked into the page's own asset
+and WebSocket URLs, so it normally needs to be both a) an address this
+process can actually bind, and b) an address your browser can actually
+reach. Usually that's the same value. It stops being the same value
+behind Docker port-publishing, NAT, or a Home Assistant OS Supervisor
+add-on's own isolated network namespace — confirmed directly while
+packaging this as a Supervisor add-on: the container could bind
+`0.0.0.0` or its own internal hostname/IP just fine, but a real LAN IP
+crashed it outright (`OSError: could not bind on any address out of
+[...]`) since a container can't bind an address it doesn't own without
+host networking, and the addresses it *could* bind either got baked
+into the page as literally `http://0.0.0.0:8000/...` (meaningless to a
+browser) or only resolved via mDNS on networks that support it.
+
+If that's your situation, add `--web-public-url`:
+
+```bash
+ovos-tui --web --web-host 0.0.0.0 --web-public-url http://192.168.1.50:8000
+```
+
+`--web-host` still controls the bind address (here, all interfaces —
+always succeeds); `--web-public-url` overrides *only* the address
+baked into the page, independent of that bind address. Set it to
+whatever your browser actually reaches this server at. Leave it unset
+and behavior is unchanged from before this flag existed — `--web-host`
+alone still covers every normal case (running on a machine that owns
+its own reachable address, no NAT in the way).
 
 ### Docker/Podman installs
 

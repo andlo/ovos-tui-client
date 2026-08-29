@@ -1350,7 +1350,8 @@ def build_arg_parser():
     parser.add_argument("--log-dir", default=None, help="override log directory auto-detection")
     parser.add_argument("--mycroft-conf", default=None, help="path to a specific mycroft.conf for the pipeline view to read (default: auto-detected - only needed on some Docker/Podman installs, see README)")
     parser.add_argument("--web", action="store_true", help="serve this tool as a web app instead of running in this terminal - needs 'pip install ovos-tui-client[web]', see README")
-    parser.add_argument("--web-host", default=None, help="address the web server is reachable at (default: auto-detected - see README, guessing wrong here breaks the page's styling/JS)")
+    parser.add_argument("--web-host", default=None, help="address the web server BINDS to (default: auto-detected outbound IP). This is also what gets embedded in the served page's own asset/WebSocket URLs UNLESS --web-public-url is set - see that flag if this server can't bind its own externally-reachable address (e.g. behind Docker port-publishing/NAT), see README")
+    parser.add_argument("--web-public-url", default=None, help="the URL a browser should actually use to reach this server, if different from --web-host (e.g. 'http://203.0.113.5:8000' when this container can only bind 0.0.0.0 or its own internal address, not the host's real one) - only affects the URLs embedded in the served page, never the bind address, see README")
     parser.add_argument("--web-port", type=int, default=8000, help="port for the web server (default: 8000) - see --web")
     return parser
 
@@ -1400,8 +1401,13 @@ def run():
         if args.mycroft_conf:
             parts += ["--mycroft-conf", args.mycroft_conf]
         command = " ".join(shlex.quote(p) for p in parts)
-        print(f"Serving on http://{web_host}:{args.web_port}")
-        Server(command=command, host=web_host, port=args.web_port).serve()
+        print(f"Serving on {args.web_public_url or f'http://{web_host}:{args.web_port}'}")
+        Server(
+            command=command,
+            host=web_host,
+            port=args.web_port,
+            public_url=args.web_public_url,
+        ).serve()
         return
     app = OVOSTUIApp(host=args.host, port=args.port, lang=args.lang, log_dir_override=args.log_dir, mycroft_conf_override=args.mycroft_conf)
     app.run()

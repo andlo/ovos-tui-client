@@ -521,6 +521,7 @@ def test_build_arg_parser_web_flags_default_off():
     args = build_arg_parser().parse_args([])
     assert args.web is False
     assert args.web_host is None
+    assert args.web_public_url is None
     assert args.web_port == 8000
 
 
@@ -530,6 +531,27 @@ def test_build_arg_parser_web_flags_parsed():
     assert args.web is True
     assert args.web_host == "10.0.0.5"
     assert args.web_port == 9000
+
+
+def test_build_arg_parser_web_public_url_parsed():
+    """--web-public-url: added for the case where this add-on/container
+    can only BIND an address (its own hostname, an internal IP, or
+    0.0.0.0) that isn't the same address a browser can actually reach
+    it at - e.g. behind Docker port-publishing/NAT, confirmed as a
+    real, reproducible failure mode via a Home Assistant OS Supervisor
+    add-on install: --web-host set to the host's real LAN IP crashed
+    outright (a container can't bind an address it doesn't own without
+    host networking), while 0.0.0.0/the container's own hostname bind
+    fine but get baked into the served page's own absolute asset/
+    WebSocket URLs, which a browser then can't resolve/reach. This
+    flag only affects the URLs textual-serve embeds in the page,
+    completely independent of the bind address --web-host controls."""
+    from ovos_tui_client.app import build_arg_parser
+    args = build_arg_parser().parse_args([
+        "--web", "--web-host", "0.0.0.0", "--web-public-url", "http://192.168.1.50:8000",
+    ])
+    assert args.web_host == "0.0.0.0"
+    assert args.web_public_url == "http://192.168.1.50:8000"
 
 
 def test_detect_outbound_ip_returns_a_string():
@@ -607,3 +629,49 @@ def test_run_web_auto_detects_host_when_not_given(monkeypatch):
 
     _, kwargs = fake_server_cls.call_args
     assert kwargs["host"] == "203.0.113.5"
+
+
+def test_run_web_passes_public_url_to_server_when_given(monkeypatch):
+    """The actual fix: --web-public-url reaches Server(public_url=...)
+    untouched, independent of --web-host's own value - confirmed via a
+    real Home Assistant OS Supervisor add-on install that binding
+    0.0.0.0 (works) while advertising a real, browser-reachable LAN
+    address via public_url (textual_serve.Server's own existing,
+    already-supported parameter - this project's own CLI just never
+    exposed it before) is the only combination that both binds
+    successfully AND produces a working page, when the host running
+    this can't bind its own externally-reachable address directly."""
+    from ovos_tui_client import app as app_module
+    monkeypatch.setattr(sys, "argv", [
+        "ovos-tui", "--web", "--web-host", "0.0.0.0",
+        "--web-public-url", "http://192.168.1.50:8000",
+    ])
+    fake_server_cls = MagicMock()
+    fake_module = MagicMock()
+    fake_module.Server = fake_server_cls
+    with patch.dict(sys.modules, {"textual_serve.server": fake_module}):
+        app_module.run()
+
+    _, kwargs = fake_server_cls.call_args
+    assert kwargs["host"] == "0.0.0.0"
+    assert kwargs["public_url"] == "http://192.168.1.50:8000"
+
+
+def test_run_web_passes_none_public_url_when_not_given(monkeypatch):
+    """Backward compatibility: when --web-public-url isn't given at
+    all, None is passed through explicitly (not omitted), matching
+    textual_serve.Server's own documented default behavior of falling
+    back to f"http://{host}:{port}" when public_url is None - so
+    existing invocations that only ever set --web-host keep working
+    exactly as before this flag existed."""
+    from ovos_tui_client import app as app_module
+    monkeypatch.setattr(sys, "argv", ["ovos-tui", "--web", "--web-host", "10.0.0.5"])
+    fake_server_cls = MagicMock()
+    fake_module = MagicMock()
+    fake_module.Server = fake_server_cls
+    with patch.dict(sys.modules, {"textual_serve.server": fake_module}):
+        app_module.run()
+
+    _, kwargs = fake_server_cls.call_args
+    assert kwargs["public_url"] is None
+
