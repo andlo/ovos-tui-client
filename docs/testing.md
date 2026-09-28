@@ -33,7 +33,7 @@ While a run is going:
 
 | Verdict | Meaning |
 |---|---|
-| `✓ weather.intent` | The expected skill and intent handled it. |
+| `✓ ovos-skill-weather.openvoiceos:weather.intent` | The expected skill and intent handled it. Without an intent label only the skill is checked and named. |
 | `✗ expected …, got …` | Another skill or intent answered. |
 | `⏱ no response within the time limit` | Nothing handled it within 30 seconds. |
 | `→ <what handled it>` | A script line with no expected skill: nothing to check, but you see who answered. |
@@ -107,15 +107,16 @@ therefore not capture the next step.
 skills such as Andersen's tales) never match a sentence themselves: the
 common-reading pipeline matches it, asks every provider, and then
 fetches the story from the one it picked - after its own handler has
-finished. The step waits for that fetch (up to 10 seconds) and counts
+finished. The step waits for that fetch (up to 30 seconds; the pipeline
+first announces the story, which can take a while) and counts
 it as a pass when the story came from the expected skill. When another
 provider was picked, the result says so: `… read from
 ovos-skill-grimm-tales.andlo`.
 
-A story can take minutes to read, so once the step has its verdict
-the TUI lets the story start and then stops it, in that step's own
-session, before going on to the next step. Any other reply that is
-still being spoken after 30 seconds is stopped the same way.
+After every step the TUI sends `stop` to that step's own session, so
+nothing a step started (a story, "count forever", a metronome) goes on
+under the next step. A story can take minutes to read, so once the
+step has its verdict the TUI lets the story start and then stops it.
 
 A skill stuck waiting in `get_response()` captures every sentence.
 That is reported as such, instead of as a plain mismatch.
