@@ -3,12 +3,42 @@ if it came from STT, and a callback-based interface for incoming
 'speak' events (OVOS's response) - decoupled from Textual itself so
 this module has no UI framework dependency and can be tested without
 spinning up a real App."""
+import socket
 import threading
 import uuid
 
 from ovos_bus_client import MessageBusClient, Message
 
 from ovos_tui_client.activity import summarize_message
+
+# Context key every ovos-tui-client puts on what it sends (#32), so each
+# instance can tell its own utterances/events from another TUI's.
+# Namespaced on purpose: never collides with OVOS's own routing keys
+# (source/destination/session/client_name).
+TUI_CONTEXT_KEY = "ovos_tui_client"
+TUI_EVENT_PREFIX = "ovos.tui."
+
+# ovos-dinkum-listener's own client_name (confirmed in its source:
+# service.py builds the utterance context with this client_name and
+# source="audio").
+LISTENER_CLIENT_NAMES = {"ovos_dinkum_listener", "ovos_listener", "mycroft_listener"}
+
+
+def describe_speaker(context: dict) -> str:
+    """Short label for who said an utterance, from its bus context."""
+    context = context or {}
+    tui = context.get(TUI_CONTEXT_KEY)
+    if isinstance(tui, dict):
+        return f"💻 {tui.get('host') or 'another TUI'}"
+    client = context.get("client_name")
+    if client in LISTENER_CLIENT_NAMES:
+        return "🎤 Mic"
+    session = context.get("session")
+    session_id = session.get("session_id") if isinstance(session, dict) else None
+    label = client or (context.get("source") if isinstance(context.get("source"), str) else None)
+    if session_id and session_id != "default":
+        label = f"{label} · {session_id}" if label else session_id
+    return f"🗣 {label or 'someone'}"
 
 
 class OVOSBusConnection:
@@ -20,6 +50,13 @@ class OVOSBusConnection:
         self._speak_handlers = []
         self._activity_handlers = []
         self._message_handlers = []
+        self._heard_handlers = []
+        self._tui_event_handlers = []
+        self.instance_id = uuid.uuid4().hex[:8]
+        try:
+            self.host = socket.gethostname()
+        except OSError:
+            self.host = "unknown"
 
     def connect(self):
         self._client.on("speak", self._on_speak)
@@ -57,11 +94,66 @@ class OVOSBusConnection:
                 handler(message.msg_type, message.data or {}, message.context or {})
             except Exception:
                 pass
+        self._route_others(message)
         line = summarize_message(message.msg_type, message.data)
         if line is None:
             return
         for handler in self._activity_handlers:
             handler(line)
+
+    def is_own(self, context: dict) -> bool:
+        tui = (context or {}).get(TUI_CONTEXT_KEY)
+        return isinstance(tui, dict) and tui.get("instance") == self.instance_id
+
+    def _route_others(self, message):
+        """#32: utterances and TUI script events that did NOT come from
+        this instance - the mic, HiveMind, another TUI - go to the
+        heard/tui-event handlers so the conversation pane can show them."""
+        context = message.context or {}
+        if self.is_own(context):
+            return
+        if message.msg_type == "recognizer_loop:utterance":
+            utterances = (message.data or {}).get("utterances") or []
+            text = utterances[0] if utterances else ""
+            if not text:
+                return
+            for handler in self._heard_handlers:
+                try:
+                    handler(text, context)
+                except Exception:
+                    pass
+        elif message.msg_type.startswith(TUI_EVENT_PREFIX):
+            for handler in self._tui_event_handlers:
+                try:
+                    handler(message.msg_type, message.data or {}, context)
+                except Exception:
+                    pass
+
+    def on_heard(self, handler):
+        """callback(text, context) for utterances sent by anyone else."""
+        self._heard_handlers.append(handler)
+
+    def on_tui_event(self, handler):
+        """callback(msg_type, data, context) for other TUIs' ovos.tui.* events."""
+        self._tui_event_handlers.append(handler)
+
+    def _tui_context(self, script=None) -> dict:
+        marker = {"instance": self.instance_id, "host": self.host}
+        if script:
+            marker["script"] = script
+        return {TUI_CONTEXT_KEY: marker}
+
+    def emit_tui_event(self, name: str, data: dict):
+        """Announces something this TUI is doing (e.g. a script run) so
+        other TUIs on the same bus can show it - see #32."""
+        self._client.emit(Message(TUI_EVENT_PREFIX + name, data, self._tui_context()))
+
+    def stop_session(self, session_id: str):
+        """mycroft.stop scoped to one session - stops whatever a test step
+        started there. A stop in the default session doesn't reach it."""
+        context = self._tui_context()
+        context["session"] = {"session_id": session_id}
+        self._client.emit(Message("mycroft.stop", {}, context))
 
     def on_speak(self, handler):
         """Registers a callback(utterance: str) called whenever OVOS
@@ -82,7 +174,7 @@ class OVOSBusConnection:
         dispatches and end-markers the activity summarizer skips."""
         self._message_handlers.append(handler)
 
-    def send_utterance(self, text, lang=None, session_id=None):
+    def send_utterance(self, text, lang=None, session_id=None, script=None):
         """Simulates what a real STT pipeline would emit after hearing
         speech - the standard event every OVOS intent/pipeline handler
         listens for, regardless of how the text arrived. `lang`
@@ -96,7 +188,9 @@ class OVOSBusConnection:
         capture the next step. Same isolation ovoscope's golden tests
         use (one session per row); confirmed live that a fresh session
         is routed normally while the default one was captured."""
-        context = {"session": {"session_id": session_id}} if session_id else {}
+        context = self._tui_context(script)
+        if session_id:
+            context["session"] = {"session_id": session_id}
         self._client.emit(Message("recognizer_loop:utterance", {
             "utterances": [text],
             "lang": lang or self.lang,

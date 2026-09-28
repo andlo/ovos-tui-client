@@ -501,6 +501,11 @@ class RunSummary:
     results: list = field(default_factory=list)  # (index, step, StepResult)
     cancelled: bool = False
     duration: float = 0.0
+    # Sessions the steps ran in. Anything a step started (a metronome,
+    # a timer, a story being read) lives in THAT session, so a plain
+    # mycroft.stop in the default session doesn't reach it - found live:
+    # a metronome started by a test step kept ticking after the run.
+    session_ids: list = field(default_factory=list)
 
     def count(self, status: str) -> int:
         return sum(1 for _, _, r in self.results if r.status == status)
@@ -559,6 +564,7 @@ class ScriptRunner:
         self._cancel = threading.Event()
         self.current = 0
         self.session_id = None  # fresh per step, see _run_step()
+        self.session_ids = []   # every session this run used - see RunSummary.session_ids
 
     @property
     def cancelled(self) -> bool:
@@ -605,6 +611,7 @@ class ScriptRunner:
             # the utterance's context - see app._script_send), so leftover
             # converse/get_response state can't capture it.
             self.session_id = f"ovos-tui-test-{uuid.uuid4().hex[:12]}"
+            self.session_ids.append(self.session_id)
             self._expected_skill = step.skill_id
             self._known = set(self._known_skills() or ())
             self._speaking = False
@@ -668,4 +675,5 @@ class ScriptRunner:
             self._on_step_done(i, len(self.steps), step, result, obs)
         summary.cancelled = self._cancel.is_set()
         summary.duration = self._clock() - start
+        summary.session_ids = list(self.session_ids)
         return summary

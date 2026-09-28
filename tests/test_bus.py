@@ -293,3 +293,61 @@ def test_send_utterance_without_session_id_uses_default_session():
     conn.send_utterance("hello")
     msg = client.emit.call_args[0][0]
     assert "session" not in msg.context
+
+
+# --- #32: telling this TUI's messages from everyone else's ---
+
+from ovos_bus_client import Message as _Msg
+from ovos_tui_client.bus import TUI_CONTEXT_KEY, describe_speaker
+
+
+def test_send_utterance_marks_it_as_this_tui_instance():
+    client = MagicMock()
+    conn = OVOSBusConnection(client=client)
+    conn.send_utterance("hello", script={"title": "t", "i": 1, "n": 2})
+    msg = client.emit.call_args[0][0]
+    assert msg.context[TUI_CONTEXT_KEY]["instance"] == conn.instance_id
+    assert msg.context[TUI_CONTEXT_KEY]["script"] == {"title": "t", "i": 1, "n": 2}
+    assert conn.is_own(msg.context)
+
+
+def test_others_utterances_reach_heard_handlers_but_own_do_not():
+    conn = OVOSBusConnection(client=MagicMock())
+    heard = []
+    conn.on_heard(lambda text, ctx: heard.append((text, describe_speaker(ctx))))
+    mic = _Msg("recognizer_loop:utterance", {"utterances": ["what time is it"]},
+               {"client_name": "ovos_dinkum_listener", "source": "audio"})
+    other_tui = _Msg("recognizer_loop:utterance", {"utterances": ["hi"]},
+                     {TUI_CONTEXT_KEY: {"instance": "someone", "host": "laptop"}})
+    own = _Msg("recognizer_loop:utterance", {"utterances": ["mine"]}, conn._tui_context())
+    for m in (mic, other_tui, own):
+        conn._on_raw_message(m.serialize())
+    assert heard == [("what time is it", "🎤 Mic"), ("hi", "💻 laptop")]
+
+
+def test_describe_speaker_hivemind_style_session():
+    assert describe_speaker({"source": "satellite-kitchen", "session": {"session_id": "abc"}}) == "🗣 satellite-kitchen · abc"
+    assert describe_speaker({}) == "🗣 someone"
+
+
+def test_other_tuis_events_reach_tui_event_handlers_own_do_not():
+    client = MagicMock()
+    conn = OVOSBusConnection(client=client)
+    events = []
+    conn.on_tui_event(lambda t, d, c: events.append((t, d.get("title"))))
+    conn.emit_tui_event("script.started", {"title": "mine"})
+    own = client.emit.call_args[0][0]
+    assert own.msg_type == "ovos.tui.script.started"
+    conn._on_raw_message(own.serialize())
+    other = _Msg("ovos.tui.script.started", {"title": "theirs"}, {TUI_CONTEXT_KEY: {"instance": "x", "host": "pi"}})
+    conn._on_raw_message(other.serialize())
+    assert events == [("ovos.tui.script.started", "theirs")]
+
+
+def test_stop_session_sends_mycroft_stop_into_that_session():
+    client = MagicMock()
+    conn = OVOSBusConnection(client=client)
+    conn.stop_session("ovos-tui-test-abc")
+    msg = client.emit.call_args[0][0]
+    assert msg.msg_type == "mycroft.stop"
+    assert msg.context["session"]["session_id"] == "ovos-tui-test-abc"

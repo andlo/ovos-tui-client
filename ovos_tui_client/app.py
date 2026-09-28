@@ -64,7 +64,7 @@ from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Header, Footer, Input, RichLog, Checkbox, Label, ListView, ListItem
 
-from ovos_tui_client.bus import OVOSBusConnection
+from ovos_tui_client.bus import OVOSBusConnection, TUI_CONTEXT_KEY, describe_speaker
 from ovos_tui_client.logs import (
     find_log_dir, discover_log_sources, line_matches_filter, strip_log_prefix,
     is_stdout_only_logging,
@@ -609,6 +609,8 @@ class OVOSTUIApp(App):
         self.scripts_dir = Path(scripts_dir).expanduser() if scripts_dir else SCRIPTS_DIR
         self.golden_counts = {}  # skill_id -> number of golden rows for this lang (0 = none found)
         self.script_runner = None
+        self._own_progress = ""  # header text for this TUI's own running script
+        self._remote_runs = {}   # other TUI instance -> header text for ITS running script (#32)
         self.host = host
         self.port = port
         # ovos_utils.log's own config-based discovery (find_log_dir's
@@ -800,6 +802,8 @@ class OVOSTUIApp(App):
         self.bus.on_speak(self._handle_speak)
         self.bus.on_activity(self._handle_activity)
         self.bus.on_message(self._handle_bus_message)
+        self.bus.on_heard(self._handle_heard)
+        self.bus.on_tui_event(self._handle_tui_event)
         self.bus.connect()
 
         self.set_interval(LOG_POLL_INTERVAL, self._poll_logs)
@@ -903,6 +907,57 @@ class OVOSTUIApp(App):
 
     def _handle_activity(self, line: str) -> None:
         self.call_from_thread(self._write_activity, line)
+
+    def _handle_heard(self, text: str, context: dict) -> None:
+        """#32: someone else said something to OVOS (mic, HiveMind,
+        another TUI) - bus thread."""
+        self.call_from_thread(self._write_heard, text, context)
+
+    def _write_heard(self, text: str, context: dict) -> None:
+        speaker = describe_speaker(context)
+        tui = context.get(TUI_CONTEXT_KEY) if isinstance(context.get(TUI_CONTEXT_KEY), dict) else {}
+        script = tui.get("script") if isinstance(tui.get("script"), dict) else None
+        step = f"\\[{script.get('i')}/{script.get('n')}] " if script else ""
+        self._write_conversation(f"[cyan]{escape(speaker)} {step}said: {escape(text)}[/cyan]")
+
+    def _handle_tui_event(self, msg_type: str, data: dict, context: dict) -> None:
+        self.call_from_thread(self._show_remote_script_event, msg_type, data, context)
+
+    def _show_remote_script_event(self, msg_type: str, data: dict, context: dict) -> None:
+        """#32: another TUI's script run (ovos.tui.script.*), shown in
+        the conversation pane and the header so it's clear why results
+        here might be affected."""
+        tui = context.get(TUI_CONTEXT_KEY) if isinstance(context.get(TUI_CONTEXT_KEY), dict) else {}
+        instance = tui.get("instance") or "?"
+        who = escape(describe_speaker(context))
+        title = escape(str(data.get("title", "script")))
+        if msg_type == "ovos.tui.script.started":
+            self._remote_runs[instance] = f"{tui.get('host') or 'another TUI'}: {data.get('title', 'script')} 0/{data.get('n', '?')}"
+            self._write_conversation(
+                f"[cyan]{who} ▶ started {title} - {data.get('n', '?')} utterance(s), lang {escape(str(data.get('lang', '?')))}[/cyan]")
+        elif msg_type == "ovos.tui.script.step":
+            self._remote_runs[instance] = f"{tui.get('host') or 'another TUI'}: {data.get('title', 'script')} {data.get('i')}/{data.get('n')}"
+            result = self._result_markup(data.get("status"), data.get("detail")).replace("    ", "", 1)
+            self._write_conversation(f"[cyan]{who} \\[{data.get('i')}/{data.get('n')}][/cyan] {result}")
+        elif msg_type == "ovos.tui.script.finished":
+            self._remote_runs.pop(instance, None)
+            colour = data.get("colour") if data.get("colour") in ("green", "red", "yellow") else "cyan"
+            self._write_conversation(
+                f"[bold {colour}]{who} ■ {title} {escape(str(data.get('state', 'finished')))}: {escape(str(data.get('summary', '')))}[/]")
+            for i, utterance, status, detail in data.get("failures") or []:
+                mark = "✗" if status == FAIL else "⏱"
+                self._write_conversation(
+                    f"[{colour}]    {mark} \\[{i}] \"{escape(str(utterance))}\" → {escape(str(detail))}[/{colour}]")
+        else:
+            return
+        self._refresh_sub_title()
+
+    def _refresh_sub_title(self) -> None:
+        parts = []
+        if self._own_progress:
+            parts.append(f"▶ {self._own_progress}")
+        parts += [f"⚠ {text}" for text in self._remote_runs.values()]
+        self.sub_title = "   ".join(parts)
 
     def _handle_bus_message(self, msg_type: str, data: dict, context: dict) -> None:
         """Every raw bus message (bus thread) - forwarded to a running
@@ -1287,12 +1342,14 @@ class OVOSTUIApp(App):
             "Script running - Ctrl+P → 'Script: Stop' to abort" if running
             else "Type what you'd say to OVOS..."
         )
-        self.sub_title = f"▶ {progress}" if running else ""
+        self._own_progress = progress if running else ""
+        self._refresh_sub_title()
         if not running:
             utterance_input.focus()
 
     def _script_started(self, title: str, n: int) -> None:
         self._set_script_ui(True, f"{title}  0/{n}")
+        self.bus.emit_tui_event("script.started", {"title": title, "n": n, "lang": self.bus.lang})
         self._write_conversation(
             f"[bold yellow]━━ ▶ {escape(title)} - {n} utterance(s), lang {escape(self.bus.lang)} ━━[/]")
         self._write_status("Utterances go to your real OVOS - timers, alarms, media etc. really happen. "
@@ -1307,22 +1364,37 @@ class OVOSTUIApp(App):
         # Own session per step (see bus.send_utterance) so steps can't
         # leak conversational state into each other or get captured by
         # something left waiting in the default session.
-        self.bus.send_utterance(step.utterance, session_id=runner.session_id if runner else None)
+        self.bus.send_utterance(step.utterance, session_id=runner.session_id if runner else None,
+                                script={"title": title, "i": i, "n": n})
+
+    @staticmethod
+    def _result_markup(status, detail) -> str:
+        detail = escape(str(detail or ""))
+        if status == PASS:
+            return f"[green]    ✓ {detail}[/green]"
+        if status == FAIL:
+            return f"[red]    ✗ {detail}[/red]"
+        if status == TIMEOUT:
+            return "[yellow]    ⏱ no response within the time limit[/yellow]"
+        return f"[dim]    → {detail}[/dim]"
 
     def _script_step_done(self, i: int, n: int, step, result) -> None:
-        detail = escape(result.detail or "")
-        if result.status == PASS:
-            line = f"[green]    ✓ {detail}[/green]"
-        elif result.status == FAIL:
-            line = f"[red]    ✗ {detail}[/red]"
-        elif result.status == TIMEOUT:
-            line = f"[yellow]    ⏱ no response within the time limit[/yellow]"
-        else:
-            line = f"[dim]    → {detail}[/dim]"
-        self._write_conversation(line)
+        self._write_conversation(self._result_markup(result.status, result.detail))
+        runner = self.script_runner
+        self.bus.emit_tui_event("script.step", {
+            "title": runner.title if runner else "Script", "i": i, "n": n,
+            "utterance": step.utterance, "status": result.status, "detail": result.detail,
+        })
 
     def _script_finished(self, summary) -> None:
         self._set_script_ui(False)
+        # Stop anything the steps left running in their own sessions
+        # (see RunSummary.session_ids) - after a normal finish AND after
+        # 'Script: Stop'.
+        for session_id in summary.session_ids:
+            self.bus.stop_session(session_id)
+        if summary.session_ids:
+            self._write_status(f"Sent stop to the {len(summary.session_ids)} test session(s) - nothing the script started keeps running.")
         passed, failed = summary.count(PASS), summary.count(FAIL)
         timeouts, sent = summary.count(TIMEOUT), summary.count(SENT)
         done = len(summary.results)
@@ -1347,6 +1419,10 @@ class OVOSTUIApp(App):
             mark = "✗" if result.status == FAIL else "⏱"
             self._write_conversation(
                 f"[{colour}]    {mark} \\[{i}] \"{escape(step.utterance)}\" → {escape(result.detail)}[/{colour}]")
+        self.bus.emit_tui_event("script.finished", {
+            "title": summary.title, "state": state, "summary": " · ".join(parts), "colour": colour,
+            "failures": [[i, step.utterance, result.status, result.detail] for i, step, result in summary.failures],
+        })
 
 
     def get_system_commands(self, screen: Screen):
