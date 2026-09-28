@@ -59,6 +59,23 @@ your scripts go and where fetched test sentences are cached.
 
 ![About ovos-tui-client](images/about-tui.svg)
 
+## When skills are installed or removed
+
+The TUI keeps its list of skills up to date while it runs. When OVOS
+loads a new skill, or a skill is removed or deactivated, the list
+refreshes by itself a few seconds later, and the conversation pane
+says what changed, e.g. `Skills changed: added Convert`.
+
+To refresh by hand, use `Ctrl+P` → **`Refresh: Skills and services`**.
+It reads again what the TUI reads at startup: installed skills and
+their state, example phrases, which skills have golden tests, and the
+OVOS services. The conversation and your input history stay. Use it
+if a skill still seems to be missing, e.g. on Docker installs with one
+container per skill.
+
+New log files (a service that started logging after the TUI) still
+need a restart of the TUI.
+
 ## Example phrases
 
 Type `example` in the palette to browse the example phrases of all
