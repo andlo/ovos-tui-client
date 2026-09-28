@@ -52,7 +52,6 @@ import argparse
 import importlib.metadata
 import sys
 import tempfile
-import uuid
 from collections import deque
 from pathlib import Path
 from functools import partial
@@ -1308,7 +1307,7 @@ class OVOSTUIApp(App):
         # Own session per step (see bus.send_utterance) so steps can't
         # leak conversational state into each other or get captured by
         # something left waiting in the default session.
-        self.bus.send_utterance(step.utterance, session_id=f"ovos-tui-test-{uuid.uuid4().hex[:12]}")
+        self.bus.send_utterance(step.utterance, session_id=runner.session_id if runner else None)
 
     def _script_step_done(self, i: int, n: int, step, result) -> None:
         detail = escape(result.detail or "")

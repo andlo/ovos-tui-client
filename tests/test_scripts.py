@@ -331,3 +331,27 @@ def test_converse_capture_by_a_pipeline_plugin_is_detected_too():
     result = evaluate(_step(), obs)
     assert result.status == FAIL and "ovos-common-reading-pipeline-plugin.andlo" in result.detail
     assert "get_response" in result.detail
+
+
+def test_padatious_dotted_name_matches_padacioso_underscore_label():
+    dt = "ovos-skill-date-time.openvoiceos"
+    obs = StepObservation()
+    obs.add_intent(f"{dt}:what.time.is.it.intent")
+    assert evaluate(ScriptStep("what time is it", "en-us", dt, "what_time_is_it"), obs).status == PASS
+
+
+def test_runner_ignores_messages_from_other_sessions():
+    def reply(r, step):
+        other = {"session": {"session_id": "default"}}
+        mine = {"session": {"session_id": r.session_id}}
+        r.feed("ovos-skill-wikipedia.openvoiceos:wiki", {}, other)
+        r.feed("speak", {"utterance": "long long ago"}, other)
+        r.feed(f"{WEATHER}:weather.intent", {}, mine)
+        r.feed("ovos.utterance.handled", {}, mine)
+
+    obs_seen = []
+    runner, done = _runner([_step()], reply)
+    runner._on_step_done = lambda i, n, s, res, obs: obs_seen.append((res.status, obs.intents, obs.spoke))
+    runner.run()
+    assert obs_seen == [("pass", [f"{WEATHER}:weather.intent"], [])]
+    assert runner.session_id.startswith("ovos-tui-test-")

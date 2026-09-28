@@ -33,6 +33,7 @@ import json
 import re
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -426,6 +427,10 @@ def _norm_intent(name: str) -> str:
     skill, _, label = name.partition(":")
     if label.endswith(".intent"):
         label = label[:-len(".intent")]
+    # Golden rows name padacioso intents 'what_time_is_it'; the same
+    # intent dispatched via padatious is 'what.time.is.it.intent' (seen
+    # live on ovos-skill-date-time) - treat '.', '_', '-' and ' ' alike.
+    label = re.sub(r"[._\- ]+", "_", label)
     return f"{skill}:{label}"
 
 
@@ -547,6 +552,7 @@ class ScriptRunner:
         self._speech_done = threading.Event()
         self._cancel = threading.Event()
         self.current = 0
+        self.session_id = None  # fresh per step, see _run_step()
 
     @property
     def cancelled(self) -> bool:
@@ -559,11 +565,19 @@ class ScriptRunner:
         self._speech_done.set()
 
     def feed(self, msg_type: str, data: dict = None, context: dict = None) -> None:
+        context = context or {}
         with self._lock:
             if self._obs is None:
                 return
             known = self._known | ({self._expected_skill} if self._expected_skill else set())
-            observe(self._obs, msg_type, data or {}, context or {}, known)
+            msg_session = (context.get("session") or {}).get("session_id") if isinstance(context.get("session"), dict) else None
+            other_session = bool(self.session_id and msg_session and msg_session != self.session_id)
+            # Messages from OTHER sessions (something still going on in
+            # the default session, e.g. a story being read) don't count
+            # toward this step's result - seen live. Audio events are
+            # still used for "is TTS playing" below, whatever session.
+            if not other_session:
+                observe(self._obs, msg_type, data or {}, context, known)
             self._last_msg = self._clock()
             if msg_type in ("mycroft.audio.speech.start", "recognizer_loop:audio_output_start"):
                 self._speaking = True
@@ -581,6 +595,10 @@ class ScriptRunner:
         total = len(self.steps)
         with self._lock:
             self._obs = StepObservation()
+            # Each step gets its own OVOS session (the sender puts it in
+            # the utterance's context - see app._script_send), so leftover
+            # converse/get_response state can't capture it.
+            self.session_id = f"ovos-tui-test-{uuid.uuid4().hex[:12]}"
             self._expected_skill = step.skill_id
             self._known = set(self._known_skills() or ())
             self._speaking = False
