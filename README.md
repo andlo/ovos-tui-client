@@ -101,6 +101,13 @@ Open the Command Palette (`Ctrl+P`):
   `test/end2end/golden_utterances_<lang>.jsonl` (the rows its CI asserts
   on) for the TUI's `--lang`. **`Test: all installed skills`** runs every
   installed skill that has them.
+- **`Test: <skill> — choose…`** - opens a checklist of that skill's
+  utterances, grouped by intent: tick single utterances or a whole
+  intent group, filter long lists by text, then Run (Ctrl+R). Esc
+  cancels. This is the one window in the tool - picking *some* of 100+
+  utterances is multi-select, which the palette can't do.
+- **`Test: <skill> — last selection (N)`** - appears after a chosen run
+  and replays exactly that subset again, no window (this session).
 - **`Script: <name>`** - runs one of your own scripts from
   `~/.config/ovos-tui-client/scripts/` (or `--scripts-dir`).
   **`Script: Where do scripts go?`** prints the folder and format.

@@ -78,6 +78,7 @@ from ovos_tui_client.scripts import (
     list_user_scripts, load_golden, parse_script,
 )
 from rich.markup import escape
+from ovos_tui_client.test_picker import TestPickerScreen
 
 LOG_POLL_INTERVAL = 0.5  # seconds
 LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
@@ -150,7 +151,8 @@ Typing in Logs/Conversation/Activity jumps focus to the input.
 Checkboxes: unchecked = show all. Checked = narrow to only those.
 
 Scripted test runs: Ctrl+P, type "test" (a skill's own golden
-utterances) or "script" (your own, in ~/.config/ovos-tui-client/scripts/).
+utterances - "choose…" to pick which) or "script" (your own, in
+~/.config/ovos-tui-client/scripts/).
 Each step, its result and a final summary appear in the Conversation pane.
 """
 
@@ -483,12 +485,24 @@ class SkillTestCommandProvider(Provider):
             count = self.app.golden_counts.get(skill_id)
             if count == 0:
                 continue  # looked up before, nothing for this language
+            name = short_skill_name(skill_id)
             suffix = f" ({count})" if count else ""
-            command_text = f"Test: {short_skill_name(skill_id)}{suffix}"
+            command_text = f"Test: {name}{suffix}"
             score = matcher.match(command_text)
             if score > 0:
                 yield Hit(score, matcher.highlight(command_text),
-                          partial(self.app.start_skill_tests, [skill_id], f"Test: {short_skill_name(skill_id)}"))
+                          partial(self.app.start_skill_tests, [skill_id], f"Test: {name}"))
+            # #34: pick a subset instead of always running everything
+            command_text = f"Test: {name} — choose…"
+            score = matcher.match(command_text)
+            if score > 0:
+                yield Hit(score, matcher.highlight(command_text), partial(self.app.choose_skill_tests, skill_id))
+            last = self.app.last_selection.get(skill_id)
+            if last:
+                command_text = f"Test: {name} — last selection ({len(last)})"
+                score = matcher.match(command_text)
+                if score > 0:
+                    yield Hit(score, matcher.highlight(command_text), partial(self.app.rerun_last_selection, skill_id))
 
 
 class ScriptCommandProvider(Provider):
@@ -611,6 +625,8 @@ class OVOSTUIApp(App):
         self.script_runner = None
         self._own_progress = ""  # header text for this TUI's own running script
         self._remote_runs = {}   # other TUI instance -> header text for ITS running script (#32)
+        self.last_selection = {} # skill_id -> steps chosen in the picker last time (#34), this session only
+        self._last_picked = {}   # skill_id -> utterances ticked last time, to pre-tick the picker again
         self.host = host
         self.port = port
         # ovos_utils.log's own config-based discovery (find_log_dir's
@@ -1242,6 +1258,54 @@ class OVOSTUIApp(App):
             self._write_status("A script is already running - Ctrl+P, 'Script: Stop' first", ok=False)
             return
         self._skill_tests_worker(list(skill_ids), title or "Test: all installed skills")
+
+    def choose_skill_tests(self, skill_id: str) -> None:
+        """#34: load the skill's golden set, then open the picker."""
+        if self.script_runner is not None:
+            self._write_status("A script is already running - Ctrl+P, 'Script: Stop' first", ok=False)
+            return
+        self._choose_worker(skill_id)
+
+    @work(thread=True, exclusive=True, group="script")
+    def _choose_worker(self, skill_id: str) -> None:
+        steps = self._load_golden_steps(skill_id)
+        if not steps:
+            self.call_from_thread(
+                self._write_status,
+                f"{skill_id}: nothing to test for {self.bus.lang} - no golden utterances and no skill.json examples", ok=False)
+            return
+        self.call_from_thread(self._open_picker, skill_id, steps)
+
+    def _open_picker(self, skill_id: str, steps: list) -> None:
+        name = short_skill_name(skill_id)
+        previous = self._last_picked.get(skill_id, set())
+        preselected = [i for i, st in enumerate(steps) if st.utterance in previous]
+
+        def _picked(indices):
+            if not indices:
+                return
+            chosen = [steps[i] for i in indices]
+            self.last_selection[skill_id] = chosen
+            self._last_picked[skill_id] = {st.utterance for st in chosen}
+            self._run_steps_worker(f"Test: {name} ({len(chosen)} of {len(steps)} chosen)", chosen)
+
+        self.push_screen(
+            TestPickerScreen(f"Test: {name} - {len(steps)} utterance(s), {self.bus.lang} - tick the ones to run",
+                             steps, preselected),
+            _picked)
+
+    def rerun_last_selection(self, skill_id: str) -> None:
+        chosen = self.last_selection.get(skill_id)
+        if not chosen:
+            return
+        if self.script_runner is not None:
+            self._write_status("A script is already running - Ctrl+P, 'Script: Stop' first", ok=False)
+            return
+        self._run_steps_worker(f"Test: {short_skill_name(skill_id)} (last selection, {len(chosen)})", list(chosen))
+
+    @work(thread=True, exclusive=True, group="script")
+    def _run_steps_worker(self, title: str, steps: list) -> None:
+        self._run_steps(title, steps)
 
     def start_all_skill_tests(self) -> None:
         self.start_skill_tests(sorted(self.installed_skills), "Test: all installed skills")
