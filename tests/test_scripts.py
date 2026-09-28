@@ -364,3 +364,16 @@ def test_ocp_takeover_is_reported_not_a_timeout():
     step = ScriptStep("start a metronome", "en-us", "ovos-skill-metronome.andlo", None)
     result = evaluate(step, obs, timed_out=True)
     assert result.status == FAIL and "ocp:play" in result.detail
+
+
+def test_run_summary_lists_every_session_used_even_when_stopped():
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")
+        r.feed("ovos.utterance.handled")
+        if len(r.session_ids) == 2:
+            r.stop()
+
+    runner, done = _runner([_step(), _step(), _step()], reply)
+    summary = runner.run()
+    assert summary.cancelled and len(summary.session_ids) == 2
+    assert len(set(summary.session_ids)) == 2

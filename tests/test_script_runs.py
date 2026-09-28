@@ -197,3 +197,6 @@ async def test_own_script_run_is_announced_for_other_tuis(tmp_path):
             names = [c.args[0] for c in app.bus.emit_tui_event.call_args_list]
             assert names == ["script.started", "script.step", "script.finished"]
             assert app.bus.send_utterance.call_args.kwargs["script"] == {"title": "Script: one", "i": 1, "n": 1}
+            sent_session = app.bus.send_utterance.call_args.kwargs["session_id"]
+            app.bus.stop_session.assert_called_once_with(sent_session)
+            assert "Sent stop to the 1 test session(s)" in _conversation(app)

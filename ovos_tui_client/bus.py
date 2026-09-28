@@ -148,6 +148,13 @@ class OVOSBusConnection:
         other TUIs on the same bus can show it - see #32."""
         self._client.emit(Message(TUI_EVENT_PREFIX + name, data, self._tui_context()))
 
+    def stop_session(self, session_id: str):
+        """mycroft.stop scoped to one session - stops whatever a test step
+        started there. A stop in the default session doesn't reach it."""
+        context = self._tui_context()
+        context["session"] = {"session_id": session_id}
+        self._client.emit(Message("mycroft.stop", {}, context))
+
     def on_speak(self, handler):
         """Registers a callback(utterance: str) called whenever OVOS
         speaks. Multiple handlers can be registered (e.g. the

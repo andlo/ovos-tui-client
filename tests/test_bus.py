@@ -342,3 +342,12 @@ def test_other_tuis_events_reach_tui_event_handlers_own_do_not():
     other = _Msg("ovos.tui.script.started", {"title": "theirs"}, {TUI_CONTEXT_KEY: {"instance": "x", "host": "pi"}})
     conn._on_raw_message(other.serialize())
     assert events == [("ovos.tui.script.started", "theirs")]
+
+
+def test_stop_session_sends_mycroft_stop_into_that_session():
+    client = MagicMock()
+    conn = OVOSBusConnection(client=client)
+    conn.stop_session("ovos-tui-test-abc")
+    msg = client.emit.call_args[0][0]
+    assert msg.msg_type == "mycroft.stop"
+    assert msg.context["session"]["session_id"] == "ovos-tui-test-abc"

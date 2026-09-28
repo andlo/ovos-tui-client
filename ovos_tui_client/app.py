@@ -1388,6 +1388,13 @@ class OVOSTUIApp(App):
 
     def _script_finished(self, summary) -> None:
         self._set_script_ui(False)
+        # Stop anything the steps left running in their own sessions
+        # (see RunSummary.session_ids) - after a normal finish AND after
+        # 'Script: Stop'.
+        for session_id in summary.session_ids:
+            self.bus.stop_session(session_id)
+        if summary.session_ids:
+            self._write_status(f"Sent stop to the {len(summary.session_ids)} test session(s) - nothing the script started keeps running.")
         passed, failed = summary.count(PASS), summary.count(FAIL)
         timeouts, sent = summary.count(TIMEOUT), summary.count(SENT)
         done = len(summary.results)
