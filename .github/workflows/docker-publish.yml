@@ -33,13 +33,27 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Pre-releases (e.g. v0.2.0a1, v0.2.0b1, v0.2.0rc1) get ONLY their
+          # own version tag - never :latest, so anyone running the companion
+          # image as :latest keeps the last real release. Mirrors PyPI, where
+          # pip ignores pre-releases unless asked (--pre).
+          if [[ "$VERSION" =~ (a|b|rc)[0-9]+$ ]]; then
+            echo "tags=ghcr.io/${{ github.repository_owner }}/ovos-tui-client:${VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "tags<<EOF"
+              echo "ghcr.io/${{ github.repository_owner }}/ovos-tui-client:${VERSION}"
+              echo "ghcr.io/${{ github.repository_owner }}/ovos-tui-client:latest"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/ovos-tui-client:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/ovos-tui-client:latest
+          tags: ${{ steps.version.outputs.tags }}
