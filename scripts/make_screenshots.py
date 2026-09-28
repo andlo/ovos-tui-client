@@ -264,7 +264,13 @@ async def scene_skills(app, pilot):
 
 
 async def scene_about_tui(app, pilot):
+    # show the usual paths, not this machine's temp folder or $HOME: the
+    # window wraps its text by length, so a longer path elsewhere (a CI
+    # runner) would change the picture even after replacing the text
+    real = app.log_dir, app.scripts_dir
+    app.log_dir, app.scripts_dir = DISPLAY_LOG_DIR, "~/.config/ovos-tui-client/scripts"
     app.show_tui_about()
+    app.log_dir, app.scripts_dir = real
     await _settle(pilot, 0.5)
 
 
