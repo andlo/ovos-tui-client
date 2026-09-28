@@ -121,7 +121,7 @@ async def test_skill_without_golden_utterances_reports_it(tmp_path):
             app.start_skill_tests([WEATHER], "Test: weather")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert "no golden utterances for en-us" in _conversation(app)
+            assert "nothing to test for en-us" in _conversation(app)
             app.bus.send_utterance.assert_not_called()
             # hidden from the palette afterwards
             assert await _hits(SkillTestCommandProvider(app.screen), "weather") == []

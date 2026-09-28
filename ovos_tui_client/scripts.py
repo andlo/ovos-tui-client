@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
-from ovos_tui_client.skill_examples import guess_module_name
+from ovos_tui_client.skill_examples import find_skill_examples, guess_module_name
 
 SCRIPTS_DIR = Path("~/.config/ovos-tui-client/scripts").expanduser()
 GOLDEN_CACHE_DIR = Path("~/.cache/ovos-tui-client/golden").expanduser()
@@ -57,8 +57,15 @@ STEP_TIMEOUT = 30.0
 SPEECH_TIMEOUT = 30.0
 LATE_HANDLED_WAIT = 1.5
 SETTLE = 0.5
+# ovos-core < 2.3 has no ovos.utterance.handled, and several real paths
+# (pipeline plugins, a converse/get_response capture) never emit
+# mycroft.skill.handler.complete either - confirmed on a live 2.1.1
+# install. So once SOMETHING has matched, the step also ends after this
+# many seconds without any further bus traffic (and no TTS playing).
+QUIET_AFTER_MATCH = 3.0
 
 FALLBACK_PREFIX = "ovos.skills.fallback."
+READING_FETCH_PREFIX = "ovos.common_reading.fetch_content."
 
 
 # --------------------------------------------------------------------
@@ -250,12 +257,17 @@ class GoldenResult:
 def load_golden(skill_id: str, lang: str, golden_dirs: Iterable = (),
                 fetch: Callable[[str], Optional[str]] = http_get_text,
                 repo_url_finder: Callable[[str], Optional[str]] = find_repo_url,
-                cache_dir: Path = GOLDEN_CACHE_DIR) -> GoldenResult:
+                cache_dir: Path = GOLDEN_CACHE_DIR,
+                examples_finder: Optional[Callable[[str, str], list]] = find_skill_examples) -> GoldenResult:
     """Golden utterances for skill_id in lang. Lookup order:
 
     1. local checkouts: <golden_dir>/<repo-name>/test/end2end/<file>
     2. the skill's GitHub repo (fresh fetch, written to the cache)
     3. the cache from an earlier successful fetch (offline fallback)
+    4. the skill's own skill.json "examples" (#28) - many skills have
+       no golden file but do ship examples. These carry no intent
+       label, so they're checked at skill level only: "did THIS skill
+       answer", not which of its intents.
 
     Returns GoldenResult([], None) when nothing is found anywhere."""
     names = golden_filenames(lang)
@@ -294,6 +306,15 @@ def load_golden(skill_id: str, lang: str, golden_dirs: Iterable = (),
             except OSError:
                 continue
             return GoldenResult(parse_script(text, lang, skill_id), f"{path} (cached)")
+
+    if examples_finder is not None:
+        try:
+            examples = examples_finder(skill_id, normalize_lang(lang))
+        except Exception:
+            examples = []
+        steps = [ScriptStep(e.strip(), lang, skill_id, None) for e in examples if isinstance(e, str) and e.strip()]
+        if steps:
+            return GoldenResult(steps, "skill.json examples (skill-level check only - no golden file)")
 
     return GoldenResult([], None)
 
@@ -353,8 +374,17 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
 
     if ":" in msg_type:
         prefix = msg_type.split(":", 1)[0]
-        if prefix in known:
+        if prefix in known or _looks_like_component_id(prefix):
             obs.add_intent(msg_type)
+            return
+
+    # A skill waiting in get_response()/converse captures the utterance
+    # before any intent matching - dispatched as
+    # '<skill_id>.converse.get_response' (seen live on ovos-core 2.1.1).
+    for skill_id in known:
+        converse_prefix = f"{skill_id}.converse."
+        if msg_type.startswith(converse_prefix):
+            obs.add_intent(f"{skill_id}:converse.{msg_type[len(converse_prefix):]}")
             return
 
     if msg_type == "mycroft.skill.handler.start":
@@ -364,12 +394,30 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
             obs.add_skill(msg_type[len(FALLBACK_PREFIX):-len(".response")])
     elif msg_type == "question:action":
         obs.add_skill(data.get("skill_id"))
+    elif msg_type.startswith(READING_FETCH_PREFIX) and not msg_type.endswith(".response"):
+        # common-reading pipeline picked this provider skill's content
+        obs.add_skill(msg_type[len(READING_FETCH_PREFIX):])
     elif msg_type in ("intent_failure", "complete_intent_failure"):
         obs.failed = True
     elif msg_type == "speak":
         utterance = data.get("utterance")
         if utterance:
             obs.spoke.append(utterance)
+
+
+_NON_INTENT_PREFIXES = ("mycroft.", "ovos.common_play", "recognizer_loop", "ovos.utterance")
+
+
+def _looks_like_component_id(prefix: str) -> bool:
+    """'<something>.<author>' ids that aren't installed skills but still
+    dispatch '<id>:<intent>' - pipeline plugins like
+    'ovos-common-reading-pipeline-plugin.andlo:read_content' (seen live)."""
+    return ("." in prefix and " " not in prefix and "/" not in prefix
+            and not prefix.startswith(_NON_INTENT_PREFIXES))
+
+
+def is_converse_capture(intent: str) -> bool:
+    return ":converse." in intent
 
 
 def _norm_intent(name: str) -> str:
@@ -390,6 +438,10 @@ class StepResult:
 
 
 def describe(obs: StepObservation) -> str:
+    captures = [i for i in obs.intents if is_converse_capture(i)]
+    if captures:
+        skill = captures[0].split(":", 1)[0]
+        return f"{skill} (captured by its pending get_response/converse - the skill is waiting for an answer)"
     if obs.intents:
         return ", ".join(obs.intents)
     if obs.skills:
@@ -415,6 +467,8 @@ def evaluate(step: ScriptStep, obs: StepObservation, timed_out: bool = False) ->
 
     if step.skill_id in obs.skills:
         own = [i for i in obs.intents if i.split(":", 1)[0] == step.skill_id]
+        if any(is_converse_capture(i) for i in own):
+            return StepResult(FAIL, f"got {describe(obs)}")
         if expected and own:
             return StepResult(FAIL, f"expected {step.intent_label}, got {', '.join(i.split(':', 1)[1] for i in own)}")
         return StepResult(PASS, step.intent_label or step.skill_id)
@@ -464,7 +518,7 @@ class ScriptRunner:
                  on_step_done: Callable[[int, int, ScriptStep, StepResult, StepObservation], None] = None,
                  known_skills: Callable[[], Iterable[str]] = lambda: (),
                  step_timeout: float = None, speech_timeout: float = None,
-                 late_handled_wait: float = None, settle: float = None,
+                 late_handled_wait: float = None, settle: float = None, quiet_after_match: float = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.steps = list(steps)
         self.title = title
@@ -477,6 +531,8 @@ class ScriptRunner:
         self.speech_timeout = SPEECH_TIMEOUT if speech_timeout is None else speech_timeout
         self.late_handled_wait = LATE_HANDLED_WAIT if late_handled_wait is None else late_handled_wait
         self.settle = SETTLE if settle is None else settle
+        self.quiet_after_match = QUIET_AFTER_MATCH if quiet_after_match is None else quiet_after_match
+        self._last_msg = 0.0
         self._clock = clock
         self._sleep = sleep
         self._lock = threading.Lock()
@@ -486,6 +542,7 @@ class ScriptRunner:
         self._handled = threading.Event()
         self._soft_done = threading.Event()
         self._speaking = False
+        self._speech_seen = False
         self._speech_done = threading.Event()
         self._cancel = threading.Event()
         self.current = 0
@@ -506,10 +563,12 @@ class ScriptRunner:
                 return
             known = self._known | ({self._expected_skill} if self._expected_skill else set())
             observe(self._obs, msg_type, data or {}, context or {}, known)
-            if msg_type == "mycroft.audio.speech.start":
+            self._last_msg = self._clock()
+            if msg_type in ("mycroft.audio.speech.start", "recognizer_loop:audio_output_start"):
                 self._speaking = True
+                self._speech_seen = True
                 self._speech_done.clear()
-            elif msg_type == "mycroft.audio.speech.stop":
+            elif msg_type in ("mycroft.audio.speech.stop", "recognizer_loop:audio_output_end"):
                 self._speaking = False
                 self._speech_done.set()
         if msg_type in self.TERMINAL:
@@ -524,6 +583,8 @@ class ScriptRunner:
             self._expected_skill = step.skill_id
             self._known = set(self._known_skills() or ())
             self._speaking = False
+            self._last_msg = self._clock()
+            self._speech_seen = False
         self._handled.clear()
         self._soft_done.clear()
         self._speech_done.set()
@@ -542,6 +603,17 @@ class ScriptRunner:
             if self._soft_done.is_set():
                 # older core has no utterance.handled - give it a moment
                 self._handled.wait(self.late_handled_wait)
+                timed_out = False
+                break
+            with self._lock:
+                matched = bool(self._obs and (self._obs.intents or self._obs.skills or self._obs.failed))
+                quiet = self._clock() - self._last_msg
+                speaking = self._speaking
+                # replied but TTS hasn't started yet (synthesis can take a
+                # few seconds) - wait longer before calling it done
+                waiting_for_tts = bool(self._obs and self._obs.spoke) and not self._speech_seen
+            needed = self.quiet_after_match * (3 if waiting_for_tts else 1)
+            if matched and not speaking and quiet >= needed:
                 timed_out = False
                 break
 

@@ -130,6 +130,9 @@ installed skill package, so they're looked up in this order:
    too, as long as the skill package is also installed where the TUI
    runs - otherwise use `--golden-dir`.
 3. That cache, when offline.
+4. No golden file anywhere? The skill's own `skill.json` `examples` are
+   used instead - checked at skill level only ("did this skill answer"),
+   since examples carry no intent label.
 
 **Script format** - `*.txt` is one utterance per line (`#` for
 comments), sent without a check. `*.jsonl` uses the same rows as
@@ -145,8 +148,12 @@ golden files; `skill_id`/`intent_label` are optional, and a
 ```
 
 A step counts as done on `ovos.utterance.handled` (newer ovos-core),
-else on handler-complete / intent-failure, else after 30 s; if TTS
-started, it also waits for speech to end so replies don't overlap.
+else on handler-complete / intent-failure, else - once something has
+matched - after a few quiet seconds on the bus (ovos-core 2.1.x sends
+no end-marker for pipeline plugins or converse captures), else after
+30 s. If TTS started, it also waits for speech to end so replies don't
+overlap. A skill stuck waiting in `get_response()` captures every
+utterance; that's reported as such instead of a plain mismatch.
 
 ### Running as a web app instead of in a terminal
 

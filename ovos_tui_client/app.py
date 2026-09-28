@@ -1234,8 +1234,8 @@ class OVOSTUIApp(App):
             if not found and not many:
                 self.call_from_thread(
                     self._write_status,
-                    f"{skill_id}: no golden utterances for {self.bus.lang} "
-                    f"(looked in local --golden-dir, the skill's GitHub repo and the cache)", ok=False)
+                    f"{skill_id}: nothing to test for {self.bus.lang} - no golden utterances "
+                    f"(local --golden-dir, the skill's GitHub repo, the cache) and no skill.json examples", ok=False)
         if not steps:
             if many:
                 self.call_from_thread(self._write_status, f"{title}: no golden utterances found for any installed skill", ok=False)

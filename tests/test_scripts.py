@@ -259,3 +259,67 @@ def test_runner_stop_cancels_remaining_steps():
     runner, done = _runner([_step(), _step()], reply)
     summary = runner.run()
     assert summary.cancelled and done == []
+
+
+# --- found live on ovos-core 2.1.1 (test instance) ---
+
+def test_pipeline_plugin_dispatch_counts_as_a_match_even_if_not_an_installed_skill():
+    obs = StepObservation()
+    observe(obs, "ovos-common-reading-pipeline-plugin.andlo:read_content", {}, {}, [WEATHER])
+    result = evaluate(_step(), obs)
+    assert result.status == FAIL and "ovos-common-reading-pipeline-plugin.andlo:read_content" in result.detail
+
+
+def test_non_intent_colon_messages_are_ignored():
+    obs = StepObservation()
+    for t in ("recognizer_loop:utterance", "recognizer_loop:audio_output_start", "question:query"):
+        observe(obs, t, {}, {}, [WEATHER])
+    assert obs.intents == []
+
+
+def test_converse_get_response_capture_is_reported_clearly():
+    dt = "ovos-skill-date-time.openvoiceos"
+    obs = StepObservation()
+    observe(obs, f"{dt}.converse.get_response", {}, {}, [dt])
+    result = evaluate(ScriptStep("what time is it", "en-us", dt, "what_time_is_it"), obs)
+    assert result.status == FAIL and "get_response" in result.detail and "waiting for an answer" in result.detail
+
+
+def test_runner_ends_step_after_quiet_period_when_core_sends_no_end_marker():
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")  # no handler.complete, no utterance.handled
+
+    runner, done = _runner([_step()], reply, step_timeout=5, quiet_after_match=0.2)
+    summary = runner.run()
+    assert done == [(1, PASS)] and summary.duration < 2
+
+
+def test_runner_waits_longer_for_tts_after_a_reply():
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")
+        r.feed("speak", {"utterance": "sunny"})
+        threading.Timer(0.35, r.feed, args=("recognizer_loop:audio_output_start",)).start()
+        threading.Timer(0.5, r.feed, args=("recognizer_loop:audio_output_end",)).start()
+
+    runner, done = _runner([_step()], reply, step_timeout=5, quiet_after_match=0.2)
+    summary = runner.run()
+    # quiet 0.2s would have ended at ~0.2s; waiting for TTS keeps it until audio ends
+    assert done == [(1, PASS)] and summary.duration >= 0.5
+
+
+def test_load_golden_falls_back_to_skill_json_examples(tmp_path):
+    result = load_golden("ovos-skill-metronome.andlo", "en-us", fetch=lambda u: None,
+                         repo_url_finder=lambda s: "https://github.com/andlo/ovos-skill-metronome",
+                         cache_dir=tmp_path, examples_finder=lambda sid, lang: ["start a metronome at 90 bpm"])
+    assert [(s.utterance, s.skill_id, s.intent_label) for s in result.steps] == [
+        ("start a metronome at 90 bpm", "ovos-skill-metronome.andlo", None)]
+    assert "skill.json examples" in result.source
+
+
+def test_common_reading_fetch_counts_as_the_provider_skill_answering():
+    obs = StepObservation()
+    observe(obs, "ovos-common-reading-pipeline-plugin.andlo:read_content", {}, {})
+    observe(obs, "ovos.common_reading.fetch_content.ovos-skill-andersen-tales.andlo", {}, {})
+    observe(obs, "ovos.common_reading.fetch_content.response", {}, {})
+    step = ScriptStep("read me the little mermaid", "en-us", "ovos-skill-andersen-tales.andlo", None)
+    assert evaluate(step, obs).status == PASS
