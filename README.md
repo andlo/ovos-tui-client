@@ -40,6 +40,7 @@ Four panes at once: raw logs, a normal back-and-forth conversation, a live simpl
 - **Conversation** - what you typed and what OVOS said back, plus quiet status lines for everything else this tool does (service restarts, skill toggles, startup info) kept visually distinct so they don't clutter the actual conversation.
 - **Activity** - a simplified, human-readable feed of what's happening on the bus right now: which skill is handling the request, wake word and speech start/stop, which fallback skill caught something nothing else understood (and whether it actually resolved anything), and for content-reading requests specifically, which providers answered and at what confidence.
 - **A searchable command palette** (`Ctrl+P`) for everything else - restart a stuck service, activate or deactivate a skill, check the intent pipeline order, browse real example phrases pulled from installed skills' own metadata (search "Example"), or toggle any log filter - all searchable by typing, with results appearing right in the conversation pane instead of popup windows. A help panel (`F1`) covers the rest of the keybindings.
+- **Scripted test runs** - replay a skill's own golden test utterances (search "Test") or your own saved scripts (search "Script") against the live install, again and again. Every simulated utterance, OVOS's reply, a ✓/✗ per step and a closing summary land in the conversation pane - see [Scripted test runs](#scripted-test-runs).
 - Type what you'd say and press Enter, same as talking to a real OVOS device. Up/Down arrows browse what you've typed before, like shell history.
 
 ## Why this is worth having
@@ -85,6 +86,79 @@ ovos-tui --host 192.168.1.50 --port 8181 --lang da-dk --log-dir ~/.local/state/m
   installs (see below) - without it, the pipeline view may read the
   wrong file or find nothing on those installs. It won't crash, but it
   won't be accurate either.
+
+### Scripted test runs
+
+Replay the same utterances again and again against your real, running
+OVOS and see - step by step - whether each one lands on the skill and
+intent it should. Because it runs against the live install, with every
+other skill, fallback and persona present, it catches exactly the
+intent collisions an isolated CI test never sees.
+
+Open the Command Palette (`Ctrl+P`):
+
+- **`Test: <skill>`** - runs that skill's own
+  `test/end2end/golden_utterances_<lang>.jsonl` (the rows its CI asserts
+  on) for the TUI's `--lang`. **`Test: all installed skills`** runs every
+  installed skill that has them.
+- **`Script: <name>`** - runs one of your own scripts from
+  `~/.config/ovos-tui-client/scripts/` (or `--scripts-dir`).
+  **`Script: Where do scripts go?`** prints the folder and format.
+- **`Script: Stop running script`** - aborts a run.
+
+While a script runs, the conversation pane gets a heavy yellow border
+with the progress in its title (`▶ Test: weather  3/14`), the header
+shows the same, and the input box is disabled so typing can't
+interleave with the script. Each step is written like typed input but
+numbered (`[3/14] You: …`), followed by OVOS's reply and the verdict:
+`✓ weather.intent`, `✗ expected …, got …` or `⏱ no response`. The run
+ends with a summary line and the list of failing utterances.
+
+Only routing is checked - which skill/intent handled the utterance -
+not the wording of the reply. **Utterances go to your real OVOS**:
+timers, alarms, media and so on really happen.
+
+**Where golden utterances come from.** `test/` isn't part of an
+installed skill package, so they're looked up in this order:
+
+1. `--golden-dir DIR` (repeatable): local checkouts, as
+   `DIR/<skill-repo>/test/end2end/golden_utterances_<lang>.jsonl` - handy
+   while you're changing a skill's golden file.
+2. The skill's GitHub repo, found from the installed package's own
+   metadata (`url=` in setup.py), fetched fresh on each run and cached in
+   `~/.cache/ovos-tui-client/golden/`. Works for Docker/Podman installs
+   too, as long as the skill package is also installed where the TUI
+   runs - otherwise use `--golden-dir`.
+3. That cache, when offline.
+4. No golden file anywhere? The skill's own `skill.json` `examples` are
+   used instead - checked at skill level only ("did this skill answer"),
+   since examples carry no intent label.
+
+**Script format** - `*.txt` is one utterance per line (`#` for
+comments), sent without a check. `*.jsonl` uses the same rows as
+golden files; `skill_id`/`intent_label` are optional, and a
+`{"golden": "<skill_id>"}` row pulls in that skill's whole golden set:
+
+```jsonl
+# before a release: my own phrasings plus two skills' own tests
+{"utterance": "hvad er klokken", "skill_id": "ovos-skill-date-time.openvoiceos", "intent_label": "what_time_is_it"}
+{"utterance": "hvornår går solen ned"}
+{"golden": "ovos-skill-weather.openvoiceos"}
+{"golden": "ovos-skill-naptime.openvoiceos"}
+```
+
+A step counts as done on `ovos.utterance.handled` (newer ovos-core),
+else on handler-complete / intent-failure, else - once something has
+matched - after a few quiet seconds on the bus (ovos-core 2.1.x sends
+no end-marker for pipeline plugins or converse captures), else after
+30 s. If TTS started, it also waits for speech to end so replies don't
+overlap. A skill stuck waiting in `get_response()` captures every
+utterance; that's reported as such instead of a plain mismatch.
+
+Each step is sent in **its own OVOS session** (like ovoscope's golden
+tests), so a skill left waiting for an answer in the default session,
+or a previous step's follow-up question ("shall I read you this
+one?"), can't capture the next step.
 
 ### Running as a web app instead of in a terminal
 

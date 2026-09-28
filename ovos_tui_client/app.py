@@ -73,6 +73,11 @@ from ovos_tui_client.logs import (
 from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges
 from ovos_tui_client.state import load_filter_state, save_filter_state, load_input_history, save_input_history
 from ovos_tui_client.skill_examples import find_skill_examples, short_skill_name
+from ovos_tui_client.scripts import (
+    SCRIPTS_DIR, PASS, FAIL, TIMEOUT, SENT, ScriptRunner, expand_includes,
+    list_user_scripts, load_golden, parse_script,
+)
+from rich.markup import escape
 
 LOG_POLL_INTERVAL = 0.5  # seconds
 LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
@@ -143,6 +148,10 @@ Services/skills/log-filter: use the Command Palette (Ctrl+P) - type
 Typing in Logs/Conversation/Activity jumps focus to the input.
 
 Checkboxes: unchecked = show all. Checked = narrow to only those.
+
+Scripted test runs: Ctrl+P, type "test" (a skill's own golden
+utterances) or "script" (your own, in ~/.config/ovos-tui-client/scripts/).
+Each step, its result and a final summary appear in the Conversation pane.
 """
 
 
@@ -447,6 +456,68 @@ class ExampleCommandProvider(Provider):
                     )
 
 
+class SkillTestCommandProvider(Provider):
+    """Command Palette provider (Ctrl+P) for scripted test runs of
+    installed skills' own golden utterances (#30) - "Test: weather"
+    replays every golden_utterances_<lang>.jsonl row that skill ships
+    against the live install and checks which intent handled each one.
+    See scripts.py for where the rows come from (they're NOT in the
+    installed package) and how a step is judged.
+
+    Built from installed_skills (same cache as SkillCommandProvider) -
+    the golden files themselves are only looked up when an entry is
+    actually selected, not per keystroke, since that can mean a
+    network fetch. Once a skill's set has been loaded, its entry shows
+    the count ("Test: weather (14)") from self.app.golden_counts."""
+
+    async def search(self, query: str) -> Hits:
+        if self.app.script_runner is not None:
+            return
+        matcher = self.matcher(query)
+        if self.app.installed_skills:
+            command_text = "Test: all installed skills"
+            score = matcher.match(command_text)
+            if score > 0:
+                yield Hit(score, matcher.highlight(command_text), self.app.start_all_skill_tests)
+        for skill_id in sorted(self.app.installed_skills):
+            count = self.app.golden_counts.get(skill_id)
+            if count == 0:
+                continue  # looked up before, nothing for this language
+            suffix = f" ({count})" if count else ""
+            command_text = f"Test: {short_skill_name(skill_id)}{suffix}"
+            score = matcher.match(command_text)
+            if score > 0:
+                yield Hit(score, matcher.highlight(command_text),
+                          partial(self.app.start_skill_tests, [skill_id], f"Test: {short_skill_name(skill_id)}"))
+
+
+class ScriptCommandProvider(Provider):
+    """Command Palette provider (Ctrl+P) for the user's own scripts in
+    ~/.config/ovos-tui-client/scripts/ (*.jsonl or *.txt - see
+    scripts.py for the format), plus "Script: Stop" while a run is in
+    progress. The folder listing is read per search rather than cached:
+    it's a handful of directory entries, and reading it fresh means a
+    script saved while the TUI is open shows up without a reload."""
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        if self.app.script_runner is not None:
+            command_text = "Script: Stop running script"
+            score = matcher.match(command_text)
+            if score > 0:
+                yield Hit(score, matcher.highlight(command_text), self.app.stop_script)
+            return
+        for path in list_user_scripts(self.app.scripts_dir):
+            command_text = f"Script: {path.stem}"
+            score = matcher.match(command_text)
+            if score > 0:
+                yield Hit(score, matcher.highlight(command_text), partial(self.app.start_user_script, path))
+        command_text = "Script: Where do scripts go?"
+        score = matcher.match(command_text)
+        if score > 0:
+            yield Hit(score, matcher.highlight(command_text), self.app.show_scripts_help)
+
+
 class OVOSTUIApp(App):
     CSS = """
     #logs-container {
@@ -494,6 +565,18 @@ class OVOSTUIApp(App):
     #utterance-input {
         dock: bottom;
     }
+    /* Scripted test run in progress (#30): a heavy, warning-coloured
+       border with a progress title on the conversation pane, where the
+       script's steps and results are written - hard to miss. */
+    #conversation.script-running {
+        border: heavy $warning;
+        background: $warning 7%;
+        border-title-color: $warning;
+        border-title-style: bold;
+    }
+    #utterance-input.script-running {
+        border: tall $warning;
+    }
     """
 
     BINDINGS = [
@@ -516,10 +599,16 @@ class OVOSTUIApp(App):
     # renumbering F5+ to fill the gap - no benefit to disrupting keys
     # that already work.
 
-    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider, PipelineCommandProvider, ExampleCommandProvider}
+    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider, PipelineCommandProvider, ExampleCommandProvider, SkillTestCommandProvider, ScriptCommandProvider}
 
-    def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None, mycroft_conf_override=None):
+    def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None, mycroft_conf_override=None,
+                 golden_dirs=None, scripts_dir=None):
         super().__init__()
+        # Scripted test runs (#30) - see scripts.py.
+        self.golden_dirs = list(golden_dirs or [])
+        self.scripts_dir = Path(scripts_dir).expanduser() if scripts_dir else SCRIPTS_DIR
+        self.golden_counts = {}  # skill_id -> number of golden rows for this lang (0 = none found)
+        self.script_runner = None
         self.host = host
         self.port = port
         # ovos_utils.log's own config-based discovery (find_log_dir's
@@ -710,6 +799,7 @@ class OVOSTUIApp(App):
 
         self.bus.on_speak(self._handle_speak)
         self.bus.on_activity(self._handle_activity)
+        self.bus.on_message(self._handle_bus_message)
         self.bus.connect()
 
         self.set_interval(LOG_POLL_INTERVAL, self._poll_logs)
@@ -813,6 +903,13 @@ class OVOSTUIApp(App):
 
     def _handle_activity(self, line: str) -> None:
         self.call_from_thread(self._write_activity, line)
+
+    def _handle_bus_message(self, msg_type: str, data: dict, context: dict) -> None:
+        """Every raw bus message (bus thread) - forwarded to a running
+        script so it can tell when a step is done and what matched."""
+        runner = self.script_runner
+        if runner is not None:
+            runner.feed(msg_type, data, context)
 
     def _write_conversation(self, line: str) -> None:
         """Guards against NoMatches - a background worker's delayed
@@ -1081,6 +1178,177 @@ class OVOSTUIApp(App):
         # palette-selection path where it wasn't guaranteed).
         self.query_one("#utterance-input", Input).focus()
 
+    # ----------------------------------------------------------------
+    # Scripted test runs (#30)
+    # ----------------------------------------------------------------
+
+    def start_skill_tests(self, skill_ids, title=None) -> None:
+        if self.script_runner is not None:
+            self._write_status("A script is already running - Ctrl+P, 'Script: Stop' first", ok=False)
+            return
+        self._skill_tests_worker(list(skill_ids), title or "Test: all installed skills")
+
+    def start_all_skill_tests(self) -> None:
+        self.start_skill_tests(sorted(self.installed_skills), "Test: all installed skills")
+
+    def start_user_script(self, path) -> None:
+        if self.script_runner is not None:
+            self._write_status("A script is already running - Ctrl+P, 'Script: Stop' first", ok=False)
+            return
+        self._user_script_worker(Path(path))
+
+    def stop_script(self) -> None:
+        runner = self.script_runner
+        if runner is not None:
+            runner.stop()
+            self._write_status("Stopping script...")
+
+    def show_scripts_help(self) -> None:
+        self._write_status(
+            f"Scripts folder: {self.scripts_dir}\n"
+            "    *.txt   - one utterance per line ('#' = comment)\n"
+            "    *.jsonl - one JSON row per line, same format as skills' golden utterances:\n"
+            '              {"utterance": "...", "skill_id": "...", "intent_label": "..."}\n'
+            "              skill_id/intent_label are optional - without them a step is just sent.\n"
+            '              {"golden": "<skill_id>"} includes that skill\'s golden utterances.'
+        )
+
+    def _load_golden_steps(self, skill_id: str) -> list:
+        """Worker-thread only (may hit the network)."""
+        result = load_golden(skill_id, self.bus.lang, golden_dirs=self.golden_dirs)
+        self.golden_counts[skill_id] = len(result.steps)
+        if result.steps:
+            self.call_from_thread(
+                self._write_status,
+                f"{short_skill_name(skill_id)}: {len(result.steps)} golden utterance(s) from {result.source}")
+        return result.steps
+
+    @work(thread=True, exclusive=True, group="script")
+    def _skill_tests_worker(self, skill_ids, title) -> None:
+        many = len(skill_ids) > 1
+        self.call_from_thread(self._write_status, f"{title}: looking up golden utterances ({self.bus.lang})...")
+        steps = []
+        for skill_id in skill_ids:
+            found = self._load_golden_steps(skill_id)
+            steps.extend(found)
+            if not found and not many:
+                self.call_from_thread(
+                    self._write_status,
+                    f"{skill_id}: nothing to test for {self.bus.lang} - no golden utterances "
+                    f"(local --golden-dir, the skill's GitHub repo, the cache) and no skill.json examples", ok=False)
+        if not steps:
+            if many:
+                self.call_from_thread(self._write_status, f"{title}: no golden utterances found for any installed skill", ok=False)
+            return
+        self._run_steps(title, steps)
+
+    @work(thread=True, exclusive=True, group="script")
+    def _user_script_worker(self, path: Path) -> None:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            self.call_from_thread(self._write_status, f"Could not read {path}: {e}", ok=False)
+            return
+        items = parse_script(text, lang=self.bus.lang)
+        steps = expand_includes(items, self._load_golden_steps)
+        if not steps:
+            self.call_from_thread(self._write_status, f"Script {path.name}: no steps for {self.bus.lang}", ok=False)
+            return
+        self._run_steps(f"Script: {path.stem}", steps)
+
+    def _run_steps(self, title: str, steps: list) -> None:
+        """Worker thread: builds and runs a ScriptRunner, with every UI
+        touch marshalled through call_from_thread()."""
+        runner = ScriptRunner(
+            steps, title,
+            send=lambda i, n, step: self.call_from_thread(self._script_send, i, n, step),
+            on_step_done=lambda i, n, step, result, obs: self.call_from_thread(self._script_step_done, i, n, step, result),
+            known_skills=lambda: list(self.installed_skills),
+        )
+        self.script_runner = runner
+        self.call_from_thread(self._script_started, title, len(steps))
+        try:
+            summary = runner.run()
+        finally:
+            self.script_runner = None
+        self.call_from_thread(self._script_finished, summary)
+
+    def _set_script_ui(self, running: bool, progress: str = "") -> None:
+        try:
+            conversation = self.query_one("#conversation", RichLog)
+            utterance_input = self.query_one("#utterance-input", Input)
+        except NoMatches:
+            return
+        conversation.set_class(running, "script-running")
+        conversation.border_title = f"▶ {progress}" if running else None
+        utterance_input.set_class(running, "script-running")
+        utterance_input.disabled = running
+        utterance_input.placeholder = (
+            "Script running - Ctrl+P → 'Script: Stop' to abort" if running
+            else "Type what you'd say to OVOS..."
+        )
+        self.sub_title = f"▶ {progress}" if running else ""
+        if not running:
+            utterance_input.focus()
+
+    def _script_started(self, title: str, n: int) -> None:
+        self._set_script_ui(True, f"{title}  0/{n}")
+        self._write_conversation(
+            f"[bold yellow]━━ ▶ {escape(title)} - {n} utterance(s), lang {escape(self.bus.lang)} ━━[/]")
+        self._write_status("Utterances go to your real OVOS - timers, alarms, media etc. really happen. "
+                           "Each step runs in its own session, so leftover conversation state can't interfere.")
+
+    def _script_send(self, i: int, n: int, step) -> None:
+        runner = self.script_runner
+        title = runner.title if runner else "Script"
+        self._set_script_ui(True, f"{title}  {i}/{n}")
+        self._write_conversation(
+            f"[bold yellow]\\[{i}/{n}][/] [green]You: {escape(step.utterance)}[/green]")
+        # Own session per step (see bus.send_utterance) so steps can't
+        # leak conversational state into each other or get captured by
+        # something left waiting in the default session.
+        self.bus.send_utterance(step.utterance, session_id=runner.session_id if runner else None)
+
+    def _script_step_done(self, i: int, n: int, step, result) -> None:
+        detail = escape(result.detail or "")
+        if result.status == PASS:
+            line = f"[green]    ✓ {detail}[/green]"
+        elif result.status == FAIL:
+            line = f"[red]    ✗ {detail}[/red]"
+        elif result.status == TIMEOUT:
+            line = f"[yellow]    ⏱ no response within the time limit[/yellow]"
+        else:
+            line = f"[dim]    → {detail}[/dim]"
+        self._write_conversation(line)
+
+    def _script_finished(self, summary) -> None:
+        self._set_script_ui(False)
+        passed, failed = summary.count(PASS), summary.count(FAIL)
+        timeouts, sent = summary.count(TIMEOUT), summary.count(SENT)
+        done = len(summary.results)
+        parts = []
+        checked = done - sent
+        if checked:
+            parts.append(f"{passed}/{checked} passed")
+        if failed:
+            parts.append(f"{failed} failed")
+        if timeouts:
+            parts.append(f"{timeouts} timed out")
+        if sent:
+            parts.append(f"{sent} sent without a check")
+        state = "stopped" if summary.cancelled else "finished"
+        if summary.cancelled:
+            parts.append(f"stopped after {done}/{summary.total}")
+        parts.append(f"{summary.duration:.0f}s")
+        colour = "green" if not (failed or timeouts or summary.cancelled) else ("red" if failed or timeouts else "yellow")
+        self._write_conversation(
+            f"[bold {colour}]━━ ■ {escape(summary.title)} {state}: {escape(' · '.join(parts))} ━━[/]")
+        for i, step, result in summary.failures:
+            mark = "✗" if result.status == FAIL else "⏱"
+            self._write_conversation(
+                f"[{colour}]    {mark} \\[{i}] \"{escape(step.utterance)}\" → {escape(result.detail)}[/{colour}]")
+
+
     def get_system_commands(self, screen: Screen):
         """Surfaces the same actions available via F1/F5-F8 in
         Textual's built-in command palette (Ctrl+P) too, so they're
@@ -1273,6 +1541,8 @@ class OVOSTUIApp(App):
         save_filter_state(checked_sources, dict(self.level_enabled), dict(self.skill_enabled))
         save_input_history(self.utterance_history)
         stop_container_log_bridges(self.log_bridge_handles)
+        if self.script_runner is not None:
+            self.script_runner.stop()
         await super().action_quit()
 
     def on_key(self, event) -> None:
@@ -1349,6 +1619,8 @@ def build_arg_parser():
     parser.add_argument("--lang", default="en-us", help="BCP-47 language code for typed utterances (default: en-us)")
     parser.add_argument("--log-dir", default=None, help="override log directory auto-detection")
     parser.add_argument("--mycroft-conf", default=None, help="path to a specific mycroft.conf for the pipeline view to read (default: auto-detected - only needed on some Docker/Podman installs, see README)")
+    parser.add_argument("--golden-dir", action="append", default=[], metavar="DIR", help="folder holding local skill checkouts (DIR/<skill-repo>/test/end2end/golden_utterances_<lang>.jsonl), searched before GitHub for 'Test:' runs - repeatable")
+    parser.add_argument("--scripts-dir", default=None, help="folder with your own test scripts (default: ~/.config/ovos-tui-client/scripts)")
     parser.add_argument("--web", action="store_true", help="serve this tool as a web app instead of running in this terminal - needs 'pip install ovos-tui-client[web]', see README")
     parser.add_argument("--web-host", default=None, help="address the web server BINDS to (default: auto-detected outbound IP). This is also what gets embedded in the served page's own asset/WebSocket URLs UNLESS --web-public-url is set - see that flag if this server can't bind its own externally-reachable address (e.g. behind Docker port-publishing/NAT), see README")
     parser.add_argument("--web-public-url", default=None, help="the URL a browser should actually use to reach this server, if different from --web-host (e.g. 'http://203.0.113.5:8000' when this container can only bind 0.0.0.0 or its own internal address, not the host's real one) - only affects the URLs embedded in the served page, never the bind address, see README")
@@ -1400,6 +1672,10 @@ def run():
             parts += ["--log-dir", args.log_dir]
         if args.mycroft_conf:
             parts += ["--mycroft-conf", args.mycroft_conf]
+        for d in args.golden_dir:
+            parts += ["--golden-dir", d]
+        if args.scripts_dir:
+            parts += ["--scripts-dir", args.scripts_dir]
         command = " ".join(shlex.quote(p) for p in parts)
         print(f"Serving on {args.web_public_url or f'http://{web_host}:{args.web_port}'}")
         Server(
@@ -1409,7 +1685,8 @@ def run():
             public_url=args.web_public_url,
         ).serve()
         return
-    app = OVOSTUIApp(host=args.host, port=args.port, lang=args.lang, log_dir_override=args.log_dir, mycroft_conf_override=args.mycroft_conf)
+    app = OVOSTUIApp(host=args.host, port=args.port, lang=args.lang, log_dir_override=args.log_dir, mycroft_conf_override=args.mycroft_conf,
+                     golden_dirs=args.golden_dir, scripts_dir=args.scripts_dir)
     app.run()
 
 

@@ -277,3 +277,19 @@ def test_deactivate_skill_emits_skillmanager_deactivate_with_skill_id():
     sent = fake_client.emit.call_args[0][0]
     assert sent.msg_type == "skillmanager.deactivate"
     assert sent.data == {"skill": "ovos-skill-grimm-tales.andlo"}
+
+
+def test_send_utterance_with_session_id_puts_it_in_context():
+    client = MagicMock()
+    conn = OVOSBusConnection(client=client)
+    conn.send_utterance("hello", session_id="ovos-tui-test-1")
+    msg = client.emit.call_args[0][0]
+    assert msg.context["session"]["session_id"] == "ovos-tui-test-1"
+
+
+def test_send_utterance_without_session_id_uses_default_session():
+    client = MagicMock()
+    conn = OVOSBusConnection(client=client)
+    conn.send_utterance("hello")
+    msg = client.emit.call_args[0][0]
+    assert "session" not in msg.context
