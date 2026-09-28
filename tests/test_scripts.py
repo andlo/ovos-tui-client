@@ -377,3 +377,66 @@ def test_run_summary_lists_every_session_used_even_when_stopped():
     summary = runner.run()
     assert summary.cancelled and len(summary.session_ids) == 2
     assert len(set(summary.session_ids)) == 2
+
+
+# --- common-reading provider skills: the pipeline matches, a provider serves ---
+
+READER = "ovos-common-reading-pipeline-plugin.andlo"
+ANDERSEN = "ovos-skill-andersen-tales.andlo"
+
+
+def test_the_provider_fetched_from_counts_not_the_pipeline_that_matched():
+    obs = StepObservation()
+    observe(obs, f"{READER}:read_by_collection", {}, {})
+    observe(obs, "ovos.common_reading.search", {"query": "andersen"}, {})
+    assert obs.awaiting_provider
+    observe(obs, f"ovos.common_reading.fetch_content.{ANDERSEN}", {"content_id": "x"}, {})
+    assert not obs.awaiting_provider and obs.provider == ANDERSEN
+    step = ScriptStep("tell me a story from andersen", "en-us", ANDERSEN, None)
+    assert evaluate(step, obs).status == PASS
+
+
+def test_a_search_response_alone_does_not_make_every_provider_pass():
+    obs = StepObservation()
+    observe(obs, f"{READER}:read_by_collection", {}, {})
+    observe(obs, "ovos.common_reading.search", {}, {})
+    observe(obs, "ovos.common_reading.search.response", {"skill_id": ANDERSEN}, {})
+    step = ScriptStep("tell me a story from andersen", "en-us", ANDERSEN, None)
+    assert evaluate(step, obs).status == FAIL
+
+
+def test_a_different_provider_fails_and_says_which_one_read():
+    obs = StepObservation()
+    observe(obs, f"{READER}:read_by_collection", {}, {})
+    observe(obs, "ovos.common_reading.search", {}, {})
+    observe(obs, "ovos.common_reading.fetch_content.ovos-skill-grimm-tales.andlo", {}, {})
+    result = evaluate(ScriptStep("a story from andersen", "en-us", ANDERSEN, None), obs)
+    assert result.status == FAIL
+    assert "read from ovos-skill-grimm-tales.andlo" in result.detail
+
+
+def test_runner_waits_for_the_fetch_that_comes_after_the_handler_is_done():
+    import threading
+
+    def reply(runner, step):
+        runner.feed(f"{READER}:read_by_collection")
+        runner.feed("ovos.common_reading.search")
+        runner.feed("mycroft.skill.handler.complete")
+        runner.feed("ovos.utterance.handled")
+        # the pipeline fetches the chosen story a moment later (seen live)
+        threading.Timer(0.3, runner.feed, args=(f"ovos.common_reading.fetch_content.{ANDERSEN}",)).start()
+
+    runner, done = _runner([ScriptStep("a story from andersen", "en-us", ANDERSEN, None)], reply,
+                           provider_wait=2)
+    runner.run()
+    assert done == [(1, PASS)]
+
+
+def test_runner_does_not_wait_when_no_reading_search_happened():
+    import time
+    runner, done = _runner([ScriptStep("what's the weather", "en-us", WEATHER, "weather.intent")],
+                           lambda r, s: (r.feed(f"{WEATHER}:weather.intent"), r.feed("ovos.utterance.handled")),
+                           provider_wait=5)
+    start = time.monotonic()
+    runner.run()
+    assert done == [(1, PASS)] and time.monotonic() - start < 2

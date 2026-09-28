@@ -103,6 +103,15 @@ tests. A skill waiting for an answer in the default session, or the
 previous step's follow-up question ("shall I read you this one?"), can
 therefore not capture the next step.
 
+**Provider skills behind the reading pipeline** (story and article
+skills such as Andersen's tales) never match a sentence themselves: the
+common-reading pipeline matches it, asks every provider, and then
+fetches the story from the one it picked - after its own handler has
+finished. The step waits for that fetch (up to 10 seconds) and counts
+it as a pass when the story came from the expected skill. When another
+provider was picked, the result says so: `… read from
+ovos-skill-grimm-tales.andlo`.
+
 A skill stuck waiting in `get_response()` captures every sentence.
 That is reported as such, instead of as a plain mismatch.
 
