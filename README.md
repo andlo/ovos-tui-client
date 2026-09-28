@@ -37,7 +37,7 @@ Four panes at once: raw logs, a normal back-and-forth conversation, a live simpl
 ## What it does
 
 - **Logs** - tails every OVOS service log it can find (bus, skills, audio, voice, GUI, PHAL, etc), color-coded by source, timestamps stripped for readability, errors bolded. Filter by source, log level, free text, or a specific skill - any combination, live, without restarting anything (with nothing checked in a category everything shows; checking one or more narrows to just those). Scroll up to read something and new lines won't yank you back down.
-- **Conversation** - what you typed and what OVOS said back, plus what *anyone else* said to OVOS - the microphone (`🎤 Mic said: …`), HiveMind clients, another ovos-tui-client (`💻 laptop said: …`) - and other TUIs' scripted test runs as they happen (their header shows `⚠ laptop: Test: weather 3/14`), plus quiet status lines for everything else this tool does (service restarts, skill toggles, startup info) kept visually distinct so they don't clutter the actual conversation.
+- **Conversation** - what you typed and what OVOS said back, plus what *anyone else* said to OVOS - the microphone (`🎤 Mic said: …`), HiveMind clients, another ovos-tui-client (`💻 laptop said: …`) - and other TUIs' scripted test runs as they happen (their header shows `⚠ laptop: Test: Weather - All 3/14`), plus quiet status lines for everything else this tool does (service restarts, skill toggles, startup info) kept visually distinct so they don't clutter the actual conversation.
 - **Activity** - a simplified, human-readable feed of what's happening on the bus right now: which skill is handling the request, wake word and speech start/stop, which fallback skill caught something nothing else understood (and whether it actually resolved anything), and for content-reading requests specifically, which providers answered and at what confidence.
 - **A searchable command palette** (`Ctrl+P`) for everything else - restart a stuck service, activate or deactivate a skill, check the intent pipeline order, browse real example phrases pulled from installed skills' own metadata (search "Example"), or toggle any log filter - all searchable by typing, with results appearing right in the conversation pane instead of popup windows. A help panel (`F1`) covers the rest of the keybindings.
 - **Scripted test runs** - replay a skill's own golden test utterances (search "Test") or your own saved scripts (search "Script") against the live install, again and again. Every simulated utterance, OVOS's reply, a ✓/✗ per step and a closing summary land in the conversation pane - see [Scripted test runs](#scripted-test-runs).
@@ -97,17 +97,24 @@ intent collisions an isolated CI test never sees.
 
 Open the Command Palette (`Ctrl+P`):
 
-- **`Test: <skill>`** - runs that skill's own
+- **`Test: <Skill> - All`** - runs that skill's own
   `test/end2end/golden_utterances_<lang>.jsonl` (the rows its CI asserts
-  on) for the TUI's `--lang`. **`Test: all installed skills`** runs every
+  on) for the TUI's `--lang`. **`Test: All installed skills`** runs every
   installed skill that has them.
+- **`Test: <Skill> - Choose`** - opens a checklist of that skill's
+  utterances, grouped by intent: tick single utterances or a whole
+  intent group, filter long lists by text, then Run (Ctrl+R). Esc
+  cancels. This is the one window in the tool - picking *some* of 100+
+  utterances is multi-select, which the palette can't do.
+- **`Test: <Skill> - Last selection (N)`** - appears after a chosen run
+  and replays exactly that subset again, no window (this session).
 - **`Script: <name>`** - runs one of your own scripts from
   `~/.config/ovos-tui-client/scripts/` (or `--scripts-dir`).
   **`Script: Where do scripts go?`** prints the folder and format.
 - **`Script: Stop running script`** - aborts a run.
 
 While a script runs, the conversation pane gets a heavy yellow border
-with the progress in its title (`▶ Test: weather  3/14`), the header
+with the progress in its title (`▶ Test: Weather - All  3/14`), the header
 shows the same, and the input box is disabled so typing can't
 interleave with the script. Each step is written like typed input but
 numbered (`[3/14] You: …`), followed by OVOS's reply and the verdict:
