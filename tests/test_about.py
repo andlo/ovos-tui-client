@@ -237,3 +237,29 @@ async def test_save_last_selection_writes_a_runnable_script(tmp_path):
         steps = parse_script((tmp_path / "scripts" / "weather-selection.jsonl").read_text(), "en-us")
         assert [(s.utterance, s.intent_label) for s in steps] == [
             ("is it hot", "is_hot_or_cold.intent"), ("is it cold", "is_hot_or_cold.intent")]
+
+
+@pytest.mark.asyncio
+async def test_skills_window_filter_enter_space_flow(tmp_path):
+    """The real keyboard flow: type in the filter, Enter moves to the list,
+    Space toggles the (filtered) skill - Enter again opens its About."""
+    app = _app(tmp_path)
+    app.installed_skills = {W: True, "ovos-skill-naptime.openvoiceos": True, "ovos-skill-alerts.openvoiceos": True}
+    with patch("ovos_tui_client.app.load_golden", return_value=GoldenResult([], None)), \
+         patch("ovos_tui_client.app.find_repo_url", return_value=None), \
+         patch.object(OVOSTUIApp, "SKILL_STATE_CONFIRM_DELAY", 3600):
+        async with app.run_test() as pilot:
+            app.show_installed_skills()
+            await pilot.pause()
+            await pilot.click("#skills-filter")
+            await pilot.press(*"naptime")
+            await pilot.press("enter")          # from the filter: move to the list, don't open anything
+            await pilot.pause()
+            assert isinstance(app.screen, SkillsScreen)
+            await pilot.press("space")
+            await pilot.pause()
+            app.bus.deactivate_skill.assert_called_once_with("ovos-skill-naptime.openvoiceos")
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert isinstance(app.screen, SkillAboutScreen)
