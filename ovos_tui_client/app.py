@@ -81,8 +81,8 @@ from ovos_tui_client.scripts import (
     find_repo_url, list_user_scripts, load_golden, parse_script,
 )
 from ovos_tui_client.about import (
-    InstalledSkillsScreen, SkillAboutScreen, TextAboutScreen,
-    installed_skills_rows, skill_about_markdown, tui_about_markdown,
+    SkillAboutScreen, SkillsScreen, TextAboutScreen,
+    skill_about_markdown, tui_about_markdown,
 )
 from rich.markup import escape
 from ovos_tui_client.test_picker import TestPickerScreen
@@ -405,13 +405,9 @@ class SkillCommandProvider(Provider):
                 )
 
     def _run(self, method_name: str, skill_id: str, label: str) -> None:
-        getattr(self.app.bus, method_name)(skill_id)
-        # optimistic local update - fire-and-forget means there's no
-        # confirmation to wait for anyway, and this means the very
-        # next search only offers the OTHER action for this skill,
-        # without needing a full re-fetch from the bus
-        self.app.installed_skills[skill_id] = (method_name == "activate_skill")
-        self.app._write_status(f"{skill_id}: {label.lower()} requested")
+        # same path as the Skills/About windows: sends the request,
+        # updates optimistically, then confirms against OVOS's own list
+        self.app.set_skill_active(skill_id, method_name == "activate_skill")
 
 
 class ExampleCommandProvider(Provider):
@@ -535,7 +531,10 @@ class AboutCommandProvider(Provider):
         matcher = self.matcher(query)
         fixed = [("About: ovos-tui-client", self.app.show_tui_about)]
         if self.app.installed_skills:
-            fixed.append((f"About: Installed skills ({len(self.app.installed_skills)})", self.app.show_installed_skills))
+            n = len(self.app.installed_skills)
+            fixed.append((f"About: Installed skills ({n})", self.app.show_installed_skills))
+            # same window - found from the "skill" side too
+            fixed.append((f"Skill: Activate / deactivate… ({n})", self.app.show_installed_skills))
         for command_text, action in fixed:
             score = matcher.match(command_text)
             if score > 0:
@@ -1563,15 +1562,20 @@ class OVOSTUIApp(App):
         self.push_screen(TextAboutScreen(markdown))
 
     def show_installed_skills(self) -> None:
+        """One window for all skills: checkbox = active (Space toggles),
+        Enter = that skill's About."""
         def version_of(skill_id):
             dist = find_skill_distribution(skill_id)
             return dist[1] if dist else None
-        grouped = installed_skills_rows(self.installed_skills, display_skill_name, version_of)
-        title = f"Installed skills ({len(self.installed_skills)}) - Enter opens a skill's About"
-        self.push_screen(InstalledSkillsScreen(title, grouped),
-                         lambda skill_id: skill_id and self.show_skill_about(skill_id))
 
-    def show_skill_about(self, skill_id: str) -> None:
+        def _closed(skill_id):
+            if skill_id:
+                self.show_skill_about(skill_id, back_to_skills=True)
+
+        self.push_screen(SkillsScreen(self.installed_skills, display_skill_name, version_of,
+                                      self.set_skill_active), _closed)
+
+    def show_skill_about(self, skill_id: str, back_to_skills: bool = False) -> None:
         lang = self.bus.lang
         info = {"json": find_skill_json(skill_id, lang), "dist": find_skill_distribution(skill_id),
                 "repo": None}
@@ -1581,16 +1585,72 @@ class OVOSTUIApp(App):
                                         self.installed_skills.get(skill_id), info["dist"],
                                         info["repo"], golden, source, lang)
 
-        screen = SkillAboutScreen(render, show_test_buttons=self.script_runner is None)
+        screen = SkillAboutScreen(
+            render, show_test_buttons=self.script_runner is None,
+            get_active=lambda: self.installed_skills.get(skill_id),
+            on_toggle_active=lambda active: self.set_skill_active(skill_id, active))
 
         def _closed(action):
             if action == "test_all":
                 self.start_skill_tests([skill_id], f"Test: {display_skill_name(skill_id)} - All")
             elif action == "choose":
                 self.choose_skill_tests(skill_id)
+            elif back_to_skills:
+                self.show_installed_skills()
 
         self.push_screen(screen, _closed)
         self._about_golden_worker(skill_id, screen, info)
+
+    # ----------------------------------------------------------------
+    # Activate / deactivate - one path for palette, Skills and About
+    # ----------------------------------------------------------------
+
+    SKILL_STATE_CONFIRM_DELAY = 2.0
+
+    def set_skill_active(self, skill_id: str, active: bool) -> None:
+        """Sends skillmanager.activate/deactivate (verified live on
+        ovos-core 2.1.1), updates the local state straight away so the
+        UI reflects it, then re-reads OVOS's own skill list after a
+        moment and reports if the change didn't stick."""
+        if active:
+            self.bus.activate_skill(skill_id)
+        else:
+            self.bus.deactivate_skill(skill_id)
+        self.installed_skills[skill_id] = active
+        self._write_status(f"{display_skill_name(skill_id)}: {'activate' if active else 'deactivate'} requested")
+        self._refresh_skill_windows()
+        self.set_timer(self.SKILL_STATE_CONFIRM_DELAY, partial(self._confirm_skill_state, skill_id, active))
+
+    def _confirm_skill_state(self, skill_id: str, expected: bool) -> None:
+        def _on_result(skills):
+            # normally the bus thread; call directly if already on the app's
+            try:
+                self.call_from_thread(self._apply_confirmed_states, skills, skill_id, expected)
+            except RuntimeError:
+                self._apply_confirmed_states(skills, skill_id, expected)
+        self.bus.list_skills(_on_result)
+
+    def _apply_confirmed_states(self, skills, skill_id: str, expected: bool) -> None:
+        if skills is None:
+            self._write_status(f"{display_skill_name(skill_id)}: couldn't confirm the change (skill list timed out)", ok=False)
+            return
+        # update in place - the Skills window holds a reference to this dict
+        self.installed_skills.clear()
+        self.installed_skills.update(skills)
+        actual = skills.get(skill_id)
+        if actual is expected:
+            self._write_status(f"{display_skill_name(skill_id)}: now {'active' if expected else 'inactive'} (confirmed by OVOS)")
+        else:
+            state = {True: "active", False: "inactive"}.get(actual, "in an unknown state")
+            self._write_status(f"{display_skill_name(skill_id)}: OVOS reports it is still {state}", ok=False)
+        self._refresh_skill_windows()
+
+    def _refresh_skill_windows(self) -> None:
+        for screen in self.screen_stack:
+            if isinstance(screen, SkillsScreen):
+                screen.refresh_states()
+            elif isinstance(screen, SkillAboutScreen):
+                screen.refresh_state()
 
     @work(thread=True, group="about")
     def _about_golden_worker(self, skill_id: str, screen, info) -> None:

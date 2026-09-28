@@ -5,11 +5,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from textual.widgets import Markdown, OptionList, RichLog
+from textual.widgets import Input, Markdown, RichLog, SelectionList
 
 from ovos_tui_client.about import (
-    InstalledSkillsScreen, SkillAboutScreen, TextAboutScreen,
-    installed_skills_rows, skill_about_markdown, tui_about_markdown,
+    SkillAboutScreen, SkillsScreen, TextAboutScreen,
+    skill_about_markdown, skill_rows, tui_about_markdown,
 )
 from ovos_tui_client.app import AboutCommandProvider, OVOSTUIApp, SkillTestCommandProvider
 from ovos_tui_client.scripts import GoldenResult, ScriptStep, parse_script
@@ -51,15 +51,16 @@ def test_tui_about_markdown():
     assert "/logs (skills, audio)" in md and "/scripts" in md and "55" in md
 
 
-def test_installed_skills_rows_one_per_line_grouped_and_sorted():
-    installed = {"ovos-skill-weather.openvoiceos": True, "ovos-skill-alerts.openvoiceos": True,
-                 "skill-x.me": False, "skill-y.me": None}
+def test_skill_rows_one_per_line_sorted_filtered_with_state():
+    installed = {"ovos-skill-weather.openvoiceos": True, "ovos-skill-alerts.openvoiceos": False,
+                 "skill-y.me": None}
     name = lambda sid: sid.split(".")[0].replace("ovos-skill-", "").capitalize()
-    grouped = installed_skills_rows(installed, name, lambda sid: "1.0" if "weather" in sid else None)
-    assert [h for h, _ in grouped] == ["Active", "Inactive", "State unknown"]
-    active = grouped[0][1]
-    assert [sid for sid, _ in active] == ["ovos-skill-alerts.openvoiceos", "ovos-skill-weather.openvoiceos"]
-    assert active[1][1] == "Weather  ·  ovos-skill-weather.openvoiceos  ·  1.0"
+    rows = skill_rows(installed, name, lambda sid: "1.0" if "weather" in sid else None)
+    assert [sid for sid, _, _ in rows] == ["ovos-skill-alerts.openvoiceos", "skill-y.me", "ovos-skill-weather.openvoiceos"]
+    assert rows[2][1] == "Weather  ·  ovos-skill-weather.openvoiceos  ·  1.0" and rows[2][2] is True
+    assert rows[1][1].endswith("(state unknown)")
+    assert rows[0][1].endswith("  ·  inactive")
+    assert [sid for sid, _, _ in skill_rows(installed, name, needle="alert")] == ["ovos-skill-alerts.openvoiceos"]
 
 
 # --- skill.json lookup: locale folder case ---
@@ -125,20 +126,71 @@ async def test_skill_about_window_fills_in_golden_and_test_all_starts_tests(tmp_
 
 
 @pytest.mark.asyncio
-async def test_installed_skills_window_opens_a_skills_about(tmp_path):
+async def test_skills_window_space_toggles_active_and_enter_opens_about(tmp_path):
     app = _app(tmp_path)
     with patch("ovos_tui_client.app.load_golden", return_value=GoldenResult([], None)), \
-         patch("ovos_tui_client.app.find_repo_url", return_value=None):
+         patch("ovos_tui_client.app.find_repo_url", return_value=None), \
+         patch.object(OVOSTUIApp, "SKILL_STATE_CONFIRM_DELAY", 3600):
         async with app.run_test() as pilot:
             app.show_installed_skills()
             await pilot.pause()
-            assert isinstance(app.screen, InstalledSkillsScreen)
-            ol = app.screen.query_one("#installed-list", OptionList)
-            assert [str(ol.get_option_at_index(i).prompt) for i in range(ol.option_count)][0].startswith("── Active (1)")
-            await pilot.press("down", "enter")   # first selectable row = Weather
+            assert isinstance(app.screen, SkillsScreen)
+            sl = app.screen.query_one("#skills-list", SelectionList)
+            assert set(sl.selected) == {W}                  # Weather active, skill-x inactive
+            await pilot.press("space")                      # first row (skill-x) -> activate
+            await pilot.pause()
+            app.bus.activate_skill.assert_called_once_with("skill-x.me")
+            assert app.installed_skills["skill-x.me"] is True
+            assert set(sl.selected) == {W, "skill-x.me"}
+            await pilot.press("down", "enter")              # Weather -> About
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert isinstance(app.screen, SkillAboutScreen)
+            await pilot.press("escape")                     # back to the Skills window
+            await pilot.pause()
+            assert isinstance(app.screen, SkillsScreen)
+
+
+@pytest.mark.asyncio
+async def test_about_window_shortcuts_toggle_active_and_start_tests(tmp_path):
+    app = _app(tmp_path)
+    with patch("ovos_tui_client.app.load_golden", return_value=GoldenResult([], None)), \
+         patch("ovos_tui_client.app.find_repo_url", return_value=None), \
+         patch.object(OVOSTUIApp, "SKILL_STATE_CONFIRM_DELAY", 3600):
+        async with app.run_test() as pilot:
+            app.start_skill_tests = MagicMock()
+            app.show_skill_about(W)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert str(app.screen.query_one("#about-toggle").label) == "Deactivate (a)"
+            await pilot.press("a")
+            await pilot.pause()
+            app.bus.deactivate_skill.assert_called_once_with(W)
+            assert str(app.screen.query_one("#about-toggle").label) == "Activate (a)"
+            assert "**Inactive**" in app.screen.query_one("#about-md", Markdown).source
+            await pilot.press("t")
+            await pilot.pause()
+            app.start_skill_tests.assert_called_once_with([W], "Test: Weather - All")
+
+
+@pytest.mark.asyncio
+async def test_state_change_is_confirmed_against_ovos(tmp_path):
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.bus.list_skills.side_effect = lambda cb, **kw: cb({W: True, "skill-x.me": False})
+        app.set_skill_active(W, False)              # OVOS will say: still active
+        app._confirm_skill_state(W, False)
+        await pilot.pause()
+        text = " ".join(str(l.text) for l in app.query_one("#conversation", RichLog).lines)
+        assert "Weather: deactivate requested" in text
+        assert "OVOS reports it is still active" in text
+        assert app.installed_skills[W] is True      # corrected from OVOS's own list
+
+        app.bus.list_skills.side_effect = lambda cb, **kw: cb({W: False, "skill-x.me": False})
+        app._confirm_skill_state(W, False)
+        await pilot.pause()
+        text = " ".join(str(l.text) for l in app.query_one("#conversation", RichLog).lines)
+        assert "Weather: now inactive (confirmed by OVOS)" in text
 
 
 @pytest.mark.asyncio
