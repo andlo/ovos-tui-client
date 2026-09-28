@@ -355,3 +355,12 @@ def test_runner_ignores_messages_from_other_sessions():
     runner.run()
     assert obs_seen == [("pass", [f"{WEATHER}:weather.intent"], [])]
     assert runner.session_id.startswith("ovos-tui-test-")
+
+
+
+def test_ocp_takeover_is_reported_not_a_timeout():
+    obs = StepObservation()
+    observe(obs, "ocp:play", {"query": "a metronome"}, {})
+    step = ScriptStep("start a metronome", "en-us", "ovos-skill-metronome.andlo", None)
+    result = evaluate(step, obs, timed_out=True)
+    assert result.status == FAIL and "ocp:play" in result.detail

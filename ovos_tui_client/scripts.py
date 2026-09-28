@@ -373,6 +373,12 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
             obs.add_skill(skill)
         return
 
+    if msg_type.startswith("ocp:"):
+        # the OCP media pipeline took it ('start a metronome' -> ocp:play,
+        # seen live) - there's no skill id at this point, only the action
+        obs.add_intent(msg_type)
+        return
+
     if ":" in msg_type:
         prefix = msg_type.split(":", 1)[0]
         if prefix in known or _looks_like_component_id(prefix):
