@@ -132,7 +132,7 @@ async def test_choose_then_last_selection_replays_the_same_subset(tmp_path):
             assert sent == ["hvad er vejret"]
 
             hits = [h async for h in SkillTestCommandProvider(app.screen).search("weather last")]
-            assert [str(h.text) for h in hits] == ["Test: Weather - Last selection (1)"]
+            assert [str(h.text) for h in hits] == ["Test: Weather - Last selection (1)", "Test: Weather - Save last selection as script"]
             hits[0].command()
             await app.workers.wait_for_complete()
             await pilot.pause()
