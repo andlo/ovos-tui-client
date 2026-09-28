@@ -186,7 +186,7 @@ async def test_selecting_activate_calls_bus_activate_skill_no_popup(tmp_path):
         await pilot.pause()
 
         app.bus.activate_skill.assert_called_once_with("ovos-skill-grimm-tales.andlo")
-        assert "ovos-skill-grimm-tales.andlo" in _conversation_text(app)
+        assert "Grimm-tales: activate requested" in _conversation_text(app)
 
 
 @pytest.mark.asyncio
