@@ -64,9 +64,17 @@ SETTLE = 0.5
 # install. So once SOMETHING has matched, the step also ends after this
 # many seconds without any further bus traffic (and no TTS playing).
 QUIET_AFTER_MATCH = 3.0
+# The common-reading pipeline searches its provider skills inside the
+# intent handler, but fetches the chosen story AFTER the handler has
+# finished (seen live: handler.complete / utterance.handled arrive first,
+# 'ovos.common_reading.fetch_content.<provider>' a moment later). Once a
+# search has been seen, the step waits up to this long for the fetch
+# that names the provider that actually answered.
+PROVIDER_WAIT = 10.0
 
 FALLBACK_PREFIX = "ovos.skills.fallback."
 READING_FETCH_PREFIX = "ovos.common_reading.fetch_content."
+READING_SEARCH = "ovos.common_reading.search"
 
 
 # --------------------------------------------------------------------
@@ -338,6 +346,10 @@ class StepObservation:
     skills: List[str] = field(default_factory=list)
     failed: bool = False
     spoke: List[str] = field(default_factory=list)
+    # a common-reading search went out and no provider has been fetched
+    # from yet - see PROVIDER_WAIT
+    awaiting_provider: bool = False
+    provider: str = ""  # the provider skill the reading pipeline fetched from
 
     def _add(self, lst, value):
         if value and value not in lst:
@@ -402,9 +414,13 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
             obs.add_skill(msg_type[len(FALLBACK_PREFIX):-len(".response")])
     elif msg_type == "question:action":
         obs.add_skill(data.get("skill_id"))
+    elif msg_type == READING_SEARCH:
+        obs.awaiting_provider = True
     elif msg_type.startswith(READING_FETCH_PREFIX) and not msg_type.endswith(".response"):
         # common-reading pipeline picked this provider skill's content
-        obs.add_skill(msg_type[len(READING_FETCH_PREFIX):])
+        obs.provider = msg_type[len(READING_FETCH_PREFIX):]
+        obs.add_skill(obs.provider)
+        obs.awaiting_provider = False
     elif msg_type in ("intent_failure", "complete_intent_failure"):
         obs.failed = True
     elif msg_type == "speak":
@@ -455,7 +471,9 @@ def describe(obs: StepObservation) -> str:
         skill = captures[0].split(":", 1)[0]
         return f"{skill} (captured by its pending get_response/converse - the skill is waiting for an answer)"
     if obs.intents:
-        return ", ".join(obs.intents)
+        text = ", ".join(obs.intents)
+        # the reading pipeline matched - say whose story it read
+        return f"{text}, read from {obs.provider}" if obs.provider else text
     if obs.skills:
         return ", ".join(obs.skills)
     if obs.failed:
@@ -536,6 +554,7 @@ class ScriptRunner:
                  known_skills: Callable[[], Iterable[str]] = lambda: (),
                  step_timeout: float = None, speech_timeout: float = None,
                  late_handled_wait: float = None, settle: float = None, quiet_after_match: float = None,
+                 provider_wait: float = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.steps = list(steps)
         self.title = title
@@ -549,6 +568,7 @@ class ScriptRunner:
         self.late_handled_wait = LATE_HANDLED_WAIT if late_handled_wait is None else late_handled_wait
         self.settle = SETTLE if settle is None else settle
         self.quiet_after_match = QUIET_AFTER_MATCH if quiet_after_match is None else quiet_after_match
+        self.provider_wait = PROVIDER_WAIT if provider_wait is None else provider_wait
         self._last_msg = 0.0
         self._clock = clock
         self._sleep = sleep
@@ -561,6 +581,7 @@ class ScriptRunner:
         self._speaking = False
         self._speech_seen = False
         self._speech_done = threading.Event()
+        self._provider_seen = threading.Event()
         self._cancel = threading.Event()
         self.current = 0
         self.session_id = None  # fresh per step, see _run_step()
@@ -572,6 +593,7 @@ class ScriptRunner:
 
     def stop(self) -> None:
         self._cancel.set()
+        self._provider_seen.set()
         self._handled.set()
         self._soft_done.set()
         self._speech_done.set()
@@ -590,6 +612,10 @@ class ScriptRunner:
             # still used for "is TTS playing" below, whatever session.
             if not other_session:
                 observe(self._obs, msg_type, data or {}, context, known)
+                if not self._obs.awaiting_provider:
+                    self._provider_seen.set()
+                else:
+                    self._provider_seen.clear()
             self._last_msg = self._clock()
             if msg_type in ("mycroft.audio.speech.start", "recognizer_loop:audio_output_start"):
                 self._speaking = True
@@ -620,6 +646,7 @@ class ScriptRunner:
         self._handled.clear()
         self._soft_done.clear()
         self._speech_done.set()
+        self._provider_seen.set()
 
         self._send(index, total, step)
 
@@ -650,6 +677,9 @@ class ScriptRunner:
                 break
 
         if not self._cancel.is_set():
+            # the reading pipeline fetches from its provider after the
+            # handler is done - wait for that before judging the step
+            self._provider_seen.wait(self.provider_wait)
             with self._lock:
                 speaking = self._speaking
             if speaking:
