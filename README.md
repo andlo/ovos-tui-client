@@ -40,6 +40,8 @@ Four panes at once: raw logs, a normal back-and-forth conversation, a live simpl
 - **Conversation** - what you typed and what OVOS said back, plus what *anyone else* said to OVOS - the microphone (`🎤 Mic said: …`), HiveMind clients, another ovos-tui-client (`💻 laptop said: …`) - and other TUIs' scripted test runs as they happen (their header shows `⚠ laptop: Test: Weather - All 3/14`), plus quiet status lines for everything else this tool does (service restarts, skill toggles, startup info) kept visually distinct so they don't clutter the actual conversation.
 - **Activity** - a simplified, human-readable feed of what's happening on the bus right now: which skill is handling the request, wake word and speech start/stop, which fallback skill caught something nothing else understood (and whether it actually resolved anything), and for content-reading requests specifically, which providers answered and at what confidence.
 - **A searchable command palette** (`Ctrl+P`) for everything else - restart a stuck service, activate or deactivate a skill, check the intent pipeline order, browse real example phrases pulled from installed skills' own metadata (search "Example"), or toggle any log filter - all searchable by typing, with results appearing right in the conversation pane instead of popup windows. A help panel (`F1`) covers the rest of the keybindings.
+- **About windows** - `About: <Skill>` shows a skill's description, examples and tags (from its own `skill.json`), installed package/version, source repo and golden test coverage per intent, with buttons straight into `Test: All` / `Test: Choose`. `About: Installed skills` lists every installed skill one per line, grouped by state. `About: ovos-tui-client` shows version, connection and where logs, scripts and caches live.
+- **Clear panes** - `Clear: Logs` / `Conversation` / `Activity` / `All` - Up/Down input history is kept.
 - **Scripted test runs** - replay a skill's own golden test utterances (search "Test") or your own saved scripts (search "Script") against the live install, again and again. Every simulated utterance, OVOS's reply, a ✓/✗ per step and a closing summary land in the conversation pane - see [Scripted test runs](#scripted-test-runs).
 - Type what you'd say and press Enter, same as talking to a real OVOS device. Up/Down arrows browse what you've typed before, like shell history.
 
@@ -108,6 +110,9 @@ Open the Command Palette (`Ctrl+P`):
   utterances is multi-select, which the palette can't do.
 - **`Test: <Skill> - Last selection (N)`** - appears after a chosen run
   and replays exactly that subset again, no window (this session).
+- **`Test: <Skill> - Save last selection as script`** - writes that
+  subset to your scripts folder (`<skill>-selection.jsonl`), so it
+  survives a restart as `Script: <skill>-selection`.
 - **`Script: <name>`** - runs one of your own scripts from
   `~/.config/ovos-tui-client/scripts/` (or `--scripts-dir`).
   **`Script: Where do scripts go?`** prints the folder and format.

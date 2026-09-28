@@ -49,6 +49,7 @@ copy something is never yanked back down by incoming content. See
 _write_to_log().
 """
 import argparse
+import json
 import importlib.metadata
 import sys
 import tempfile
@@ -72,10 +73,16 @@ from ovos_tui_client.logs import (
 )
 from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges
 from ovos_tui_client.state import load_filter_state, save_filter_state, load_input_history, save_input_history
-from ovos_tui_client.skill_examples import find_skill_examples, short_skill_name
+from ovos_tui_client.skill_examples import (
+    find_skill_distribution, find_skill_examples, find_skill_json, short_skill_name,
+)
 from ovos_tui_client.scripts import (
-    SCRIPTS_DIR, PASS, FAIL, TIMEOUT, SENT, ScriptRunner, expand_includes,
-    list_user_scripts, load_golden, parse_script,
+    GOLDEN_CACHE_DIR, SCRIPTS_DIR, PASS, FAIL, TIMEOUT, SENT, ScriptRunner, expand_includes,
+    find_repo_url, list_user_scripts, load_golden, parse_script,
+)
+from ovos_tui_client.about import (
+    InstalledSkillsScreen, SkillAboutScreen, TextAboutScreen,
+    installed_skills_rows, skill_about_markdown, tui_about_markdown,
 )
 from rich.markup import escape
 from ovos_tui_client.test_picker import TestPickerScreen
@@ -512,6 +519,32 @@ class SkillTestCommandProvider(Provider):
                 score = matcher.match(command_text)
                 if score > 0:
                     yield Hit(score, matcher.highlight(command_text), partial(self.app.rerun_last_selection, skill_id))
+                # keep a chosen subset beyond this session (a small piece of #11)
+                command_text = f"Test: {name} - Save last selection as script"
+                score = matcher.match(command_text)
+                if score > 0:
+                    yield Hit(score, matcher.highlight(command_text), partial(self.app.save_last_selection, skill_id))
+
+
+class AboutCommandProvider(Provider):
+    """Command Palette provider (Ctrl+P) for the About windows (#29, #15):
+    'About: <Skill>' per installed skill, 'About: Installed skills (N)'
+    and 'About: ovos-tui-client'. Read-only - see about.py."""
+
+    async def search(self, query: str) -> Hits:
+        matcher = self.matcher(query)
+        fixed = [("About: ovos-tui-client", self.app.show_tui_about)]
+        if self.app.installed_skills:
+            fixed.append((f"About: Installed skills ({len(self.app.installed_skills)})", self.app.show_installed_skills))
+        for command_text, action in fixed:
+            score = matcher.match(command_text)
+            if score > 0:
+                yield Hit(score, matcher.highlight(command_text), action)
+        for skill_id in sorted(self.app.installed_skills):
+            command_text = f"About: {display_skill_name(skill_id)}"
+            score = matcher.match(command_text)
+            if score > 0:
+                yield Hit(score, matcher.highlight(command_text), partial(self.app.show_skill_about, skill_id))
 
 
 class ScriptCommandProvider(Provider):
@@ -622,7 +655,7 @@ class OVOSTUIApp(App):
     # renumbering F5+ to fill the gap - no benefit to disrupting keys
     # that already work.
 
-    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider, PipelineCommandProvider, ExampleCommandProvider, SkillTestCommandProvider, ScriptCommandProvider}
+    COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider, PipelineCommandProvider, ExampleCommandProvider, SkillTestCommandProvider, ScriptCommandProvider, AboutCommandProvider}
 
     def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None, mycroft_conf_override=None,
                  golden_dirs=None, scripts_dir=None):
@@ -1498,6 +1531,109 @@ class OVOSTUIApp(App):
         })
 
 
+    # ----------------------------------------------------------------
+    # Clear panes (#13)
+    # ----------------------------------------------------------------
+
+    def clear_panes(self, *panes) -> None:
+        """Clears the given panes. Logs clears the RichLog AND the
+        log_buffer it's re-rendered from - otherwise the old lines would
+        come back on the next filter change. Input history is untouched."""
+        for pane in panes:
+            try:
+                if pane == "logs":
+                    self.log_buffer.clear()
+                    self.query_one("#logs-view", RichLog).clear()
+                elif pane == "conversation":
+                    self.query_one("#conversation", RichLog).clear()
+                elif pane == "activity":
+                    self.query_one("#activity", RichLog).clear()
+            except NoMatches:
+                pass
+
+    # ----------------------------------------------------------------
+    # About windows (#29, #15)
+    # ----------------------------------------------------------------
+
+    def show_tui_about(self) -> None:
+        markdown = tui_about_markdown(
+            _ovos_tui_version(), self.host, self.port, self.bus.lang, self.log_dir,
+            [src.name for src in self.log_sources], self.scripts_dir, GOLDEN_CACHE_DIR,
+            self.golden_dirs, len(self.installed_skills))
+        self.push_screen(TextAboutScreen(markdown))
+
+    def show_installed_skills(self) -> None:
+        def version_of(skill_id):
+            dist = find_skill_distribution(skill_id)
+            return dist[1] if dist else None
+        grouped = installed_skills_rows(self.installed_skills, display_skill_name, version_of)
+        title = f"Installed skills ({len(self.installed_skills)}) - Enter opens a skill's About"
+        self.push_screen(InstalledSkillsScreen(title, grouped),
+                         lambda skill_id: skill_id and self.show_skill_about(skill_id))
+
+    def show_skill_about(self, skill_id: str) -> None:
+        lang = self.bus.lang
+        info = {"json": find_skill_json(skill_id, lang), "dist": find_skill_distribution(skill_id),
+                "repo": None}
+
+        def render(golden, source):
+            return skill_about_markdown(skill_id, display_skill_name(skill_id), info["json"],
+                                        self.installed_skills.get(skill_id), info["dist"],
+                                        info["repo"], golden, source, lang)
+
+        screen = SkillAboutScreen(render, show_test_buttons=self.script_runner is None)
+
+        def _closed(action):
+            if action == "test_all":
+                self.start_skill_tests([skill_id], f"Test: {display_skill_name(skill_id)} - All")
+            elif action == "choose":
+                self.choose_skill_tests(skill_id)
+
+        self.push_screen(screen, _closed)
+        self._about_golden_worker(skill_id, screen, info)
+
+    @work(thread=True, group="about")
+    def _about_golden_worker(self, skill_id: str, screen, info) -> None:
+        """Repo URL + golden coverage can mean network - done after the
+        window is already showing the local skill.json parts."""
+        info["repo"] = find_repo_url(skill_id)
+        result = load_golden(skill_id, self.bus.lang, golden_dirs=self.golden_dirs)
+        self.golden_counts[skill_id] = len(result.steps)
+
+        def _show():
+            # the window may already be closed again - nothing to update then
+            try:
+                screen.show_golden(result.steps, result.source)
+            except NoMatches:
+                pass
+        self.call_from_thread(_show)
+
+    # ----------------------------------------------------------------
+    # Save a chosen subset as a script (part of #11)
+    # ----------------------------------------------------------------
+
+    def save_last_selection(self, skill_id: str) -> None:
+        chosen = self.last_selection.get(skill_id)
+        if not chosen:
+            return
+        base = short_skill_name(skill_id).lower().replace(" ", "-") + "-selection"
+        try:
+            self.scripts_dir.mkdir(parents=True, exist_ok=True)
+            path = self.scripts_dir / f"{base}.jsonl"
+            n = 2
+            while path.exists():
+                path = self.scripts_dir / f"{base}-{n}.jsonl"
+                n += 1
+            rows = [json.dumps({"skill_id": step.skill_id, "utterance": step.utterance,
+                                "lang": step.lang, "intent_label": step.intent_label},
+                               ensure_ascii=False) for step in chosen]
+            path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        except OSError as e:
+            self._write_status(f"Could not save the selection: {e}", ok=False)
+            return
+        self._write_status(f"Saved {len(chosen)} utterance(s) to {path} - run it any time as 'Script: {path.stem}'")
+
+
     def get_system_commands(self, screen: Screen):
         """Surfaces the same actions available via F1/F5-F8 in
         Textual's built-in command palette (Ctrl+P) too, so they're
@@ -1548,6 +1684,11 @@ class OVOSTUIApp(App):
             if "help panel" not in cmd.title.lower() and cmd.title != "Save screenshot":
                 yield cmd
         yield SystemCommand("Save screenshot", "", self._save_screenshot)
+        # #13: clear panes - input history (Up/Down) is deliberately kept
+        yield SystemCommand("Clear: Logs", "", partial(self.clear_panes, "logs"))
+        yield SystemCommand("Clear: Conversation", "", partial(self.clear_panes, "conversation"))
+        yield SystemCommand("Clear: Activity", "", partial(self.clear_panes, "activity"))
+        yield SystemCommand("Clear: All (keeps input history)", "", partial(self.clear_panes, "logs", "conversation", "activity"))
         yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
         yield SystemCommand("Focus: Logs", "", self.action_focus_logs)
         yield SystemCommand("Focus: Conversation", "", self.action_focus_conversation)

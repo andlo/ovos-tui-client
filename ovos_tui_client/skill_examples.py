@@ -59,6 +59,59 @@ def short_skill_name(skill_id: str) -> str:
     return base
 
 
+def _skill_package_dir(skill_id: str):
+    try:
+        spec = importlib.util.find_spec(guess_module_name(skill_id))
+        if not spec or not spec.origin:
+            return None
+        return os.path.dirname(spec.origin)
+    except (ImportError, ValueError, ModuleNotFoundError):
+        return None
+
+
+def _locale_dir(pkg_dir: str, lang: str):
+    """The package's locale/<lang> directory, matched case-insensitively:
+    installed skills ship 'en-us', but newer skill releases have moved
+    to 'en-US' (seen in ovos-skill-weather's repo), and a literal
+    'en-us' lookup would silently miss those on a case-sensitive
+    filesystem."""
+    base = os.path.join(pkg_dir, "locale")
+    try:
+        entries = os.listdir(base)
+    except OSError:
+        return None
+    wanted = lang.lower()
+    for entry in entries:
+        if entry.lower() == wanted:
+            return os.path.join(base, entry)
+    return None
+
+
+def find_skill_json(skill_id: str, lang: str = "en-us") -> dict:
+    """The skill's own skill.json for `lang` (falling back to the bare
+    language, then en-us - same order as before), or {} if the skill
+    isn't importable here or has none. Never raises."""
+    pkg_dir = _skill_package_dir(skill_id)
+    if not pkg_dir:
+        return {}
+    lang_candidates = [lang]
+    if "-" in lang:
+        lang_candidates.append(lang.split("-", 1)[0])
+    if _FALLBACK_LANG not in [c.lower() for c in lang_candidates]:
+        lang_candidates.append(_FALLBACK_LANG)
+    for candidate_lang in lang_candidates:
+        locale_dir = _locale_dir(pkg_dir, candidate_lang)
+        if not locale_dir:
+            continue
+        try:
+            with open(os.path.join(locale_dir, "skill.json"), encoding="utf-8") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeDecodeError):
+            continue
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
 def find_skill_examples(skill_id: str, lang: str = "en-us") -> list:
     """Returns the "examples" list from skill_id's own skill.json, or
     [] if the skill isn't importable on this machine (Docker/Podman
@@ -67,30 +120,25 @@ def find_skill_examples(skill_id: str, lang: str = "en-us") -> list:
     examples. Never raises - any failure here is "no examples known
     for this skill", not something that should interrupt whatever
     called this."""
-    try:
-        module_name = guess_module_name(skill_id)
-        spec = importlib.util.find_spec(module_name)
-        if not spec or not spec.origin:
-            return []
-        pkg_dir = os.path.dirname(spec.origin)
-    except (ImportError, ValueError, ModuleNotFoundError):
-        return []
-
-    lang_candidates = [lang]
-    if "-" in lang:
-        lang_candidates.append(lang.split("-", 1)[0])
-    if _FALLBACK_LANG not in lang_candidates:
-        lang_candidates.append(_FALLBACK_LANG)
-
-    for candidate_lang in lang_candidates:
-        skill_json_path = os.path.join(pkg_dir, "locale", candidate_lang, "skill.json")
-        try:
-            with open(skill_json_path) as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            continue
-        examples = data.get("examples")
-        if isinstance(examples, list):
-            return [e for e in examples if isinstance(e, str)]
-        return []
+    examples = find_skill_json(skill_id, lang).get("examples")
+    if isinstance(examples, list):
+        return [e for e in examples if isinstance(e, str)]
     return []
+
+
+def find_skill_distribution(skill_id: str):
+    """(distribution name, version) of the installed package providing
+    skill_id, or None."""
+    import importlib.metadata
+    module = guess_module_name(skill_id)
+    try:
+        dists = list(importlib.metadata.packages_distributions().get(module, []))
+    except Exception:
+        dists = []
+    base = skill_id.rsplit(".", 1)[0] if "." in skill_id else skill_id
+    for dist in dict.fromkeys(dists + [base, base.replace("_", "-")]):
+        try:
+            return dist, importlib.metadata.version(dist)
+        except Exception:
+            continue
+    return None
