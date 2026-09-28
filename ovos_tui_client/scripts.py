@@ -70,7 +70,15 @@ QUIET_AFTER_MATCH = 3.0
 # 'ovos.common_reading.fetch_content.<provider>' a moment later). Once a
 # search has been seen, the step waits up to this long for the fetch
 # that names the provider that actually answered.
-PROVIDER_WAIT = 10.0
+#
+# The fetch can come well over 10 s after the match (seen live on alpha
+# with Andersen): the pipeline's handler first speaks an announcement
+# ("here is ... by ...") and waits for it to be spoken - up to its own
+# timeout when the audio end isn't reported for the session - and only
+# then fetches. So the step doesn't end on bus silence while a search
+# is waiting for its fetch (the handler is just blocked in that wait),
+# and PROVIDER_WAIT is generous.
+PROVIDER_WAIT = 30.0
 # A provider skill's story can go on for minutes, far past SPEECH_TIMEOUT,
 # and the reading pipeline speaks it in parts - so the runner used to move
 # on while the story kept being read under the next steps (seen live with
@@ -683,13 +691,16 @@ class ScriptRunner:
                 break
             with self._lock:
                 matched = bool(self._obs and (self._obs.intents or self._obs.skills or self._obs.failed))
+                # a reading search waits for its fetch - bus silence then
+                # just means the pipeline is busy announcing the story
+                awaiting_provider = bool(self._obs and self._obs.awaiting_provider)
                 quiet = self._clock() - self._last_msg
                 speaking = self._speaking
                 # replied but TTS hasn't started yet (synthesis can take a
                 # few seconds) - wait longer before calling it done
                 waiting_for_tts = bool(self._obs and self._obs.spoke) and not self._speech_seen
             needed = self.quiet_after_match * (3 if waiting_for_tts else 1)
-            if matched and not speaking and quiet >= needed:
+            if matched and not speaking and not awaiting_provider and quiet >= needed:
                 timed_out = False
                 break
 
@@ -710,12 +721,14 @@ class ScriptRunner:
                     speaking = self._speaking
                 if speaking:
                     self._speech_done.wait(self.speech_timeout)
+                # Always stop the step's session before the next step, so
+                # nothing it started (counting forever, a metronome, speech
+                # past SPEECH_TIMEOUT) goes on under the next one. Only this
+                # step's own session is touched.
+                self._stop_step_session()
                 with self._lock:
                     speaking = self._speaking
                 if speaking:
-                    # still talking after SPEECH_TIMEOUT - don't let it run
-                    # on under the next step
-                    self._stop_step_session()
                     self._speech_done.wait(self.stop_wait)
             if self.settle:
                 self._sleep(self.settle)

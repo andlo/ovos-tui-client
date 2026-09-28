@@ -486,7 +486,8 @@ def test_a_story_is_stopped_even_if_its_reading_never_starts():
     assert stopped == runner.session_ids
 
 
-def test_a_short_reply_is_not_stopped():
+def test_every_step_is_stopped_in_its_own_session_afterwards():
+    # e.g. "count forever": short replies, one after another, never ending
     stopped = []
 
     def reply(r, step):
@@ -495,9 +496,10 @@ def test_a_short_reply_is_not_stopped():
         r.feed("ovos.utterance.handled")
         r.feed("recognizer_loop:audio_output_end")
 
-    runner, done = _runner([_step()], reply, stop_session=stopped.append)
+    runner, done = _runner([_step(), _step()], reply, stop_session=stopped.append)
     runner.run()
-    assert done == [(1, PASS)] and stopped == []
+    assert done == [(1, PASS), (2, PASS)]
+    assert stopped == runner.session_ids and len(set(stopped)) == 2
 
 
 def test_speech_still_going_after_the_speech_timeout_is_stopped():
@@ -512,3 +514,49 @@ def test_speech_still_going_after_the_speech_timeout_is_stopped():
                            speech_timeout=0.2, stop_wait=0.1)
     runner.run()
     assert stopped == runner.session_ids
+
+
+def test_a_slow_announcement_before_the_fetch_does_not_fail_the_step():
+    # seen live (Andersen on alpha): the pipeline matches and searches,
+    # then its handler sits in a long wait for the announcement to be
+    # spoken - silence on the bus - and only then fetches the story
+    import threading
+
+    def reply(runner, step):
+        runner.feed(f"{READER}:read_by_collection")
+        runner.feed("ovos.common_reading.search")
+
+        def later():
+            runner.feed("mycroft.skill.handler.complete")
+            runner.feed("ovos.utterance.handled")
+            runner.feed(f"ovos.common_reading.fetch_content.{ANDERSEN}")
+        threading.Timer(0.8, later).start()
+
+    runner, done = _runner([ScriptStep("a story from andersen", "en-us", ANDERSEN, None)], reply,
+                           quiet_after_match=0.1, provider_wait=0.5, stop_session=lambda s: None,
+                           story_start_wait=0.1, stop_wait=0.1)
+    runner.run()
+    assert done == [(1, PASS)]
+
+
+def test_a_slow_announcement_before_the_fetch_does_not_fail_the_step():
+    # seen live (Andersen on alpha): the pipeline matches and searches,
+    # then its handler sits in a long wait for the announcement to be
+    # spoken - silence on the bus - and only then fetches the story
+    import threading
+
+    def reply(runner, step):
+        runner.feed(f"{READER}:read_by_collection")
+        runner.feed("ovos.common_reading.search")
+
+        def later():
+            runner.feed("mycroft.skill.handler.complete")
+            runner.feed("ovos.utterance.handled")
+            runner.feed(f"ovos.common_reading.fetch_content.{ANDERSEN}")
+        threading.Timer(0.8, later).start()
+
+    runner, done = _runner([ScriptStep("a story from andersen", "en-us", ANDERSEN, None)], reply,
+                           quiet_after_match=0.1, provider_wait=0.5, stop_session=lambda s: None,
+                           story_start_wait=0.1, stop_wait=0.1)
+    runner.run()
+    assert done == [(1, PASS)]
