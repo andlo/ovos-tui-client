@@ -52,7 +52,11 @@ setup(
     python_requires=">=3.9",
     packages=find_packages(include=["ovos_tui_client", "ovos_tui_client.*"]),
     install_requires=get_requirements("requirements.txt"),
-    extras_require={"web": ["textual-serve"]},
+    extras_require={
+        "web": ["textual-serve"],
+        # the manual: mkdocs.yml, docs/, scripts/build_docs.sh
+        "docs": ["mkdocs>=1.6,<2", "mkdocs-material>=9.5,<10"],
+    },
     keywords="ovos textual tui cli-client messagebus voice-assistant testing",
     entry_points={"console_scripts": ["ovos-tui=ovos_tui_client.app:run"]},
 )

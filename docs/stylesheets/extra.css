@@ -1,0 +1,3 @@
+/* screenshots are 120 columns wide - give them room */
+.md-grid { max-width: 1440px; }
+.md-typeset img { border-radius: 6px; }
