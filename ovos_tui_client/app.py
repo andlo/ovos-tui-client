@@ -892,7 +892,9 @@ class OVOSTUIApp(App):
         settles near 'OK ready.' rather than appearing ahead of the
         service/skill summaries, which now take a moment to gather."""
         self._startup_steps_remaining -= 1
-        if self._startup_steps_remaining <= 0:
+        # == 0, not <= 0: the services worker also runs for Refresh (#41)
+        # long after startup, and must not announce 'OK ready.' again
+        if self._startup_steps_remaining == 0:
             self._write_status(f"Connected to messagebus at {self.host}:{self.port}")
             self._write_status("OK ready.")
 
@@ -1022,6 +1024,8 @@ class OVOSTUIApp(App):
         runner = self.script_runner
         if runner is not None:
             runner.feed(msg_type, data, context)
+        if self._is_skill_change(msg_type, data, context):
+            self._on_app_thread(self._schedule_skill_refresh)
 
     def _write_conversation(self, line: str) -> None:
         """Guards against NoMatches - a background worker's delayed
@@ -1132,6 +1136,99 @@ class OVOSTUIApp(App):
         self.call_from_thread(setattr, self, "skill_examples", results)
 
 
+
+    # ----------------------------------------------------------------
+    # Keeping the skill list current without a restart (#41)
+    # ----------------------------------------------------------------
+
+    SKILL_REFRESH_DEBOUNCE = 3.0
+    # Seen live when a skill is loaded / removed: ovos-core 3.x sends
+    # ovos.skill.loaded + mycroft.skills.loaded; 2.1.x sends neither, so
+    # a registration from a skill_id we don't know yet is the signal there.
+    SKILL_CHANGE_TYPES = frozenset({"detach_skill", "ovos.skill.loaded", "mycroft.skills.loaded",
+                                    "mycroft.skills.initialized", "mycroft.ready"})
+    SKILL_LOAD_HINT_TYPES = frozenset({"homescreen.register.examples", "register_intent",
+                                       "padatious:register_intent"})
+
+    def _is_skill_change(self, msg_type: str, data: dict, context: dict) -> bool:
+        if msg_type in self.SKILL_CHANGE_TYPES:
+            return True
+        if msg_type in self.SKILL_LOAD_HINT_TYPES:
+            data, context = data or {}, context or {}
+            skill_id = data.get("skill_id") or context.get("skill_id")
+            if not skill_id and ":" in str(data.get("name", "")):
+                skill_id = str(data["name"]).split(":", 1)[0]
+            # every startup re-registers the known skills - only new ones count
+            return bool(skill_id) and skill_id not in self.installed_skills
+        return False
+
+    def _on_app_thread(self, fn, *args) -> None:
+        """Bus callbacks arrive on the bus thread; tests and a few code
+        paths are already on the app thread, where call_from_thread
+        raises."""
+        try:
+            self.call_from_thread(fn, *args)
+        except RuntimeError:
+            fn(*args)
+
+    def _schedule_skill_refresh(self) -> None:
+        """Debounced: loading one skill sends a burst of messages, a
+        restart of ovos-core hundreds - one refresh after it goes quiet."""
+        timer = getattr(self, "_skill_refresh_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._skill_refresh_timer = self.set_timer(self.SKILL_REFRESH_DEBOUNCE, self._auto_refresh_skills)
+
+    def _auto_refresh_skills(self) -> None:
+        self._skill_refresh_timer = None
+        self.refresh_skills(announce=False)
+
+    def refresh_skills(self, announce: bool = True) -> None:
+        """Re-reads the installed skills and everything derived from them.
+        announce=True is the palette command: it always reports, and also
+        forgets every "no golden tests" verdict so skills hidden from the
+        Test: entries get another chance. The automatic refresh only
+        speaks up when skills were added or removed."""
+        before = dict(self.installed_skills)
+
+        def _on_result(skills):
+            self._on_app_thread(self._apply_skill_refresh, skills, before, announce)
+        self.bus.list_skills(_on_result)
+
+    def _apply_skill_refresh(self, skills, before: dict, announce: bool) -> None:
+        if skills is None:
+            if announce:
+                self._write_status("Refresh: skill list - no response (timed out)", ok=False)
+            return
+        # in place: the Skills window holds a reference to this dict
+        self.installed_skills.clear()
+        self.installed_skills.update(skills)
+        added = sorted(set(skills) - set(before))
+        removed = sorted(set(before) - set(skills))
+        if announce:
+            self.golden_counts.clear()
+        else:
+            for skill_id in added + removed:
+                self.golden_counts.pop(skill_id, None)
+        self._refresh_skill_examples()
+        self._refresh_skill_windows()
+        parts = []
+        if added:
+            parts.append("added " + ", ".join(display_skill_name(s) for s in added))
+        if removed:
+            parts.append("removed " + ", ".join(display_skill_name(s) for s in removed))
+        if parts:
+            self._write_status("Skills changed: " + "; ".join(parts))
+        elif announce:
+            n_active = sum(1 for v in skills.values() if v)
+            n_inactive = sum(1 for v in skills.values() if v is False)
+            self._write_status(f"Refresh: {n_active} active {n_inactive} inactive skills - no changes")
+
+    def refresh_all(self) -> None:
+        """Palette: 'Refresh: Skills and services' - what startup does,
+        without restarting (conversation and input history stay)."""
+        self.refresh_skills(announce=True)
+        self._check_services_worker()
 
     def _update_skills_status(self) -> None:
         """Sources/Levels are now directly visible as checkboxes, so
@@ -1749,6 +1846,8 @@ class OVOSTUIApp(App):
         yield SystemCommand("Clear: Conversation", "", partial(self.clear_panes, "conversation"))
         yield SystemCommand("Clear: Activity", "", partial(self.clear_panes, "activity"))
         yield SystemCommand("Clear: All (keeps input history)", "", partial(self.clear_panes, "logs", "conversation", "activity"))
+        # #41: pick up skills installed/removed while the TUI is running
+        yield SystemCommand("Refresh: Skills and services", "", self.refresh_all)
         yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
         yield SystemCommand("Focus: Logs", "", self.action_focus_logs)
         yield SystemCommand("Focus: Conversation", "", self.action_focus_conversation)
