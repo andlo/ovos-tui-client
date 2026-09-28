@@ -101,16 +101,16 @@ async def test_running_state_is_visible_while_a_step_is_in_flight(tmp_path):
          patch("ovos_tui_client.scripts.SETTLE", 0):
         async with app.run_test() as pilot:
             hits = await _hits(SkillTestCommandProvider(app.screen), "weather")
-            assert [str(h.text) for h in hits] == ["Test: weather", "Test: weather — choose…"]
+            assert [str(h.text) for h in hits] == ["Test: Weather - All", "Test: Weather - Choose"]
             hits[0].command()
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert seen == {"class": True, "title": "▶ Test: weather  1/1", "disabled": True,
-                            "sub_title": "▶ Test: weather  1/1", "own_session": True}
+            assert seen == {"class": True, "title": "▶ Test: Weather - All  1/1", "disabled": True,
+                            "sub_title": "▶ Test: Weather - All  1/1", "own_session": True}
             assert "1/1 passed" in _conversation(app)
             # count now known -> shown in the palette entry
             hits = await _hits(SkillTestCommandProvider(app.screen), "weather")
-            assert [str(h.text) for h in hits] == ["Test: weather (1)", "Test: weather — choose…"]
+            assert [str(h.text) for h in hits] == ["Test: Weather - All (1)", "Test: Weather - Choose"]
 
 
 @pytest.mark.asyncio

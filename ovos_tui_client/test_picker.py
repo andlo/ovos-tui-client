@@ -1,5 +1,5 @@
 """Checklist for picking which of a skill's golden utterances to run
-(#34) - opened from the Command Palette ("Test: <skill> — choose…").
+(#34) - opened from the Command Palette ("Test: <Skill> - Choose").
 
 This is deliberately the ONE window in an otherwise palette-only tool:
 choosing *some* of 100+ utterances is multi-select, which the palette

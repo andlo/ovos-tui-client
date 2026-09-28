@@ -120,7 +120,7 @@ async def test_choose_then_last_selection_replays_the_same_subset(tmp_path):
          patch("ovos_tui_client.scripts.SETTLE", 0):
         async with app.run_test() as pilot:
             hits = [h async for h in SkillTestCommandProvider(app.screen).search("weather choose")]
-            assert [str(h.text) for h in hits][0] == "Test: weather — choose…"
+            assert [str(h.text) for h in hits][0] == "Test: Weather - Choose"
             hits[0].command()
             await app.workers.wait_for_complete()
             await pilot.pause()
@@ -132,7 +132,7 @@ async def test_choose_then_last_selection_replays_the_same_subset(tmp_path):
             assert sent == ["hvad er vejret"]
 
             hits = [h async for h in SkillTestCommandProvider(app.screen).search("weather last")]
-            assert [str(h.text) for h in hits] == ["Test: weather — last selection (1)"]
+            assert [str(h.text) for h in hits] == ["Test: Weather - Last selection (1)"]
             hits[0].command()
             await app.workers.wait_for_complete()
             await pilot.pause()
