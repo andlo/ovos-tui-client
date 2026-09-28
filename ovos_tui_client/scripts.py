@@ -543,6 +543,11 @@ class RunSummary:
     # mycroft.stop in the default session doesn't reach it - found live:
     # a metronome started by a test step kept ticking after the run.
     session_ids: list = field(default_factory=list)
+    started_at: float = 0.0  # wall-clock time.time() when the run started
+    # per step index: what handled it and what OVOS said - for saving the
+    # result (results.py), since StepResult.detail alone is terse on a pass
+    handled_by: dict = field(default_factory=dict)
+    replies: dict = field(default_factory=dict)
 
     def count(self, status: str) -> int:
         return sum(1 for _, _, r in self.results if r.status == status)
@@ -747,7 +752,7 @@ class ScriptRunner:
                 pass
 
     def run(self) -> RunSummary:
-        summary = RunSummary(title=self.title, total=len(self.steps))
+        summary = RunSummary(title=self.title, total=len(self.steps), started_at=time.time())
         start = self._clock()
         for i, step in enumerate(self.steps, start=1):
             if self._cancel.is_set():
@@ -757,6 +762,9 @@ class ScriptRunner:
             if self._cancel.is_set():
                 break
             summary.results.append((i, step, result))
+            if obs is not None:
+                summary.handled_by[i] = describe(obs)
+                summary.replies[i] = list(obs.spoke)
             self._on_step_done(i, len(self.steps), step, result, obs)
         summary.cancelled = self._cancel.is_set()
         summary.duration = self._clock() - start
