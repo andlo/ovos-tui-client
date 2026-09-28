@@ -5,6 +5,15 @@ A split-pane terminal UI for talking to and debugging
 speaker. You type what you would say, read what OVOS says back, and
 watch what happens on the message bus while it happens.
 
+!!! note "This manual describes 0.2.0, currently a pre-release"
+    Test runs, scripts, the About windows and the skills window are new
+    in 0.2.0. Until it is released, a plain `pip install ovos-tui-client`
+    gives you 0.1.x. To get 0.2.0 now:
+
+    ```bash
+    pip install --pre -U ovos-tui-client
+    ```
+
 ![ovos-tui-client with a short conversation](images/overview.svg)
 
 ## What you get
