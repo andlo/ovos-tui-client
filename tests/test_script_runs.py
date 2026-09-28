@@ -34,7 +34,7 @@ async def _hits(provider, query):
 
 def _fake_ovos(app, matches):
     """send_utterance side effect: pretend OVOS routed `text` to matches[text]."""
-    def send(text, lang=None, session_id=None):
+    def send(text, lang=None, session_id=None, script=None):
         runner = app.script_runner
         if matches.get(text):
             runner.feed(matches[text])
@@ -85,7 +85,7 @@ async def test_running_state_is_visible_while_a_step_is_in_flight(tmp_path):
     app.installed_skills = {WEATHER: True}
     seen = {}
 
-    def send(text, lang=None, session_id=None):
+    def send(text, lang=None, session_id=None, script=None):
         conv = app.query_one("#conversation", RichLog)
         seen["class"] = conv.has_class("script-running")
         seen["title"] = str(conv.border_title)
@@ -141,3 +141,59 @@ async def test_stop_entry_only_while_running(tmp_path):
         hits[0].command()
         app.script_runner.stop.assert_called_once()
         app.script_runner = None
+
+
+# --- #32: others' utterances and other TUIs' script runs ---
+
+from ovos_tui_client.bus import TUI_CONTEXT_KEY
+
+
+@pytest.mark.asyncio
+async def test_utterance_from_the_mic_shows_in_the_conversation(tmp_path):
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app._write_heard("what time is it", {"client_name": "ovos_dinkum_listener"})
+        app._write_heard("hej", {TUI_CONTEXT_KEY: {"instance": "x", "host": "laptop", "script": {"title": "T", "i": 2, "n": 5}}})
+        await pilot.pause()
+        text = _conversation(app)
+        assert "🎤 Mic said: what time is it" in text
+        assert "💻 laptop [2/5] said: hej" in text
+
+
+@pytest.mark.asyncio
+async def test_another_tuis_script_run_is_visible_in_conversation_and_header(tmp_path):
+    app = _app(tmp_path)
+    ctx = {TUI_CONTEXT_KEY: {"instance": "x", "host": "laptop"}}
+    async with app.run_test() as pilot:
+        app._show_remote_script_event("ovos.tui.script.started", {"title": "Test: weather", "n": 3, "lang": "da-dk"}, ctx)
+        app._show_remote_script_event("ovos.tui.script.step", {"title": "Test: weather", "i": 1, "n": 3,
+                                                              "status": "pass", "detail": "weather.intent"}, ctx)
+        await pilot.pause()
+        assert app.sub_title == "⚠ laptop: Test: weather 1/3"
+        app._show_remote_script_event("ovos.tui.script.finished", {
+            "title": "Test: weather", "state": "finished", "summary": "2/3 passed · 1 failed · 9s", "colour": "red",
+            "failures": [[3, "er det godt udenfor", "fail", "expected x, got y"]]}, ctx)
+        await pilot.pause()
+        text = _conversation(app)
+        assert "💻 laptop ▶ started Test: weather - 3 utterance(s), lang da-dk" in text
+        assert "💻 laptop [1/3] ✓ weather.intent" in text
+        assert "💻 laptop ■ Test: weather finished: 2/3 passed · 1 failed · 9s" in text
+        assert '[3] "er det godt udenfor" → expected x, got y' in text
+        assert app.sub_title == ""
+
+
+@pytest.mark.asyncio
+async def test_own_script_run_is_announced_for_other_tuis(tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "one.txt").write_text("hello there\n")
+    app = _app(tmp_path, scripts)
+    _fake_ovos(app, {"hello there": None})
+    with patch("ovos_tui_client.scripts.SETTLE", 0), patch("ovos_tui_client.scripts.STEP_TIMEOUT", 0.3):
+        async with app.run_test() as pilot:
+            app.start_user_script(scripts / "one.txt")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            names = [c.args[0] for c in app.bus.emit_tui_event.call_args_list]
+            assert names == ["script.started", "script.step", "script.finished"]
+            assert app.bus.send_utterance.call_args.kwargs["script"] == {"title": "Script: one", "i": 1, "n": 1}
