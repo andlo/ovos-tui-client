@@ -80,6 +80,21 @@ After a chosen run, two more entries appear in the palette:
 You can also start tests from a skill's About window: `t` for All, `c`
 for Choose. See [Skills and About windows](skills.md).
 
+## Save the result
+
+After a run, `Ctrl+P` → **`Test: Save last result (<title>)`** saves it
+in `~/.local/share/ovos-tui-client/results/`, named by date, time and
+title:
+
+- **`….md`**: a report you can read or paste into an issue as it is.
+  It has the summary line, when it ran, which OVOS and language, the
+  failures, a table of every step (expected, what handled it, what
+  OVOS said) and the version of each skill tested.
+- **`….jsonl`**: one row per step, for comparing two runs with a
+  script, e.g. stable against alpha, or before and after a fix.
+
+Only the last run can be saved, and only until the TUI is closed.
+
 ## Stop a run
 
 `Ctrl+P` → **`Script: Stop running script`**. The steps that already

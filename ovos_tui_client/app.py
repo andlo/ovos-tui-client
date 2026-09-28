@@ -86,6 +86,7 @@ from ovos_tui_client.about import (
 )
 from rich.markup import escape
 from ovos_tui_client.test_picker import TestPickerScreen
+from ovos_tui_client.results import RESULTS_DIR, save_result, summary_parts
 
 LOG_POLL_INTERVAL = 0.5  # seconds
 LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
@@ -666,6 +667,8 @@ class OVOSTUIApp(App):
         self.script_runner = None
         self._own_progress = ""  # header text for this TUI's own running script
         self._remote_runs = {}   # other TUI instance -> header text for ITS running script (#32)
+        self.last_summary = None  # the last test run, for 'Test: Save last result'
+        self.results_dir = RESULTS_DIR
         self.last_selection = {} # skill_id -> steps chosen in the picker last time (#34), this session only
         self._last_picked = {}   # skill_id -> utterances ticked last time, to pre-tick the picker again
         self.host = host
@@ -1598,23 +1601,11 @@ class OVOSTUIApp(App):
             self.bus.stop_session(session_id)
         if summary.session_ids:
             self._write_status(f"Sent stop to the {len(summary.session_ids)} test session(s) - nothing the script started keeps running.")
-        passed, failed = summary.count(PASS), summary.count(FAIL)
-        timeouts, sent = summary.count(TIMEOUT), summary.count(SENT)
-        done = len(summary.results)
-        parts = []
-        checked = done - sent
-        if checked:
-            parts.append(f"{passed}/{checked} passed")
-        if failed:
-            parts.append(f"{failed} failed")
-        if timeouts:
-            parts.append(f"{timeouts} timed out")
-        if sent:
-            parts.append(f"{sent} sent without a check")
+        failed, timeouts = summary.count(FAIL), summary.count(TIMEOUT)
+        parts = summary_parts(summary)
         state = "stopped" if summary.cancelled else "finished"
-        if summary.cancelled:
-            parts.append(f"stopped after {done}/{summary.total}")
-        parts.append(f"{summary.duration:.0f}s")
+        if summary.results:
+            self.last_summary = summary
         colour = "green" if not (failed or timeouts or summary.cancelled) else ("red" if failed or timeouts else "yellow")
         self._write_conversation(
             f"[bold {colour}]━━ ■ {escape(summary.title)} {state}: {escape(' · '.join(parts))} ━━[/]")
@@ -1626,6 +1617,28 @@ class OVOSTUIApp(App):
             "title": summary.title, "state": state, "summary": " · ".join(parts), "colour": colour,
             "failures": [[i, step.utterance, result.status, result.detail] for i, step, result in summary.failures],
         })
+        if summary.results:
+            self._write_status("Ctrl+P → 'Test: Save last result' saves this run as a report.")
+
+    def save_last_result(self) -> None:
+        """'Test: Save last result': the last run as a .md report and a
+        .jsonl of every step, in RESULTS_DIR (see results.py)."""
+        summary = self.last_summary
+        if summary is None:
+            return
+        meta = {"OVOS": f"{self.host}:{self.port}", "Language": self.bus.lang,
+                "ovos-tui-client": _ovos_tui_version()}
+        versions = {}
+        for _, step, _ in summary.results:
+            if step.skill_id and step.skill_id not in versions:
+                dist = find_skill_distribution(step.skill_id)
+                versions[step.skill_id] = dist[1] if dist else None
+        try:
+            md, jsonl = save_result(summary, meta, versions, self.results_dir)
+        except OSError as e:
+            self._write_status(f"Could not save the result: {e}", ok=False)
+            return
+        self._write_status(f"Saved '{summary.title}' to {md} (and {jsonl.name} beside it)")
 
 
     # ----------------------------------------------------------------
@@ -1849,6 +1862,8 @@ class OVOSTUIApp(App):
         yield SystemCommand("Clear: All (keeps input history)", "", partial(self.clear_panes, "logs", "conversation", "activity"))
         # #41: pick up skills installed/removed while the TUI is running
         yield SystemCommand("Refresh: Skills and services", "", self.refresh_all)
+        if self.last_summary is not None:
+            yield SystemCommand(f"Test: Save last result ({self.last_summary.title})", "", self.save_last_result)
         yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
         yield SystemCommand("Focus: Logs", "", self.action_focus_logs)
         yield SystemCommand("Focus: Conversation", "", self.action_focus_conversation)

@@ -84,7 +84,7 @@ Almost everything besides typing lives in the command palette. Press
 
 | Start typing… | to find |
 |---|---|
-| `test` | `Test: <Skill> - All`, `- Choose`, `- Last selection`, `Test: All installed skills` |
+| `test` | `Test: <Skill> - All`, `- Choose`, `- Last selection`, `Test: All installed skills`, `Test: Save last result` |
 | `script` | Your own scripts, and `Script: Stop running script` while one runs |
 | `about` | `About: <Skill>`, `About: Installed skills`, `About: ovos-tui-client` |
 | `skill` | `Skill: Activate / deactivate…`, and one `Skill: <id> (Active/Inactive)` entry per skill that toggles it |

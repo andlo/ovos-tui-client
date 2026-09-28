@@ -201,3 +201,46 @@ async def test_own_script_run_is_announced_for_other_tuis(tmp_path):
             # stopped after the step, and again when the run ends
             assert {c.args for c in app.bus.stop_session.call_args_list} == {(sent_session,)}
             assert "Sent stop to the 1 test session(s)" in _conversation(app)
+
+
+@pytest.mark.asyncio
+async def test_last_result_can_be_saved_as_report(tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "smoke.jsonl").write_text("\n".join([
+        json.dumps({"utterance": "what's the weather", "skill_id": WEATHER, "intent_label": "weather.intent"}),
+        json.dumps({"utterance": "who is lincoln", "skill_id": WEATHER, "intent_label": "weather.intent"}),
+    ]))
+    app = _app(tmp_path, scripts)
+    app.results_dir = tmp_path / "results"
+    app.installed_skills = {WEATHER: True}
+    _fake_ovos(app, {
+        "what's the weather": f"{WEATHER}:weather.intent",
+        "who is lincoln": "ovos-skill-wikipedia.openvoiceos:wiki",
+    })
+    with patch("ovos_tui_client.scripts.SETTLE", 0):
+        async with app.run_test() as pilot:
+            titles = [c.title for c in app.get_system_commands(app.screen)]
+            assert not any(t.startswith("Test: Save last result") for t in titles)
+            app.start_user_script(scripts / "smoke.jsonl")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "Test: Save last result" in _conversation(app)
+            cmd = [c for c in app.get_system_commands(app.screen)
+                   if c.title == "Test: Save last result (Script: smoke)"]
+            assert cmd
+            cmd[0].callback()
+            await pilot.pause()
+            md = list((tmp_path / "results").glob("*_script-smoke.md"))
+            rows = list((tmp_path / "results").glob("*_script-smoke.jsonl"))
+            assert len(md) == 1 and len(rows) == 1
+            report = md[0].read_text()
+            assert "# Script: smoke" in report
+            assert "1/2 passed · 1 failed" in report
+            assert "## Failures" in report and '"who is lincoln"' in report
+            assert "| 1 | ✓ | what's the weather | ovos-skill-weather.openvoiceos:weather.intent |" in report
+            assert "- **Language:** en-us" in report
+            data = [json.loads(line) for line in rows[0].read_text().splitlines()]
+            assert [d["status"] for d in data] == ["pass", "fail"]
+            assert data[1]["handled_by"] == "ovos-skill-wikipedia.openvoiceos:wiki"
+            assert "Saved 'Script: smoke' to" in _conversation(app)
