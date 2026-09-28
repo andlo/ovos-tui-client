@@ -1521,6 +1521,7 @@ class OVOSTUIApp(App):
             send=lambda i, n, step: self.call_from_thread(self._script_send, i, n, step),
             on_step_done=lambda i, n, step, result, obs: self.call_from_thread(self._script_step_done, i, n, step, result),
             known_skills=lambda: list(self.installed_skills),
+            stop_session=self.bus.stop_session,
         )
         self.script_runner = runner
         self.call_from_thread(self._script_started, title, len(steps))

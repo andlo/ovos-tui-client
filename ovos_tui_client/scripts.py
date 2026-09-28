@@ -71,6 +71,15 @@ QUIET_AFTER_MATCH = 3.0
 # search has been seen, the step waits up to this long for the fetch
 # that names the provider that actually answered.
 PROVIDER_WAIT = 10.0
+# A provider skill's story can go on for minutes, far past SPEECH_TIMEOUT,
+# and the reading pipeline speaks it in parts - so the runner used to move
+# on while the story kept being read under the next steps (seen live with
+# 365tomorrows). Once the provider is known the step's verdict is too:
+# the runner waits up to STORY_START_WAIT for the reading to start, stops
+# it (mycroft.stop in the step's own session) and gives the audio up to
+# STOP_WAIT to go quiet.
+STORY_START_WAIT = 10.0
+STOP_WAIT = 5.0
 
 FALLBACK_PREFIX = "ovos.skills.fallback."
 READING_FETCH_PREFIX = "ovos.common_reading.fetch_content."
@@ -555,6 +564,8 @@ class ScriptRunner:
                  step_timeout: float = None, speech_timeout: float = None,
                  late_handled_wait: float = None, settle: float = None, quiet_after_match: float = None,
                  provider_wait: float = None,
+                 stop_session: Callable[[str], None] = None,
+                 story_start_wait: float = None, stop_wait: float = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.steps = list(steps)
         self.title = title
@@ -569,6 +580,9 @@ class ScriptRunner:
         self.settle = SETTLE if settle is None else settle
         self.quiet_after_match = QUIET_AFTER_MATCH if quiet_after_match is None else quiet_after_match
         self.provider_wait = PROVIDER_WAIT if provider_wait is None else provider_wait
+        self.story_start_wait = STORY_START_WAIT if story_start_wait is None else story_start_wait
+        self.stop_wait = STOP_WAIT if stop_wait is None else stop_wait
+        self._stop_session = stop_session
         self._last_msg = 0.0
         self._clock = clock
         self._sleep = sleep
@@ -581,6 +595,7 @@ class ScriptRunner:
         self._speaking = False
         self._speech_seen = False
         self._speech_done = threading.Event()
+        self._speech_started = threading.Event()
         self._provider_seen = threading.Event()
         self._cancel = threading.Event()
         self.current = 0
@@ -621,6 +636,7 @@ class ScriptRunner:
                 self._speaking = True
                 self._speech_seen = True
                 self._speech_done.clear()
+                self._speech_started.set()
             elif msg_type in ("mycroft.audio.speech.stop", "recognizer_loop:audio_output_end"):
                 self._speaking = False
                 self._speech_done.set()
@@ -646,6 +662,7 @@ class ScriptRunner:
         self._handled.clear()
         self._soft_done.clear()
         self._speech_done.set()
+        self._speech_started.clear()
         self._provider_seen.set()
 
         self._send(index, total, step)
@@ -681,15 +698,38 @@ class ScriptRunner:
             # handler is done - wait for that before judging the step
             self._provider_seen.wait(self.provider_wait)
             with self._lock:
-                speaking = self._speaking
-            if speaking:
-                self._speech_done.wait(self.speech_timeout)
+                story = bool(self._obs and self._obs.provider)
+            if story:
+                # verdict known - don't sit through (or leave running) a
+                # story that can last minutes; see STORY_START_WAIT
+                self._speech_started.wait(self.story_start_wait)
+                self._stop_step_session()
+                self._speech_done.wait(self.stop_wait)
+            else:
+                with self._lock:
+                    speaking = self._speaking
+                if speaking:
+                    self._speech_done.wait(self.speech_timeout)
+                with self._lock:
+                    speaking = self._speaking
+                if speaking:
+                    # still talking after SPEECH_TIMEOUT - don't let it run
+                    # on under the next step
+                    self._stop_step_session()
+                    self._speech_done.wait(self.stop_wait)
             if self.settle:
                 self._sleep(self.settle)
 
         with self._lock:
             obs, self._obs = self._obs, None
         return evaluate(step, obs, timed_out=timed_out), obs
+
+    def _stop_step_session(self) -> None:
+        if self._stop_session and self.session_id and not self._cancel.is_set():
+            try:
+                self._stop_session(self.session_id)
+            except Exception:
+                pass
 
     def run(self) -> RunSummary:
         summary = RunSummary(title=self.title, total=len(self.steps))

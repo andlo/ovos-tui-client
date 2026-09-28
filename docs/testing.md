@@ -112,6 +112,11 @@ it as a pass when the story came from the expected skill. When another
 provider was picked, the result says so: `… read from
 ovos-skill-grimm-tales.andlo`.
 
+A story can take minutes to read, so once the step has its verdict
+the TUI lets the story start and then stops it, in that step's own
+session, before going on to the next step. Any other reply that is
+still being spoken after 30 seconds is stopped the same way.
+
 A skill stuck waiting in `get_response()` captures every sentence.
 That is reported as such, instead of as a plain mismatch.
 

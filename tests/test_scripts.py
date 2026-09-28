@@ -440,3 +440,75 @@ def test_runner_does_not_wait_when_no_reading_search_happened():
     start = time.monotonic()
     runner.run()
     assert done == [(1, PASS)] and time.monotonic() - start < 2
+
+
+# --- a story read by a provider is stopped once the step is judged ---
+
+def test_a_story_is_stopped_in_its_own_session_after_the_verdict():
+    import threading
+    stopped = []
+
+    def reply(runner, step):
+        runner.feed(f"{READER}:read_by_collection")
+        runner.feed("ovos.common_reading.search")
+        runner.feed("ovos.utterance.handled")
+        runner.feed(f"ovos.common_reading.fetch_content.{ANDERSEN}")
+        # the story starts, and would go on for minutes
+        threading.Timer(0.2, runner.feed, args=("recognizer_loop:audio_output_start",)).start()
+
+    def stop(session_id):
+        stopped.append(session_id)
+        runner.feed("recognizer_loop:audio_output_end")
+
+    runner, done = _runner([ScriptStep("a story from andersen", "en-us", ANDERSEN, None)], reply,
+                           provider_wait=2, stop_session=stop, speech_timeout=30)
+    import time
+    start = time.monotonic()
+    runner.run()
+    assert done == [(1, PASS)]
+    assert stopped == [runner.session_ids[0]]
+    assert time.monotonic() - start < 5  # didn't sit through SPEECH_TIMEOUT
+
+
+def test_a_story_is_stopped_even_if_its_reading_never_starts():
+    stopped = []
+
+    def reply(runner, step):
+        runner.feed(f"{READER}:read_by_collection")
+        runner.feed("ovos.common_reading.search")
+        runner.feed("ovos.utterance.handled")
+        runner.feed(f"ovos.common_reading.fetch_content.{ANDERSEN}")
+
+    runner, done = _runner([ScriptStep("a story from andersen", "en-us", ANDERSEN, None)], reply,
+                           provider_wait=1, stop_session=stopped.append,
+                           story_start_wait=0.2, stop_wait=0.1)
+    runner.run()
+    assert stopped == runner.session_ids
+
+
+def test_a_short_reply_is_not_stopped():
+    stopped = []
+
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")
+        r.feed("recognizer_loop:audio_output_start")
+        r.feed("ovos.utterance.handled")
+        r.feed("recognizer_loop:audio_output_end")
+
+    runner, done = _runner([_step()], reply, stop_session=stopped.append)
+    runner.run()
+    assert done == [(1, PASS)] and stopped == []
+
+
+def test_speech_still_going_after_the_speech_timeout_is_stopped():
+    stopped = []
+
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")
+        r.feed("recognizer_loop:audio_output_start")
+        r.feed("ovos.utterance.handled")
+
+    runner, done = _runner([_step()], reply, stop_session=stopped.append,
+                           speech_timeout=0.2, stop_wait=0.1)
+    runner.run()
+    assert stopped == runner.session_ids
