@@ -68,7 +68,7 @@ async def test_user_script_runs_shows_steps_results_and_summary(tmp_path):
             text = _conversation(app)
             assert "▶ Script: smoke - 3 utterance(s)" in text
             assert "[1/3] You: what's the weather" in text
-            assert "✓ weather.intent" in text
+            assert "✓ ovos-skill-weather.openvoiceos:weather.intent" in text
             assert "✗ expected ovos-skill-weather.openvoiceos:weather.intent, got ovos-skill-wikipedia" in text
             assert "■ Script: smoke finished: 1/2 passed · 1 failed · 1 sent without a check" in text
             assert '[2] "who is lincoln"' in text

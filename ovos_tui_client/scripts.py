@@ -509,8 +509,9 @@ def evaluate(step: ScriptStep, obs: StepObservation, timed_out: bool = False) ->
         return StepResult(SENT, describe(obs))
 
     expected = step.expected_intent
+    # a pass names the skill too, like a failure does ("expected <skill>:<intent>")
     if expected and any(_norm_intent(i) == _norm_intent(expected) for i in obs.intents):
-        return StepResult(PASS, step.intent_label)
+        return StepResult(PASS, expected)
 
     if step.skill_id in obs.skills:
         own = [i for i in obs.intents if i.split(":", 1)[0] == step.skill_id]
@@ -518,7 +519,8 @@ def evaluate(step: ScriptStep, obs: StepObservation, timed_out: bool = False) ->
             return StepResult(FAIL, f"got {describe(obs)}")
         if expected and own:
             return StepResult(FAIL, f"expected {step.intent_label}, got {', '.join(i.split(':', 1)[1] for i in own)}")
-        return StepResult(PASS, step.intent_label or step.skill_id)
+        passed = expected or step.skill_id
+        return StepResult(PASS, f"{passed}, via the reading pipeline" if obs.provider else passed)
 
     if timed_out and not (obs.intents or obs.skills or obs.failed):
         return StepResult(TIMEOUT, "no response")

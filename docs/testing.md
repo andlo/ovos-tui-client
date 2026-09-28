@@ -33,7 +33,7 @@ While a run is going:
 
 | Verdict | Meaning |
 |---|---|
-| `✓ weather.intent` | The expected skill and intent handled it. |
+| `✓ ovos-skill-weather.openvoiceos:weather.intent` | The expected skill and intent handled it. Without an intent label only the skill is checked and named. |
 | `✗ expected …, got …` | Another skill or intent answered. |
 | `⏱ no response within the time limit` | Nothing handled it within 30 seconds. |
 | `→ <what handled it>` | A script line with no expected skill: nothing to check, but you see who answered. |

@@ -22,7 +22,7 @@ When another ovos-tui-client runs a test or script, you see it too:
 
 - `💻 laptop ▶ started Test: Weather - All - 10 utterance(s), lang en-us`
 - each sentence, numbered: `💻 laptop [1/10] said: …`
-- each verdict: `💻 laptop [1/10] ✓ weather.intent`
+- each verdict: `💻 laptop [1/10] ✓ ovos-skill-weather.openvoiceos:weather.intent`
 - the summary, and the failures, when it finishes
 
 While it runs, your header shows `⚠ laptop: Test: Weather - All 1/10`,
