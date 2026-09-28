@@ -323,3 +323,11 @@ def test_common_reading_fetch_counts_as_the_provider_skill_answering():
     observe(obs, "ovos.common_reading.fetch_content.response", {}, {})
     step = ScriptStep("read me the little mermaid", "en-us", "ovos-skill-andersen-tales.andlo", None)
     assert evaluate(step, obs).status == PASS
+
+
+def test_converse_capture_by_a_pipeline_plugin_is_detected_too():
+    obs = StepObservation()
+    observe(obs, "ovos-common-reading-pipeline-plugin.andlo.converse.get_response", {}, {}, [WEATHER])
+    result = evaluate(_step(), obs)
+    assert result.status == FAIL and "ovos-common-reading-pipeline-plugin.andlo" in result.detail
+    assert "get_response" in result.detail

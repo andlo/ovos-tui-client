@@ -34,7 +34,7 @@ async def _hits(provider, query):
 
 def _fake_ovos(app, matches):
     """send_utterance side effect: pretend OVOS routed `text` to matches[text]."""
-    def send(text, lang=None):
+    def send(text, lang=None, session_id=None):
         runner = app.script_runner
         if matches.get(text):
             runner.feed(matches[text])
@@ -85,12 +85,13 @@ async def test_running_state_is_visible_while_a_step_is_in_flight(tmp_path):
     app.installed_skills = {WEATHER: True}
     seen = {}
 
-    def send(text, lang=None):
+    def send(text, lang=None, session_id=None):
         conv = app.query_one("#conversation", RichLog)
         seen["class"] = conv.has_class("script-running")
         seen["title"] = str(conv.border_title)
         seen["disabled"] = app.query_one("#utterance-input", Input).disabled
         seen["sub_title"] = app.sub_title
+        seen["own_session"] = bool(session_id and session_id.startswith("ovos-tui-test-"))
         app.script_runner.feed(f"{WEATHER}:weather.intent")
         app.script_runner.feed("ovos.utterance.handled")
     app.bus.send_utterance.side_effect = send
@@ -105,7 +106,7 @@ async def test_running_state_is_visible_while_a_step_is_in_flight(tmp_path):
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert seen == {"class": True, "title": "▶ Test: weather  1/1", "disabled": True,
-                            "sub_title": "▶ Test: weather  1/1"}
+                            "sub_title": "▶ Test: weather  1/1", "own_session": True}
             assert "1/1 passed" in _conversation(app)
             # count now known -> shown in the palette entry
             hits = await _hits(SkillTestCommandProvider(app.screen), "weather")

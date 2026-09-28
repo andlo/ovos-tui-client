@@ -52,6 +52,7 @@ import argparse
 import importlib.metadata
 import sys
 import tempfile
+import uuid
 from collections import deque
 from pathlib import Path
 from functools import partial
@@ -1295,7 +1296,8 @@ class OVOSTUIApp(App):
         self._set_script_ui(True, f"{title}  0/{n}")
         self._write_conversation(
             f"[bold yellow]━━ ▶ {escape(title)} - {n} utterance(s), lang {escape(self.bus.lang)} ━━[/]")
-        self._write_status("Utterances go to your real OVOS - timers, alarms, media etc. really happen.")
+        self._write_status("Utterances go to your real OVOS - timers, alarms, media etc. really happen. "
+                           "Each step runs in its own session, so leftover conversation state can't interfere.")
 
     def _script_send(self, i: int, n: int, step) -> None:
         runner = self.script_runner
@@ -1303,7 +1305,10 @@ class OVOSTUIApp(App):
         self._set_script_ui(True, f"{title}  {i}/{n}")
         self._write_conversation(
             f"[bold yellow]\\[{i}/{n}][/] [green]You: {escape(step.utterance)}[/green]")
-        self.bus.send_utterance(step.utterance)
+        # Own session per step (see bus.send_utterance) so steps can't
+        # leak conversational state into each other or get captured by
+        # something left waiting in the default session.
+        self.bus.send_utterance(step.utterance, session_id=f"ovos-tui-test-{uuid.uuid4().hex[:12]}")
 
     def _script_step_done(self, i: int, n: int, step, result) -> None:
         detail = escape(result.detail or "")

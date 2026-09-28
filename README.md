@@ -155,6 +155,11 @@ no end-marker for pipeline plugins or converse captures), else after
 overlap. A skill stuck waiting in `get_response()` captures every
 utterance; that's reported as such instead of a plain mismatch.
 
+Each step is sent in **its own OVOS session** (like ovoscope's golden
+tests), so a skill left waiting for an answer in the default session,
+or a previous step's follow-up question ("shall I read you this
+one?"), can't capture the next step.
+
 ### Running as a web app instead of in a terminal
 
 ```bash

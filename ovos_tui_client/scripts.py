@@ -378,13 +378,14 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
             obs.add_intent(msg_type)
             return
 
-    # A skill waiting in get_response()/converse captures the utterance
-    # before any intent matching - dispatched as
-    # '<skill_id>.converse.get_response' (seen live on ovos-core 2.1.1).
-    for skill_id in known:
-        converse_prefix = f"{skill_id}.converse."
-        if msg_type.startswith(converse_prefix):
-            obs.add_intent(f"{skill_id}:converse.{msg_type[len(converse_prefix):]}")
+    # A skill (or pipeline plugin) waiting in get_response()/converse
+    # captures the utterance before any intent matching - dispatched as
+    # '<id>.converse.get_response' (seen live on ovos-core 2.1.1, from
+    # both a skill and ovos-common-reading-pipeline-plugin).
+    if ".converse." in msg_type:
+        owner, _, rest = msg_type.partition(".converse.")
+        if owner in known or _looks_like_component_id(owner):
+            obs.add_intent(f"{owner}:converse.{rest}")
             return
 
     if msg_type == "mycroft.skill.handler.start":

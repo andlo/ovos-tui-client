@@ -82,17 +82,26 @@ class OVOSBusConnection:
         dispatches and end-markers the activity summarizer skips."""
         self._message_handlers.append(handler)
 
-    def send_utterance(self, text, lang=None):
+    def send_utterance(self, text, lang=None, session_id=None):
         """Simulates what a real STT pipeline would emit after hearing
         speech - the standard event every OVOS intent/pipeline handler
         listens for, regardless of how the text arrived. `lang`
         overrides the connection's default language for this one
-        utterance (golden-utterance rows carry their own)."""
+        utterance (golden-utterance rows carry their own).
+
+        `session_id` sends it in its own OVOS session instead of the
+        default one - used by scripted test runs so each step starts
+        clean: a skill left waiting in get_response() in the default
+        session (or a previous step's "shall I read this one?") can't
+        capture the next step. Same isolation ovoscope's golden tests
+        use (one session per row); confirmed live that a fresh session
+        is routed normally while the default one was captured."""
+        context = {"session": {"session_id": session_id}} if session_id else {}
         self._client.emit(Message("recognizer_loop:utterance", {
             "utterances": [text],
             "lang": lang or self.lang,
             "utterance_id": str(uuid.uuid4()),
-        }))
+        }, context))
 
     def list_skills(self, callback, timeout=5, timer_factory=None):
         """Requests the list of currently loaded skills via the classic
