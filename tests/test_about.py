@@ -218,8 +218,13 @@ async def test_clear_panes_keeps_input_history(tmp_path):
         app.clear_panes("logs", "conversation", "activity")
         await pilot.pause()
         assert len(app.log_buffer) == 0
-        assert len(app.query_one("#conversation", RichLog).lines) == 0
-        assert len(app.query_one("#activity", RichLog).lines) == 0
+        # Checked by content, not by line count: on a slow CI runner a
+        # startup status line (services, skill list) can land after the
+        # clear, which is fine - what we wrote before it must be gone.
+        conversation = " ".join(str(line.text) for line in app.query_one("#conversation", RichLog).lines)
+        activity = " ".join(str(line.text) for line in app.query_one("#activity", RichLog).lines)
+        assert "You: hi" not in conversation
+        assert "heard" not in activity
         assert app.utterance_history == ["hello"]
 
 

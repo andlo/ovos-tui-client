@@ -1,0 +1,51 @@
+site_name: ovos-tui-client
+site_description: A terminal UI for talking to, debugging and testing OpenVoiceOS
+site_url: https://andlo.github.io/ovos-tui-client/
+repo_url: https://github.com/andlo/ovos-tui-client
+repo_name: andlo/ovos-tui-client
+edit_uri: edit/main/docs/
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Testing skills: testing.md
+  - Your own scripts: scripts.md
+  - Skills and About windows: skills.md
+  - Shared bus: shared-bus.md
+  - Web and Docker: web-and-docker.md
+  - Troubleshooting: troubleshooting.md
+  - Maintaining these docs: maintaining.md
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep orange
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: deep orange
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+
+extra_css:
+  - stylesheets/extra.css
