@@ -51,12 +51,25 @@ DEVICE_MODEL_FILES = ("/proc/device-tree/model", "/sys/firmware/devicetree/base/
 
 def installer_channel(state_file: Path = INSTALLER_STATE_FILE) -> Optional[str]:
     """The channel ovos-installer installed from, or None when unknown."""
+    return read_installer_channel(state_file)[0]
+
+
+def read_installer_channel(state_file: Path = INSTALLER_STATE_FILE):
+    """(channel, why it is unknown). ovos-installer can leave this file
+    owned by root with mode 600 (seen on real installs), so the ovos user
+    that OVOS and ovos-tui-client run as cannot read it. Say so rather
+    than guess the channel from version numbers."""
+    path = Path(state_file)
     try:
-        data = json.loads(Path(state_file).read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, "no ovos-installer state file"
+    except PermissionError:
+        return None, f"ovos-installer's state file is not readable by this user ({path.name})"
     except (OSError, ValueError):
-        return None
+        return None, "ovos-installer's state file could not be read"
     channel = data.get("channel") if isinstance(data, dict) else None
-    return str(channel) if channel else None
+    return (str(channel), None) if channel else (None, "ovos-installer's state file has no channel")
 
 
 def package_version(name: str) -> Optional[str]:
@@ -103,12 +116,19 @@ def build_manifest(host: str, lang: str, tested_skill_ids: Iterable[str],
                    tool_version: str = "unknown", now: Optional[float] = None) -> Dict:
     local = (host or "").strip().lower() in LOCAL_HOSTS
     tested = sorted(set(tested_skill_ids))
+    if channel:
+        detected, channel_source, channel_note = channel, "argument", None
+    elif local:
+        detected, channel_note = read_installer_channel(INSTALLER_STATE_FILE)
+        channel_source = "ovos-installer" if detected else None
+    else:
+        detected, channel_source, channel_note = None, None, "OVOS is on another machine"
     manifest = {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now or time.time())),
         "tool": f"ovos-tui-client {tool_version}",
         "bus": "local" if local else "remote",
-        "channel": channel or (installer_channel() if local else None),
-        "channel_source": "argument" if channel else ("ovos-installer" if local and installer_channel() else None),
+        "channel": detected,
+        "channel_source": channel_source,
         "lang": lang,
         "machine": {"arch": platform.machine() or None, "model": device_model() if local else None,
                     "python": platform.python_version()},
@@ -117,6 +137,8 @@ def build_manifest(host: str, lang: str, tested_skill_ids: Iterable[str],
         "skills": {},
         "config": routing_config(mycroft_conf_override) if local or mycroft_conf_override else {},
     }
+    if channel_note:
+        manifest["channel_note"] = channel_note
     if local:
         manifest["stack"] = {name: v for name in KEY_PACKAGES if (v := package_version(name))}
         for skill_id in tested:

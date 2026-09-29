@@ -165,7 +165,7 @@ def test_report_replies_only_on_request(tmp_path):
 
 
 def test_manifest_has_no_private_data(tmp_path, monkeypatch):
-    monkeypatch.setattr(manifest_mod, "installer_channel", lambda *a, **k: "alpha")
+    monkeypatch.setattr(manifest_mod, "read_installer_channel", lambda *a, **k: ("alpha", None))
     bus = FakeBus(routes={"what's the weather": f"{WEATHER}:weather.intent"})
     _, out, _ = _run(bus, tmp_path, run=WEATHER, report="-")
     m = json.loads(out)["manifest"]
@@ -188,7 +188,7 @@ def test_remote_bus_reports_versions_unavailable(tmp_path):
 
 
 def test_channel_argument_wins(tmp_path, monkeypatch):
-    monkeypatch.setattr(manifest_mod, "installer_channel", lambda *a, **k: "alpha")
+    monkeypatch.setattr(manifest_mod, "read_installer_channel", lambda *a, **k: ("alpha", None))
     bus = FakeBus(routes={"what's the weather": f"{WEATHER}:weather.intent"})
     _, out, _ = _run(bus, tmp_path, run=WEATHER, report="-", channel="testing")
     m = json.loads(out)["manifest"]
@@ -206,6 +206,28 @@ def test_submit_url_is_filled_and_store_agnostic(tmp_path):
 def test_submit_url_too_long_says_paste(tmp_path):
     report = {"schema": "ovos-test-report/1", "manifest": {}, "steps": [{"u": "x" * 9000}]}
     assert report_mod.submit_url("https://example.org/?r={report}", report) is None
+
+
+def test_unreadable_installer_file_is_reported_not_guessed(tmp_path, monkeypatch):
+    def unreadable(*a, **k):
+        return None, "ovos-installer's state file is not readable by this user (installer.json)"
+    monkeypatch.setattr(manifest_mod, "read_installer_channel", unreadable)
+    bus = FakeBus(routes={"what's the weather": f"{WEATHER}:weather.intent"})
+    _, out, err = _run(bus, tmp_path, run=WEATHER, report="-")
+    m = json.loads(out)["manifest"]
+    assert m["channel"] is None and "not readable" in m["channel_note"]
+    assert "Add --channel" in err
+
+
+def test_installer_channel_permission_denied(tmp_path):
+    state = tmp_path / "installer.json"
+    state.write_text(json.dumps({"channel": "alpha"}))
+    state.chmod(0)
+    import os
+    if os.geteuid() == 0:
+        pytest.skip("root can read anything")
+    channel, why = manifest_mod.read_installer_channel(state)
+    assert channel is None and "not readable" in why
 
 
 def test_installer_channel_reads_the_state_file(tmp_path):

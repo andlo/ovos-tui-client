@@ -28,6 +28,7 @@ ovos-tui-client knows no skill store. A store that accepts these reports
 can publish a link template for --submit-url; see report.submit_url().
 """
 import json
+import os
 import signal
 import sys
 import threading
@@ -112,8 +113,32 @@ def resolve_steps(target: str, installed: Dict, lang: str, golden_dirs,
     return f"Test: {target}", golden(target), [target]
 
 
+def _quiet_ovos_logs() -> None:
+    """OVOS logs INFO to stdout; in a headless run that buries the ✓/✗ lines."""
+    try:
+        from ovos_utils.log import LOG
+        LOG.set_level("WARNING")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _stdout_to_stderr():
+    """For `--report -`: stdout must hold ONLY the report, but OVOS and its
+    libraries log to stdout (a StreamHandler bound to sys.stdout, some
+    created at import time). Point file descriptor 1 at stderr for the
+    whole run, so every such write lands on stderr, and hand back a stream
+    on the original stdout for the report itself."""
+    sys.stdout.flush()
+    saved = os.dup(1)
+    os.dup2(2, 1)
+    return os.fdopen(saved, "w", encoding="utf-8")
+
+
 def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.stderr,
                  config: Optional[Dict] = None, tool_version: str = "unknown") -> int:
+    if args.report == "-" and out is sys.stdout:
+        out = _stdout_to_stderr()
+    _quiet_ovos_logs()
     # With the report on stdout, everything else goes to stderr.
     progress_stream = err if args.report == "-" else out
 
@@ -173,6 +198,9 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
     if manifest["bus"] == "remote":
         log("Note: OVOS is on another machine, so its package versions and channel could not be "
             "read. Run on the device itself for a complete report.")
+    elif not manifest.get("channel"):
+        log(f"Note: the release channel is unknown ({manifest.get('channel_note')}). "
+            "Add --channel testing (or alpha, ...) to record it.")
 
     meta = {"OVOS": "local" if manifest["bus"] == "local" else "remote",
             "Channel": manifest.get("channel") or "unknown", "Language": bus.lang,
