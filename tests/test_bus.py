@@ -351,3 +351,24 @@ def test_stop_session_sends_mycroft_stop_into_that_session():
     msg = client.emit.call_args[0][0]
     assert msg.msg_type == "mycroft.stop"
     assert msg.context["session"]["session_id"] == "ovos-tui-test-abc"
+
+
+def test_connect_also_listens_for_the_spec_speak_message():
+    # newer cores (alpha, ovos-core 3.x) send only 'ovos.utterance.speak'
+    conn, fake_client = _make_connection()
+    conn.connect()
+    fake_client.on.assert_any_call("ovos.utterance.speak", conn._on_speak)
+
+
+def test_dual_emitted_speak_is_shown_once_but_a_real_repeat_is_not_lost():
+    conn, _ = _make_connection()
+    received = []
+    conn.on_speak(received.append)
+    msg = MagicMock()
+    msg.data = {"utterance": "It is twenty one forty four"}
+    conn._on_speak(msg)   # 'speak'
+    conn._on_speak(msg)   # 'ovos.utterance.speak', same instant
+    assert received == ["It is twenty one forty four"]
+    conn._last_speak = (msg.data["utterance"], conn._last_speak[1] - 5)  # much later
+    conn._on_speak(msg)
+    assert len(received) == 2

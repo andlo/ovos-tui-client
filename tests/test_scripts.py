@@ -583,3 +583,14 @@ def test_a_slow_announcement_before_the_fetch_does_not_fail_the_step():
                            story_start_wait=0.1, stop_wait=0.1)
     runner.run()
     assert done == [(1, PASS)]
+
+
+def test_observe_counts_the_spec_speak_message_and_one_dual_emit():
+    from ovos_tui_client.scripts import StepObservation, observe
+    obs = StepObservation()
+    observe(obs, "ovos.utterance.speak", {"utterance": "It is nine"}, {})
+    assert obs.spoke == ["It is nine"]
+    observe(obs, "speak", {"utterance": "It is nine"}, {})   # legacy copy of the same
+    assert obs.spoke == ["It is nine"]
+    observe(obs, "ovos.utterance.speak", {"utterance": "Anything else?"}, {})
+    assert obs.spoke == ["It is nine", "Anything else?"]
