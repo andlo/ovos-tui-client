@@ -144,3 +144,55 @@ async def test_ok_ready_is_written_once_even_when_the_services_worker_runs_again
         app._finish_startup()          # services worker again, from Refresh
         await pilot.pause()
         assert _text(app).count("OK ready.") == 1
+
+
+# --- skill list timeouts (OVOS busy) ---------------------------------------
+
+def _answer_from_bus_thread(answer):
+    """Like the real bus: the callback arrives on another thread."""
+    import threading
+
+    def _list_skills(cb, **kw):
+        threading.Thread(target=cb, args=(answer(),)).start()
+    return _list_skills
+
+@pytest.mark.asyncio
+async def test_a_skill_list_timeout_at_startup_is_retried_until_ovos_answers(tmp_path):
+    app = _app(tmp_path)
+    app.installed_skills = {}  # as at a real startup
+    answers = iter([None, None, {W: True, C: False}])
+    app.bus.list_skills.side_effect = _answer_from_bus_thread(lambda: next(answers))
+    with patch.object(OVOSTUIApp, "SKILL_LIST_RETRY_DELAYS", (0.05, 0.05, 0.05)):
+        async with app.run_test() as pilot:
+            await pilot.pause(0.6)
+            assert app.installed_skills == {W: True, C: False}
+            text = _text(app)
+            assert "no response yet" in text and "asking again" in text
+            assert "Skills found: 1 active 1 inactive" in text
+            assert "Skills changed: added" not in text
+
+
+@pytest.mark.asyncio
+async def test_retries_give_up_with_a_hint(tmp_path):
+    app = _app(tmp_path)
+    app.bus.list_skills.side_effect = _answer_from_bus_thread(lambda: None)
+    with patch.object(OVOSTUIApp, "SKILL_LIST_RETRY_DELAYS", (0.02, 0.02)):
+        async with app.run_test() as pilot:
+            await pilot.pause(0.5)
+            assert app.bus.list_skills.call_count == 3  # startup + 2 retries
+            assert "giving up for now" in _text(app)
+
+
+@pytest.mark.asyncio
+async def test_test_all_with_no_known_skills_says_so_and_asks_again(tmp_path):
+    app = _app(tmp_path)
+    app.bus.list_skills.side_effect = _answer_from_bus_thread(lambda: {})
+    async with app.run_test() as pilot:
+        app.installed_skills.clear()
+        app.bus.list_skills.reset_mock()
+        with patch.object(app, "start_skill_tests") as start:
+            app.start_all_skill_tests()
+            await pilot.pause(0.1)
+            start.assert_not_called()
+        assert app.bus.list_skills.called
+        assert "no skills known yet" in _text(app)

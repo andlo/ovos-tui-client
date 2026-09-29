@@ -1090,7 +1090,7 @@ class OVOSTUIApp(App):
         it finished, so it could appear before the result did)."""
         def _on_result(skills):
             if skills is None:
-                self.call_from_thread(self._write_status, "Skill list: no response (timed out)", ok=False)
+                self._on_app_thread(self._schedule_skill_list_retry)
             else:
                 self.installed_skills = skills
                 n_active = sum(1 for v in self.installed_skills.values() if v)
@@ -1145,6 +1145,10 @@ class OVOSTUIApp(App):
     # ----------------------------------------------------------------
 
     SKILL_REFRESH_DEBOUNCE = 3.0
+    # A busy ovos-core (e.g. waiting for speech to end) can leave
+    # 'skillmanager.list' unanswered for tens of seconds. Rather than
+    # treating one timeout as "no skills", ask again with these delays.
+    SKILL_LIST_RETRY_DELAYS = (5, 10, 20, 30, 30, 30, 30, 30, 30, 30)
     # Seen live when a skill is loaded / removed: ovos-core 3.x sends
     # ovos.skill.loaded + mycroft.skills.loaded; 2.1.x sends neither, so
     # a registration from a skill_id we don't know yet is the signal there.
@@ -1186,6 +1190,34 @@ class OVOSTUIApp(App):
         self._skill_refresh_timer = None
         self.refresh_skills(announce=False)
 
+    def _schedule_skill_list_retry(self) -> None:
+        """OVOS didn't answer the skill list. Say so, and ask again
+        later - until it answers or SKILL_LIST_RETRY_DELAYS runs out."""
+        attempt = getattr(self, "_skill_list_retries", 0)
+        if attempt >= len(self.SKILL_LIST_RETRY_DELAYS):
+            self._write_status(
+                "Skill list: OVOS still doesn't answer - giving up for now. "
+                "Ctrl+P, 'Refresh: Skills and services' to ask again", ok=False)
+            self._skill_list_retries = 0
+            return
+        delay = self.SKILL_LIST_RETRY_DELAYS[attempt]
+        self._skill_list_retries = attempt + 1
+        self._write_status(f"Skill list: no response yet (OVOS busy?) - asking again in {delay:g} s", ok=False)
+        self._skill_list_retry_timer = self.set_timer(delay, self._retry_skill_list)
+
+    def _retry_skill_list(self) -> None:
+        self._skill_list_retry_timer = None
+        def _on_result(skills):
+            self._on_app_thread(self._apply_skill_list_retry, skills)
+        self.bus.list_skills(_on_result)
+
+    def _apply_skill_list_retry(self, skills) -> None:
+        if skills is None:
+            self._schedule_skill_list_retry()
+            return
+        self._skill_list_retries = 0
+        self._apply_skill_refresh(skills, dict(self.installed_skills), announce=False)
+
     def refresh_skills(self, announce: bool = True) -> None:
         """Re-reads the installed skills and everything derived from them.
         announce=True is the palette command: it always reports, and also
@@ -1202,6 +1234,8 @@ class OVOSTUIApp(App):
         if skills is None:
             if announce:
                 self._write_status("Refresh: skill list - no response (timed out)", ok=False)
+            if not self.installed_skills and getattr(self, "_skill_list_retry_timer", None) is None:
+                self._schedule_skill_list_retry()
             return
         # in place: the Skills window holds a reference to this dict
         self.installed_skills.clear()
@@ -1220,7 +1254,12 @@ class OVOSTUIApp(App):
             parts.append("added " + ", ".join(display_skill_name(s) for s in added))
         if removed:
             parts.append("removed " + ", ".join(display_skill_name(s) for s in removed))
-        if parts:
+        if not before and skills:
+            # first answer (e.g. after a timeout): a summary, not 60 names
+            n_active = sum(1 for v in skills.values() if v)
+            n_inactive = sum(1 for v in skills.values() if v is False)
+            self._write_status(f"Skills found: {n_active} active {n_inactive} inactive")
+        elif parts:
             self._write_status("Skills changed: " + "; ".join(parts))
         elif announce:
             n_active = sum(1 for v in skills.values() if v)
@@ -1449,6 +1488,12 @@ class OVOSTUIApp(App):
         self._run_steps(title, steps)
 
     def start_all_skill_tests(self) -> None:
+        if not self.installed_skills:
+            self._write_status(
+                "Test: All installed skills - no skills known yet (OVOS hasn't answered the skill list). "
+                "Asking again - start the test once 'Skills found' appears", ok=False)
+            self.refresh_skills(announce=True)
+            return
         self.start_skill_tests(sorted(self.installed_skills), "Test: All installed skills")
 
     def start_user_script(self, path) -> None:
