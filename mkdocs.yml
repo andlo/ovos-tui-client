@@ -10,6 +10,7 @@ nav:
   - Getting started: getting-started.md
   - Testing skills: testing.md
   - Your own scripts: scripts.md
+  - Headless runs and reports: headless.md
   - Skills and About windows: skills.md
   - Shared bus: shared-bus.md
   - Web and Docker: web-and-docker.md
