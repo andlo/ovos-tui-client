@@ -655,6 +655,13 @@ class ScriptRunner:
             elif msg_type in ("mycroft.audio.speech.stop", "recognizer_loop:audio_output_end"):
                 self._speaking = False
                 self._speech_done.set()
+        # An end-marker from another session belongs to something else -
+        # e.g. ovos-core timing out a handler from an earlier step (a quiz
+        # waiting 300 s for an answer) - and must not end this step before
+        # its own match arrives. Seen live on alpha: 40 steps reported
+        # "nothing matched" while core had matched them correctly.
+        if other_session:
+            return
         if msg_type in self.TERMINAL:
             self._handled.set()
         elif msg_type in self.SOFT_TERMINAL:
