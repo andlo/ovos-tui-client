@@ -358,6 +358,29 @@ def test_runner_ignores_messages_from_other_sessions():
 
 
 
+def test_an_end_marker_from_another_session_does_not_end_the_step():
+    """ovos-core timing out an earlier step's handler (a quiz waiting 300 s
+    for an answer) emits error + utterance.handled in THAT step's session.
+    Seen live: it ended the current step before its own match arrived."""
+    def reply(r, step):
+        old = {"session": {"session_id": "ovos-tui-test-earlier"}}
+        r.feed("ovos.intent.handler.error", {}, old)
+        r.feed("mycroft.skill.handler.error", {}, old)
+        r.feed("ovos.utterance.handled", {}, old)
+        mine = {"session": {"session_id": r.session_id}}
+
+        def later():
+            r.feed(f"{WEATHER}:weather.intent", {}, mine)
+            r.feed("ovos.utterance.handled", {}, mine)
+        threading.Timer(0.3, later).start()
+
+    seen = []
+    runner, done = _runner([_step()], reply)
+    runner._on_step_done = lambda i, n, s, res, obs: seen.append((res.status, obs.intents))
+    runner.run()
+    assert seen == [("pass", [f"{WEATHER}:weather.intent"])]
+
+
 def test_ocp_takeover_is_reported_not_a_timeout():
     obs = StepObservation()
     observe(obs, "ocp:play", {"query": "a metronome"}, {})
