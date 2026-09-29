@@ -277,3 +277,25 @@ def test_cli_dispatches_to_headless():
         with pytest.raises(SystemExit) as exc:
             run()
     assert exc.value.code == 0 and rh.called
+
+
+def test_steps_sources_recorded_and_head_flagged():
+    manifest = {"skills": {"a.b": {"package": "a", "version": "0.1.28", "active": True}}}
+    lines = []
+    headless.note_steps_sources(
+        manifest,
+        {"a.b": "https://raw.githubusercontent.com/o/a/HEAD/test/end2end/golden_utterances_en-US.jsonl",
+         "c.d": "skill.json examples (skill-level check only - no golden file)"},
+        lines.append)
+    assert manifest["skills"]["a.b"]["steps_from"].endswith("golden_utterances_en-US.jsonl")
+    assert manifest["skills"]["c.d"]["steps_from"].startswith("skill.json")
+    assert "a.b 0.1.28" in manifest["steps_note"] and "c.d" not in manifest["steps_note"]
+    assert any("default branch" in line for line in lines)
+
+
+def test_resolve_steps_fills_sources():
+    step = ScriptStep(utterance="hi", skill_id="a.b")
+    sources = {}
+    headless.resolve_steps("a.b", {"a.b": True}, "en-us", (), log=lambda _: None,
+                           loader=lambda *a, **k: GoldenResult([step], "somewhere"), sources=sources)
+    assert sources == {"a.b": "somewhere"}

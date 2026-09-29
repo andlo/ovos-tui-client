@@ -629,3 +629,13 @@ def test_timeout_gives_up_waiting_after_busy_wait():
     summary = runner.run()
     result = summary.results[0][2]
     assert result.status == TIMEOUT and "still busy" in result.detail
+
+
+def test_norm_intent_treats_camelcase_like_snake_case():
+    # ovos-skill-alerts 0.1.28 (testing channel) dispatches 'CancelAlert';
+    # the golden file on its default branch expects 'cancel_alert'
+    from ovos_tui_client.scripts import _norm_intent
+    assert _norm_intent("ovos-skill-alerts.openvoiceos:CancelAlert") == \
+        _norm_intent("ovos-skill-alerts.openvoiceos:cancel_alert")
+    assert _norm_intent("x.y:what.time.is.it.intent") == _norm_intent("x.y:what_time_is_it")
+    assert _norm_intent("x.y:CancelAlert") != _norm_intent("x.y:ListAlerts")
