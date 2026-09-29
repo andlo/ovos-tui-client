@@ -86,14 +86,18 @@ def wait_for_skills(bus, delays=None, sleep=time.sleep,
 
 
 def resolve_steps(target: str, installed: Dict, lang: str, golden_dirs,
-                  log: Callable[[str], None] = print, loader=None):
-    """(title, steps, tested skill ids) for --run's target, or (title, [], ...)."""
+                  log: Callable[[str], None] = print, loader=None,
+                  sources: Optional[Dict[str, str]] = None):
+    """(title, steps, tested skill ids) for --run's target, or (title, [], ...).
+    When given, `sources` is filled with where each skill's steps came from."""
     loader = loader or load_golden
 
     def golden(skill_id):
         result = loader(skill_id, lang, golden_dirs=golden_dirs)
         if result.steps:
             log(f"{skill_id}: {len(result.steps)} step(s) from {result.source}")
+            if sources is not None and result.source:
+                sources[skill_id] = result.source
         return result.steps
 
     path = Path(target).expanduser()
@@ -160,7 +164,9 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
         return EXIT_CANNOT_RUN
     log(f"Skills found: {len(installed)}")
 
-    title, steps, tested = resolve_steps(args.run, installed, bus.lang, args.golden_dir, log=log)
+    sources: Dict[str, str] = {}
+    title, steps, tested = resolve_steps(args.run, installed, bus.lang, args.golden_dir, log=log,
+                                         sources=sources)
     if not steps:
         log(f"{title}: nothing to test for {bus.lang} (no golden utterances or skill.json examples)")
         _close(bus)
@@ -195,6 +201,7 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
     manifest = build_manifest(args.host, bus.lang, tested, installed_skills=installed,
                               channel=args.channel, mycroft_conf_override=args.mycroft_conf,
                               tool_version=tool_version)
+    note_steps_sources(manifest, sources, log)
     if manifest["bus"] == "remote":
         log("Note: OVOS is on another machine, so its package versions and channel could not be "
             "read. Run on the device itself for a complete report.")
@@ -239,6 +246,26 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
     if summary.cancelled or summary.count(FAIL) or summary.count(TIMEOUT):
         return EXIT_FAILED
     return EXIT_OK
+
+
+def note_steps_sources(manifest: Dict, sources: Dict[str, str], log: Callable[[str], None] = print) -> None:
+    """Record where each skill's test steps came from (manifest skills[id].steps_from).
+    A golden file fetched from the repo's default branch (HEAD) can be newer
+    than the installed release - intent names or sentences may have changed
+    since - so say so, with the installed version, instead of letting those
+    rows read as the skill's fault."""
+    skills = manifest.setdefault("skills", {})
+    newer = []
+    for skill_id, source in sorted(sources.items()):
+        info = skills.setdefault(skill_id, {"package": None, "version": None, "active": None})
+        info["steps_from"] = source
+        if "/HEAD/" in source:
+            newer.append(f"{skill_id} {info.get('version') or '(version unknown)'}")
+    if newer:
+        manifest["steps_note"] = ("Golden files from the repos' default branch (HEAD) may be newer "
+                                  "than the installed release: " + ", ".join(newer))
+        log(f"Note: {len(newer)} skill(s) were tested with golden files from the repo's default "
+            "branch, which may be newer than the installed release (see steps_from in the manifest).")
 
 
 def _close(bus) -> None:

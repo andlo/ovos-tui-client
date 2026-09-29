@@ -467,8 +467,13 @@ def is_converse_capture(intent: str) -> bool:
 
 
 def _norm_intent(name: str) -> str:
-    name = (name or "").strip().lower()
-    skill, _, label = name.partition(":")
+    skill, _, label = (name or "").strip().partition(":")
+    skill = skill.lower()
+    # Older skill releases name their intents in CamelCase ('CancelAlert',
+    # ovos-skill-alerts 0.1.28 on the testing channel) where the golden
+    # file on the repo's default branch already says 'cancel_alert' -
+    # split CamelCase before comparing so both count as the same intent.
+    label = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", label).lower()
     if label.endswith(".intent"):
         label = label[:-len(".intent")]
     # Golden rows name padacioso intents 'what_time_is_it'; the same

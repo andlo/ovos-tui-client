@@ -594,3 +594,13 @@ def test_observe_counts_the_spec_speak_message_and_one_dual_emit():
     assert obs.spoke == ["It is nine"]
     observe(obs, "ovos.utterance.speak", {"utterance": "Anything else?"}, {})
     assert obs.spoke == ["It is nine", "Anything else?"]
+
+
+def test_norm_intent_treats_camelcase_like_snake_case():
+    # ovos-skill-alerts 0.1.28 (testing channel) dispatches 'CancelAlert';
+    # the golden file on its default branch expects 'cancel_alert'
+    from ovos_tui_client.scripts import _norm_intent
+    assert _norm_intent("ovos-skill-alerts.openvoiceos:CancelAlert") == \
+        _norm_intent("ovos-skill-alerts.openvoiceos:cancel_alert")
+    assert _norm_intent("x.y:what.time.is.it.intent") == _norm_intent("x.y:what_time_is_it")
+    assert _norm_intent("x.y:CancelAlert") != _norm_intent("x.y:ListAlerts")
