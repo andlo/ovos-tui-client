@@ -92,8 +92,18 @@ def device_model(files: Iterable[str] = DEVICE_MODEL_FILES) -> Optional[str]:
     return None
 
 
+def _module(conf: Dict, section: str) -> Optional[str]:
+    """The plugin name OVOS uses for `section` ("stt", "tts"), and nothing
+    else from that section: the plugin's own settings live next to it and
+    can hold API keys or server addresses."""
+    value = (conf.get(section) or {}).get("module")
+    return str(value)[:80] if value else None
+
+
 def routing_config(mycroft_conf_override: Optional[str] = None) -> Dict:
-    """lang, secondary_langs and the intent pipeline, as OVOS will use them."""
+    """lang, secondary_langs and the intent pipeline, as OVOS will use them,
+    plus the STT and TTS plugin names (a report is easier to compare when
+    it says "whisper · piper"; only the names, never their settings)."""
     try:
         if mycroft_conf_override:
             from json_database.utils import load_commented_json
@@ -107,6 +117,8 @@ def routing_config(mycroft_conf_override: Optional[str] = None) -> Dict:
         "lang": conf.get("lang"),
         "secondary_langs": list(conf.get("secondary_langs") or []),
         "pipeline": list((conf.get("intents") or {}).get("pipeline") or []),
+        "stt": _module(conf, "stt"),
+        "tts": _module(conf, "tts"),
     }
 
 

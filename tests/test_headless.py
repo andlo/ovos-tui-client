@@ -177,6 +177,29 @@ def test_manifest_has_no_private_data(tmp_path, monkeypatch):
     assert str(tmp_path.home()) not in text
 
 
+def test_config_names_stt_and_tts_but_not_their_settings(tmp_path):
+    conf = tmp_path / "mycroft.conf"
+    conf.write_text(json.dumps({
+        "lang": "da-dk", "secondary_langs": ["en-us"],
+        "intents": {"pipeline": ["ovos-padatious-pipeline-plugin-high"]},
+        "stt": {"module": "ovos-stt-plugin-server",
+                "ovos-stt-plugin-server": {"url": "https://stt.example.org", "api_key": "secret-key-123"}},
+        "tts": {"module": "ovos-tts-plugin-piper", "ovos-tts-plugin-piper": {"voice": "da_DK-talesyntese"}},
+    }))
+    cfg = manifest_mod.routing_config(str(conf))
+    assert cfg["stt"] == "ovos-stt-plugin-server" and cfg["tts"] == "ovos-tts-plugin-piper"
+    assert cfg["lang"] == "da-dk" and cfg["pipeline"] == ["ovos-padatious-pipeline-plugin-high"]
+    text = json.dumps(cfg)
+    assert "secret-key-123" not in text and "stt.example.org" not in text and "talesyntese" not in text
+
+
+def test_config_without_stt_or_tts_says_none(tmp_path):
+    conf = tmp_path / "mycroft.conf"
+    conf.write_text(json.dumps({"lang": "en-us"}))
+    cfg = manifest_mod.routing_config(str(conf))
+    assert cfg["stt"] is None and cfg["tts"] is None
+
+
 def test_remote_bus_reports_versions_unavailable(tmp_path):
     bus = FakeBus(routes={"what's the weather": f"{WEATHER}:weather.intent"})
     _, out, err = _run(bus, tmp_path, run=WEATHER, report="-", host="192.0.2.10")

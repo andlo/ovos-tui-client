@@ -65,7 +65,7 @@ manifest records:
   where an utterance goes: ovos-core, ovos-workshop, ovos-bus-client,
   ovos-plugin-manager, the intent engines, the pipeline plugins.
 - **skills:** each tested skill's package and version.
-- **config:** `lang`, `secondary_langs` and the intent pipeline order.
+- **config:** `lang`, `secondary_langs`, the intent pipeline order, and the STT and TTS plugin names (only the names: a plugin's own settings can hold keys or server addresses, so they are never read into the report).
 - **machine:** architecture, and the board model when there is one
   (`Raspberry Pi 5`, a Mark II ...).
 - when, and which ovos-tui-client version.
@@ -90,7 +90,8 @@ a summary and one row per step:
     "channel": "testing", "channel_source": "ovos-installer", "bus": "local",
     "stack": { "ovos-core": "2.1.0", "ovos-workshop": "7.0.6", "...": "..." },
     "skills": { "ovos-skill-weather.openvoiceos": { "package": "ovos-skill-weather", "version": "1.2.0" } },
-    "config": { "lang": "en-us", "secondary_langs": ["da-dk"], "pipeline": ["..."] },
+    "config": { "lang": "en-us", "secondary_langs": ["da-dk"], "pipeline": ["..."],
+                "stt": "ovos-stt-plugin-server", "tts": "ovos-tts-plugin-piper" },
     "machine": { "arch": "aarch64", "model": "Raspberry Pi 5 Model B Rev 1.0" },
     "created_at": "2026-10-04T18:12:00Z", "tool": "ovos-tui-client 0.3.0"
   },
