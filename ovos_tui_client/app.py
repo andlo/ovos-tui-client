@@ -2135,6 +2135,26 @@ def build_arg_parser():
     parser.add_argument("--web-host", default=None, help="address the web server BINDS to (default: auto-detected outbound IP). This is also what gets embedded in the served page's own asset/WebSocket URLs UNLESS --web-public-url is set - see that flag if this server can't bind its own externally-reachable address (e.g. behind Docker port-publishing/NAT), see README")
     parser.add_argument("--web-public-url", default=None, help="the URL a browser should actually use to reach this server, if different from --web-host (e.g. 'http://203.0.113.5:8000' when this container can only bind 0.0.0.0 or its own internal address, not the host's real one) - only affects the URLs embedded in the served page, never the bind address, see README")
     parser.add_argument("--web-port", type=int, default=8000, help="port for the web server (default: 8000) - see --web")
+
+    headless = parser.add_argument_group(
+        "headless test runs (no UI)",
+        "Run tests from the command line, e.g. from cron or CI, and write a report. See docs/headless.md.")
+    headless.add_argument("--run", metavar="TARGET", default=None,
+                          help="run tests without the UI and exit: 'all' (every installed skill), a skill_id, "
+                               "or a .jsonl/.txt script file. Exit code 0 = all passed, 1 = failures, 2 = could not run")
+    headless.add_argument("--output", metavar="DIR", default=None,
+                          help="where the .md/.jsonl result and its .manifest.json go (default: ~/.local/share/ovos-tui-client/results)")
+    headless.add_argument("--report", metavar="FILE", default=None,
+                          help="also write one shareable JSON report (ovos-test-report/1) to FILE, or '-' to print it for copy-paste")
+    headless.add_argument("--report-replies", action="store_true",
+                          help="include OVOS's replies in the report (off by default: replies can contain personal data)")
+    headless.add_argument("--channel", default=None,
+                          help="the OVOS release channel this install runs (default: read from ovos-installer's state file)")
+    headless.add_argument("--notes", default=None,
+                          help="free text for the report, e.g. what the skill needs ('API key set', 'Mark II')")
+    headless.add_argument("--submit-url", metavar="TEMPLATE", default=None,
+                          help="print a link built from TEMPLATE with {report}, {skill_id}, {channel}, {title} filled in, "
+                               "e.g. a store's submit form. Also settable as 'submit_url' in ~/.config/ovos-tui-client/config.json")
     return parser
 
 
@@ -2160,6 +2180,9 @@ def _detect_outbound_ip():
 
 def run():
     args = build_arg_parser().parse_args()
+    if args.run:
+        from ovos_tui_client.headless import run_headless
+        sys.exit(run_headless(args, tool_version=_ovos_tui_version()))
     if args.web:
         try:
             from textual_serve.server import Server
