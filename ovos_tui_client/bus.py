@@ -5,6 +5,7 @@ this module has no UI framework dependency and can be tested without
 spinning up a real App."""
 import socket
 import threading
+import time
 import uuid
 
 from ovos_bus_client import MessageBusClient, Message
@@ -22,6 +23,14 @@ TUI_EVENT_PREFIX = "ovos.tui."
 # service.py builds the utterance context with this client_name and
 # source="audio").
 LISTENER_CLIENT_NAMES = {"ovos_dinkum_listener", "ovos_listener", "mycroft_listener"}
+
+# What OVOS says. 'speak' is the classic message; newer cores (the alpha
+# channel, ovos-core 3.x) emit the spec name 'ovos.utterance.speak' instead,
+# with no legacy copy - seen live: a date-time answer arrived only as
+# ovos.utterance.speak. A core in a dual-emit transition may send both, so
+# listeners take either and drop the immediate duplicate.
+SPEAK_TYPES = ("speak", "ovos.utterance.speak")
+DUPLICATE_SPEAK_WINDOW = 0.5  # seconds
 
 
 def describe_speaker(context: dict) -> str:
@@ -59,12 +68,18 @@ class OVOSBusConnection:
             self.host = "unknown"
 
     def connect(self):
-        self._client.on("speak", self._on_speak)
+        for msg_type in SPEAK_TYPES:
+            self._client.on(msg_type, self._on_speak)
         self._client.on("message", self._on_raw_message)
         self._client.run_in_thread()
 
     def _on_speak(self, message):
         utterance = message.data.get("utterance", "")
+        now = time.monotonic()
+        last = getattr(self, "_last_speak", None)
+        if last and last[0] == utterance and now - last[1] < DUPLICATE_SPEAK_WINDOW:
+            return  # the same sentence under the other name (dual emit)
+        self._last_speak = (utterance, now)
         for handler in self._speak_handlers:
             handler(utterance)
 

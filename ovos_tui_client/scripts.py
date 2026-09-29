@@ -367,6 +367,7 @@ class StepObservation:
     # from yet - see PROVIDER_WAIT
     awaiting_provider: bool = False
     provider: str = ""  # the provider skill the reading pipeline fetched from
+    last_speak_type: str = ""  # see observe(): drops a dual-emitted duplicate
 
     def _add(self, lst, value):
         if value and value not in lst:
@@ -440,10 +441,14 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
         obs.awaiting_provider = False
     elif msg_type in ("intent_failure", "complete_intent_failure"):
         obs.failed = True
-    elif msg_type == "speak":
+    elif msg_type in ("speak", "ovos.utterance.speak"):
+        # both names: the classic one and the spec one newer cores use
+        # (see bus.SPEAK_TYPES). A dual-emitting core sends the same
+        # sentence under both, back to back - count it once.
         utterance = data.get("utterance")
-        if utterance:
+        if utterance and not (obs.spoke and obs.spoke[-1] == utterance and obs.last_speak_type != msg_type):
             obs.spoke.append(utterance)
+        obs.last_speak_type = msg_type
 
 
 _NON_INTENT_PREFIXES = ("mycroft.", "ovos.common_play", "recognizer_loop", "ovos.utterance")
