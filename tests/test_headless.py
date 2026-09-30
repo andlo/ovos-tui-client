@@ -386,7 +386,7 @@ def test_share_serves_the_report_page_and_file(tmp_path):
     url = share.start()
     try:
         page = urllib.request.urlopen(url, timeout=5).read().decode()
-        assert "2/3 passed" in page and "Open in store.example" in page and "Copy report" in page
+        assert "2/3 passed" in page and "Open detailed page" in page and "store.example" in page and "Copy report" in page
         assert urllib.request.urlopen(url + "report.json", timeout=5).read().decode() == text
         try:
             urllib.request.urlopen(url.rsplit("/", 2)[0] + "/wrong-token/", timeout=5)

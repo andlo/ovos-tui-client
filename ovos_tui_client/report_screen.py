@@ -308,8 +308,8 @@ class ShareScreen(ModalScreen):
             yield Static(
                 "Ctrl+click the link (in some terminals Ctrl+Shift+click), or select it with Shift + mouse and "
                 "paste it in your browser. The page has Copy report and Download report.json"
-                + (", and Open in the store with the report filled in." if self._store else
-                   ". Set a store link (Ctrl+P → 'Settings: Skill store report link') to also get Open in the store.")
+                + (", and Open detailed page: the store's page with the report filled in." if self._store else
+                   ". Set a store link (Ctrl+P → 'Settings: Skill store report link') to also get Open detailed page.")
                 + f" The link works while this window is open (at most {self._minutes} min), on the same network "
                 "as this device.", classes="report-help")
             yield Label("Or fetch the file", classes="share-label")

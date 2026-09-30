@@ -62,8 +62,9 @@ def _page(title: str, text: str, store_link: Optional[str]) -> str:
     store = ""
     if store_link:
         host = urlparse(store_link).netloc or "the store"
-        store = (f'<a class="btn primary" href="{html.escape(store_link, quote=True)}" rel="noreferrer">'
-                 f'Open in {html.escape(host)}</a>')
+        store = (f'<a class="btn primary" href="{html.escape(store_link, quote=True)}" rel="noreferrer" '
+                 f'title="The skill store\'s page at {html.escape(host, quote=True)}, with this report filled in">'
+                 f'Open detailed page</a>')
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)} - test report</title>

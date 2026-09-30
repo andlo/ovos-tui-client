@@ -109,7 +109,7 @@ def share_report(text: str, title: str, path, store_link: Optional[str], log: Ca
     if url:
         log("")
         log(f"Open the report in your browser (Ctrl+click): {url}")
-        log("  " + ("Copy, Download, and 'Open in' the store with the report filled in." if store_link
+        log("  " + ("Copy, Download, and 'Open detailed page' (the store's page with the report filled in)." if store_link
                     else "Copy and Download there.") + f" The link works for {ttl / 60:.0f} min.")
     if path:
         log(f"Or fetch the file: {scp_hint(path)}")

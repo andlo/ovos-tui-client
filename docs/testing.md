@@ -126,7 +126,7 @@ The buttons:
     - a **short link**: Ctrl+click it (Ctrl+Shift+click in some terminals),
       or select it with Shift + mouse and paste it in your browser. The page
       has **Copy report**, **Download report.json** and, when a store link is
-      set, **Open in &lt;store&gt;** with the report filled in;
+      set, **Open detailed page**, the store's page with the report filled in;
     - an **`scp` command** to fetch the file.
 
     The link works while the window is open (at most 15 minutes);
@@ -147,7 +147,7 @@ and only until the TUI is closed.
 
 The first time you share while no store link is set, the TUI asks for one.
 It's the link a skill store gives in its instructions; with it, the share
-page gets an **Open in &lt;store&gt;** button that opens the store's page
+page gets an **Open detailed page** button that opens the store's page
 with your report filled in. ovos-tui-client never submits anything: you
 check the report on the store's page and submit it there yourself.
 

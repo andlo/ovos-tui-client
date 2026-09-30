@@ -143,14 +143,14 @@ there are several ways:
 
     ```text
     Open the report in your browser (Ctrl+click): http://192.168.1.50:41733/q3v9XcA2Lk0e/
-      Copy, Download, and 'Open in' the store with the report filled in. The link works for 15 min.
+      Copy, Download, and 'Open detailed page' (the store's page with the report filled in). The link works for 15 min.
     Or fetch the file: scp ovos@192.168.1.50:/home/ovos/.local/share/ovos-tui-client/results/2026-10-01_101500_test-ovos-skill-weather-openvoiceos.report.json .
     Press Enter when you're done with the link...
     ```
 
     Ctrl+click (or copy) the link on your own computer. The page shows the
     report with **Copy report** and **Download report.json**, and, when a
-    store link is set (below), **Open in &lt;store&gt;**:
+    store link is set (below), **Open detailed page**, the store's page with the report filled in:
 
     ![The page a report link opens](images/share-page.png)
 
