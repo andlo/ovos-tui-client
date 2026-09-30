@@ -1,7 +1,7 @@
 """The shareable test report (#51): one JSON document, `ovos-test-report/1`.
 
-The .md and .jsonl written by 'Test: Save last result' (#47) stay the
-local, human-readable record. This is the file meant to be handed to
+Every saved result is two files (results.py): a readable .md, and this
+report as .report.json. The report is the file meant to be handed to
 someone else: a skill store, an issue, a maintainer. It is deliberately
 not tied to any store. ovos-tui-client writes it to a file or prints it
 for copy-paste, and a store decides for itself what it accepts.

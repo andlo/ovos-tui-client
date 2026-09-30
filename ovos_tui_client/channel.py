@@ -263,7 +263,7 @@ def channel_markdown(result: Dict, stack: Dict[str, str], remote: bool = False) 
         for other in result.get("checked", []):
             probs = result.get("problems", {}).get(other) or []
             if other != result.get("channel") and probs and other != result.get("declared"):
-                lines += [f"Not **{other}**: {probs[0]}."]
+                lines += [f"- Not **{other}**: {probs[0]}."]
         lines += [""]
         if stack:
             lines += ["| Package | Installed |", "|---|---|"]

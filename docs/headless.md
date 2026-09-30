@@ -32,8 +32,9 @@ ovos-tui --run ~/.config/ovos-tui-client/scripts/smoke.jsonl
     Test: ovos-skill-weather.openvoiceos: 3/4 passed · 1 failed · 21s
     ```
 
-5. Saves the result, like **Test: Save last result**: a readable `.md`,
-   the `.jsonl` rows, and a `.manifest.json` saying what was tested against.
+5. Saves the result, like **Test: Save result** in the TUI: a readable
+   `.md` and the shareable `.report.json` (below), which also says what was
+   tested against.
 
 **Exit code:** `0` every checked step passed, `1` something failed or timed
 out (or the run was stopped with Ctrl+C), `2` it could not run: no bus, no
@@ -45,8 +46,8 @@ skill list, or nothing to test.
 |---|---|
 | `--run TARGET` | `all`, a skill_id, or a script file. |
 | `--lang` | The language of the utterances (default `en-us`). |
-| `--output DIR` | Where the `.md`, `.jsonl` and `.manifest.json` go (default `~/.local/share/ovos-tui-client/results`). |
-| `--report FILE` | Also write one shareable report (below). `-` prints it, for copy-paste; progress then goes to stderr. |
+| `--output DIR` | Where the `.md` and `.report.json` go (default `~/.local/share/ovos-tui-client/results`). |
+| `--report FILE` | Also put a copy of the report in FILE (below). `-` prints it, for copy-paste; progress then goes to stderr. |
 | `--report-replies` | Include what OVOS said in the report. Off by default. |
 | `--channel NAME` | The release channel of this install, if it can't be worked out automatically (below). |
 | `--notes TEXT` | Free text for the report, e.g. what the skill needs: `"OpenWeather API key set"`, `"Mark II"`. |
@@ -83,8 +84,9 @@ manifest records:
 
 ## The shareable report
 
-`--report` writes one JSON document, `ovos-test-report/1`, with the manifest,
-a summary and one row per step:
+Every run saves one JSON document, `ovos-test-report/1`, as `….report.json`
+next to the `.md`, with the manifest, a summary and one row per step.
+`--report` puts a copy where you want it, or prints it:
 
 ```json
 {
@@ -122,7 +124,7 @@ ovos-tui-client does not know about any skill store or service, and sends
 nothing anywhere by itself. You decide where a report goes:
 
 - **Copy-paste:** `--report -` prints it; paste it where you want it.
-- **A file:** `--report report.json`, then attach or upload it.
+- **A file:** the `….report.json` in the results folder, or a copy where you want it with `--report report.json`; attach or upload it.
 - **A link:** if a store or project tells you to, give its link template
   with `--submit-url`, or set it once in `~/.config/ovos-tui-client/config.json`:
 
@@ -136,8 +138,8 @@ nothing anywhere by itself. You decide where a report goes:
     link yourself. If the report is too long for a link (about 8 KB),
     it says so and you paste the report instead.
 
-A report can also be made from the TUI after an ordinary run: `Ctrl+P` →
-`Test: Create shareable report`. See [Testing skills](testing.md#share-the-result-as-a-report).
+The TUI saves the same two files after an ordinary run: `Ctrl+P` →
+`Test: Save result…`. See [Testing skills](testing.md#save-the-result).
 
 ## Scheduled runs
 

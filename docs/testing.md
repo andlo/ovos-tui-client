@@ -82,25 +82,8 @@ for Choose. See [Skills and About windows](skills.md).
 
 ## Save the result
 
-After a run, `Ctrl+P` → **`Test: Save last result (<title>)`** saves it
-in `~/.local/share/ovos-tui-client/results/`, named by date, time and
-title:
-
-- **`….md`**: a report you can read or paste into an issue as it is.
-  It has the summary line, when it ran, which OVOS and language, the
-  failures, a table of every step (expected, what handled it, what
-  OVOS said) and the version of each skill tested.
-- **`….jsonl`**: one row per step, for comparing two runs with a
-  script, e.g. stable against alpha, or before and after a fix.
-
-Only the last run can be saved, and only until the TUI is closed.
-
-## Share the result as a report
-
-To give a result to a skill's maintainer, put it in an issue or send it to
-a skill store, `Ctrl+P` → **`Test: Create shareable report (<title>)`**
-after a run. A small window asks for the three things ovos-tui-client
-can't know by itself:
+After a run, `Ctrl+P` → **`Test: Save result… (<title>)`**. A small window
+asks for the three things ovos-tui-client can't know by itself:
 
 - **Release channel:** pre-set to the channel this install runs, and the
   window says how it was found. Change it only if you know better, or
@@ -112,13 +95,35 @@ can't know by itself:
   degrees in *your town*"), and a store will refuse a report with them.
   Tick it only for a report you keep yourself.
 
-`Ctrl+S` saves `….report.json` next to the other results and copies it to
-the clipboard (when the terminal allows it). It is the same
-`ovos-test-report/1` file a [headless run](headless.md#the-shareable-report)
-writes: the installed versions, the channel, machine type, language, STT and
-TTS plugin names, and each sentence with what handled it; no hostname, IP
-address, user name or settings. If a `submit_url` is set in
-`~/.config/ovos-tui-client/config.json`, the link to submit it is shown too.
+Two files are saved in `~/.local/share/ovos-tui-client/results/`, named by
+date, time and title:
+
+- **`….md`**: to read, or paste into an issue as it is: the summary line,
+  when it ran, channel and language, the failures, a table of every step
+  (expected, what handled it, what OVOS said) and the version of each skill
+  tested.
+- **`….report.json`**: the report to share with a skill's maintainer or a
+  skill store, the same `ovos-test-report/1` file a
+  [headless run](headless.md#the-shareable-report) writes: the installed
+  versions, the channel, machine type, language, STT and TTS plugin names,
+  and each sentence with what handled it; no hostname, IP address, user name
+  or settings. Also what to compare two runs with, e.g. testing against
+  alpha, or before and after a fix.
+
+The buttons:
+
+- **Save and copy** (`Ctrl+S`): also copies the report to the clipboard.
+  Not every terminal passes that on (it uses the OSC 52 escape code); if
+  nothing arrives, use Show.
+- **Save and show** (`Ctrl+O`): shows the report as text, to read before you
+  share it. **Copy** (`Ctrl+C`) there tries the clipboard again; otherwise
+  select the text with the mouse while holding Shift (Option on macOS), or
+  attach the file.
+
+`Ctrl+P` → **`Test: Show last result (<title>)`** shows the report again.
+Only the last run can be saved, and only until the TUI is closed. If a
+`submit_url` is set in `~/.config/ovos-tui-client/config.json`, the link to
+submit the report is shown too.
 
 ## When OVOS is slow
 
