@@ -713,3 +713,18 @@ def test_quiz_asking_again_after_cancel_is_cancelled_again_and_stop_carries_the_
     assert done == [(1, PASS)]
     assert answered == ["cancel"] * 3 and runner.released_responses == 3
     assert stopped == [full(runner)]
+
+
+def test_ocp_play_is_credited_to_the_media_skill_that_serves_it():
+    # 'play white noise' -> ocp:play; then OCP plays the best result, whose
+    # media names the skill - that's the skill the step is about (seen live)
+    step = ScriptStep("play white noise", "en-us", "ovos-skill-white-noise.andlo", None)
+    obs = StepObservation()
+    observe(obs, "ocp:play", {}, {})
+    assert obs.awaiting_provider
+    observe(obs, "ovos.common_play.play", {"media": {"skill_id": "ovos-skill-white-noise.andlo", "uri": "x"}}, {})
+    assert not obs.awaiting_provider
+    r = evaluate(step, obs)
+    assert r.status == PASS and "via OCP" in r.detail
+    other = ScriptStep("play white noise", "en-us", "ovos-skill-soundboard.andlo", None)
+    assert "played by ovos-skill-white-noise.andlo" in evaluate(other, obs).detail

@@ -47,6 +47,12 @@ EXIT_OK, EXIT_FAILED, EXIT_CANNOT_RUN = 0, 1, 2
 # Same patience as the UI's automatic retries (#50), but bounded: a
 # scheduled run must end even when OVOS never answers.
 SKILL_LIST_RETRY_DELAYS = (5, 10, 20, 30, 30)
+# A core that was just (re)started answers the skill list while it is
+# still loading skills (seen live: 36 of 60) - ask again until the count
+# holds still, so a run doesn't start before the skill it tests is there.
+SKILL_SETTLE_INTERVAL = 5.0
+SKILL_SETTLE_CHECKS = 2      # the same count this many times in a row
+SKILL_SETTLE_MAX = 180.0
 
 CONFIG_FILE = Path("~/.config/ovos-tui-client/config.json").expanduser()
 
@@ -77,11 +83,41 @@ def wait_for_skills(bus, delays=None, sleep=time.sleep,
         bus.list_skills(_on_result)
         done.wait(15)
         if box.get("skills") is not None:
-            return box["skills"]
+            return _settle(bus, box["skills"], sleep, log)
         if attempt < len(delays):
             log(f"Skill list: no answer from OVOS yet, asking again in {delays[attempt]} s")
             sleep(delays[attempt])
     return None
+
+
+def _ask_skills(bus, timeout=15) -> Optional[Dict]:
+    done, box = threading.Event(), {}
+
+    def _on_result(skills):
+        box["skills"] = skills
+        done.set()
+
+    bus.list_skills(_on_result)
+    done.wait(timeout)
+    return box.get("skills")
+
+
+def _settle(bus, skills: Dict, sleep, log) -> Dict:
+    """Ask again until the number of loaded skills stops changing."""
+    same, waited = 0, 0.0
+    while same < SKILL_SETTLE_CHECKS and waited < SKILL_SETTLE_MAX:
+        sleep(SKILL_SETTLE_INTERVAL)
+        waited += SKILL_SETTLE_INTERVAL
+        again = _ask_skills(bus)
+        if again is None:
+            continue
+        if len(again) == len(skills):
+            same += 1
+        else:
+            log(f"Skills still loading ({len(skills)} -> {len(again)}), waiting...")
+            same = 0
+        skills = again
+    return skills
 
 
 def resolve_steps(target: str, installed: Dict, lang: str, golden_dirs,
