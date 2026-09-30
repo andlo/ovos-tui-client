@@ -1,5 +1,5 @@
-"""'Test: Create shareable report' (#51, interactive side): the few things
-a report needs from a person, asked in one window after a test run.
+"""'Test: Save result…' (#51, interactive side): the few things a saved
+result needs from a person, asked in one window after a test run.
 
 Everything else in the report is filled in by itself (manifest.py): the
 installed versions, the machine type, language, STT/TTS names and each
@@ -76,13 +76,14 @@ class ReportScreen(ModalScreen):
         options = [(c, c) for c in CHANNELS] + [("unknown", UNKNOWN)]
         with Vertical(id="report-box"):
             steps = "1 step" if self._n == 1 else f"{self._n} steps"
-            yield Label(f"Create a shareable report: {self._title} ({steps})", id="report-title")
+            yield Label(f"Save the result: {self._title} ({steps})", id="report-title")
             with VerticalScroll():
                 yield Static(
-                    "A report is one JSON file you can give a skill's maintainer, put in an issue, or "
-                    "paste into a skill store. It holds the installed OVOS versions, the release channel, "
-                    "machine type, language, the STT and TTS plugin names, and each sentence with what "
-                    "handled it. It never holds your hostname, IP address, user name or any settings.",
+                    "Saves two files: a readable .md, and a .report.json you can give a skill's "
+                    "maintainer, put in an issue, or paste into a skill store. The report holds the installed "
+                    "OVOS versions, the release channel, machine type, language, the STT and TTS plugin names, "
+                    "and each sentence with what handled it. It never holds your hostname, IP address, user "
+                    "name or any settings.",
                     classes="report-help")
                 yield Label("Release channel", classes="report-label")
                 yield Static(channel_hint(self._result) +
@@ -132,7 +133,7 @@ class ReportScreen(ModalScreen):
 class ReportViewScreen(ModalScreen):
     """A saved report as text, to read before sharing it and to copy by hand
     when the terminal doesn't pass Copy on to the clipboard. Also opened by
-    'Test: Show last report'."""
+    'Test: Show last result'."""
     __test__ = False
 
     BINDINGS = [

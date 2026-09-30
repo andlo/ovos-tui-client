@@ -1,6 +1,6 @@
 import json
 
-from ovos_tui_client.results import report_markdown, report_rows, save_result, summary_parts
+from ovos_tui_client.results import markdown_meta, report_markdown, save_result, summary_parts
 from ovos_tui_client.scripts import FAIL, PASS, TIMEOUT, RunSummary, ScriptStep, StepResult
 
 W = "ovos-skill-weather.openvoiceos"
@@ -33,11 +33,22 @@ def test_markdown_report():
     assert f"- {W} 1.2.3" in md
 
 
-def test_rows_and_save(tmp_path):
-    rows = [json.loads(line) for line in report_rows(_summary()).splitlines()]
-    assert [r["status"] for r in rows] == ["pass", "fail", "timeout"]
-    assert rows[0]["replies"] == ["It's sunny"]
-    md1, j1 = save_result(_summary(), {}, directory=tmp_path)
-    md2, j2 = save_result(_summary(), {}, directory=tmp_path)
-    assert md1 != md2 and md1.exists() and md2.exists() and j1.exists() and j2.exists()
+def test_save_writes_md_and_report_side_by_side(tmp_path):
+    md1, r1 = save_result(_summary(), {}, directory=tmp_path, report_text='{"schema": "x"}\n')
+    md2, r2 = save_result(_summary(), {}, directory=tmp_path, report_text='{"schema": "x"}\n')
+    assert md1 != md2 and md1.exists() and md2.exists() and r1.exists() and r2.exists()
+    assert r1.name == md1.name[:-3] + ".report.json"
     assert md1.name.endswith("_test-weather-all.md")
+    assert json.loads(r1.read_text()) == {"schema": "x"}
+    assert not list(tmp_path.glob("*.jsonl"))
+    md3, r3 = save_result(_summary(), {}, directory=tmp_path)
+    assert md3.exists() and r3 is None
+
+
+def test_markdown_meta_from_the_manifest():
+    meta, versions = markdown_meta({"bus": "local", "channel": "testing", "channel_source": "installed versions",
+                                    "lang": "en-us", "tool": "ovos-tui-client 9",
+                                    "skills": {"a.b": {"version": "1.0"}}})
+    assert meta["Channel"] == "testing (installed versions)" and meta["OVOS"] == "local"
+    assert versions == {"a.b": "1.0"}
+    assert markdown_meta({})[0]["Channel"] == "unknown"

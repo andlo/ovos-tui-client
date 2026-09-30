@@ -204,7 +204,7 @@ async def test_own_script_run_is_announced_for_other_tuis(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_last_result_can_be_saved_as_report(tmp_path):
+async def test_result_is_saved_as_md_and_report(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     (scripts / "smoke.jsonl").write_text("\n".join([
@@ -220,30 +220,34 @@ async def test_last_result_can_be_saved_as_report(tmp_path):
     })
     with patch("ovos_tui_client.scripts.SETTLE", 0):
         async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
             titles = [c.title for c in app.get_system_commands(app.screen)]
-            assert not any(t.startswith("Test: Save last result") for t in titles)
+            assert not any(t.startswith("Test: Save result") for t in titles)
             app.start_user_script(scripts / "smoke.jsonl")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert "Test: Save last result" in _conversation(app)
+            assert "Test: Save result" in _conversation(app)
             cmd = [c for c in app.get_system_commands(app.screen)
-                   if c.title == "Test: Save last result (Script: smoke)"]
+                   if c.title == "Test: Save result… (Script: smoke)"]
             assert cmd
             cmd[0].callback()
             await pilot.pause()
+            await pilot.press("ctrl+s")
+            await pilot.pause()
             md = list((tmp_path / "results").glob("*_script-smoke.md"))
-            rows = list((tmp_path / "results").glob("*_script-smoke.jsonl"))
-            assert len(md) == 1 and len(rows) == 1
-            report = md[0].read_text()
-            assert "# Script: smoke" in report
-            assert "1/2 passed · 1 failed" in report
-            assert "## Failures" in report and '"who is lincoln"' in report
-            assert "| 1 | ✓ | what's the weather | ovos-skill-weather.openvoiceos:weather.intent |" in report
-            assert "- **Language:** en-us" in report
-            data = [json.loads(line) for line in rows[0].read_text().splitlines()]
-            assert [d["status"] for d in data] == ["pass", "fail"]
-            assert data[1]["handled_by"] == "ovos-skill-wikipedia.openvoiceos:wiki"
-            assert "Saved 'Script: smoke' to" in _conversation(app)
+            rep = list((tmp_path / "results").glob("*_script-smoke.report.json"))
+            assert len(md) == 1 and len(rep) == 1
+            assert not list((tmp_path / "results").glob("*.jsonl"))
+            text = md[0].read_text()
+            assert "# Script: smoke" in text
+            assert "1/2 passed · 1 failed" in text
+            assert "## Failures" in text and '"who is lincoln"' in text
+            assert "| 1 | ✓ | what's the weather | ovos-skill-weather.openvoiceos:weather.intent |" in text
+            assert "- **Language:** en-us" in text
+            report = json.loads(rep[0].read_text())
+            assert [st["status"] for st in report["steps"]] == ["pass", "fail"]
+            assert report["steps"][1]["handled_by"] == "ovos-skill-wikipedia.openvoiceos:wiki"
+            assert "(the report to share)" in _conversation(app)
 
 
 @pytest.mark.asyncio
@@ -272,7 +276,7 @@ async def test_shareable_report_asks_channel_notes_and_replies(tmp_path, monkeyp
             await app.workers.wait_for_complete()
             await pilot.pause()
             cmd = [c for c in app.get_system_commands(app.screen)
-                   if c.title == "Test: Create shareable report (Script: smoke)"]
+                   if c.title == "Test: Save result… (Script: smoke)"]
             assert cmd
             cmd[0].callback()
             await pilot.pause()
@@ -289,7 +293,7 @@ async def test_shareable_report_asks_channel_notes_and_replies(tmp_path, monkeyp
             assert report["manifest"]["channel"] == "testing"
             assert report["manifest"]["channel_source"] == "installed versions"
             assert "replies" not in report["steps"][0]
-            assert "Report saved:" in _conversation(app)
+            assert "(the report to share)" in _conversation(app)
 
 
 @pytest.mark.asyncio
@@ -311,7 +315,7 @@ async def test_report_can_be_shown_and_shown_again_from_the_palette(tmp_path, mo
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()
             titles = [c.title for c in app.get_system_commands(app.screen)]
-            assert not any(t.startswith("Test: Show last report") for t in titles)
+            assert not any(t.startswith("Test: Show last result") for t in titles)
             app.start_user_script(scripts / "smoke.jsonl")
             await app.workers.wait_for_complete()
             await pilot.pause()
@@ -327,8 +331,9 @@ async def test_report_can_be_shown_and_shown_again_from_the_palette(tmp_path, mo
             await pilot.press("escape")
             await pilot.pause()
             assert len(list((tmp_path / "results").glob("*.report.json"))) == 1
+            assert len(list((tmp_path / "results").glob("*.md"))) == 1
             cmd = [c for c in app.get_system_commands(app.screen)
-                   if c.title == "Test: Show last report (Script: smoke)"]
+                   if c.title == "Test: Show last result (Script: smoke)"]
             assert cmd
             cmd[0].callback()
             await pilot.pause()

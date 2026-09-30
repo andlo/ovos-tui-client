@@ -1,14 +1,15 @@
-"""Saving the result of a test run ('Test: Save last result').
+"""Saving the result of a test run ('Test: Save result', and every headless run).
 
 Two files per run, side by side in RESULTS_DIR:
 
 * ``<date>_<time>_<title>.md`` - a readable report: when, where, the
   summary line, the failures, and every step with what handled it and
-  what OVOS said. Paste it into an issue as it is.
-* ``<date>_<time>_<title>.jsonl`` - one row per step, for comparing runs
-  (stable vs alpha, before vs after a fix) with a script.
+  what OVOS said. For you, or to paste into an issue.
+* ``<date>_<time>_<title>.report.json`` - the shareable report
+  (report.py, ``ovos-test-report/1``): what was tested against (channel,
+  versions, machine) and one row per step. Also what to compare two runs
+  with (stable vs alpha, before vs after a fix).
 """
-import json
 import re
 import time
 from pathlib import Path
@@ -100,31 +101,31 @@ def report_markdown(summary: RunSummary, meta: Dict[str, str],
     return "\n".join(lines)
 
 
-def report_rows(summary: RunSummary) -> str:
-    rows = []
-    for i, step, result in summary.results:
-        rows.append(json.dumps({
-            "i": i, "utterance": step.utterance, "lang": step.lang,
-            "skill_id": step.skill_id, "intent_label": step.intent_label,
-            "status": result.status, "detail": result.detail,
-            "handled_by": summary.handled_by.get(i, ""),
-            "replies": summary.replies.get(i, []),
-        }, ensure_ascii=False))
-    return "\n".join(rows) + ("\n" if rows else "")
+def markdown_meta(manifest: Dict) -> Tuple[Dict[str, str], Dict[str, Optional[str]]]:
+    """The .md header lines and skill versions, from a report's manifest."""
+    channel = manifest.get("channel") or "unknown"
+    if manifest.get("channel") and manifest.get("channel_source"):
+        channel += f" ({manifest['channel_source']})"
+    meta = {"OVOS": manifest.get("bus"), "Channel": channel, "Language": manifest.get("lang"),
+            "Tool": manifest.get("tool")}
+    versions = {sid: (info or {}).get("version") for sid, info in (manifest.get("skills") or {}).items()}
+    return meta, versions
 
 
 def save_result(summary: RunSummary, meta: Dict[str, str],
                 versions: Optional[Dict[str, Optional[str]]] = None,
-                directory: Path = RESULTS_DIR) -> Tuple[Path, Path]:
-    """Writes the .md report and the .jsonl rows; returns both paths."""
+                directory: Path = RESULTS_DIR, report_text: Optional[str] = None) -> Tuple[Path, Optional[Path]]:
+    """Writes the .md and (given report_text) the .report.json; returns both paths."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     base = result_basename(summary)
-    md, jsonl = directory / f"{base}.md", directory / f"{base}.jsonl"
+    md, rep = directory / f"{base}.md", directory / f"{base}.report.json"
     n = 2
-    while md.exists() or jsonl.exists():
-        md, jsonl = directory / f"{base}-{n}.md", directory / f"{base}-{n}.jsonl"
+    while md.exists() or rep.exists():
+        md, rep = directory / f"{base}-{n}.md", directory / f"{base}-{n}.report.json"
         n += 1
     md.write_text(report_markdown(summary, meta, versions), encoding="utf-8")
-    jsonl.write_text(report_rows(summary), encoding="utf-8")
-    return md, jsonl
+    if report_text is None:
+        return md, None
+    rep.write_text(report_text, encoding="utf-8")
+    return md, rep

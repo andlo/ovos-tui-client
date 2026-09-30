@@ -14,12 +14,11 @@ utterances, and runs every step in its own session through the same
 ScriptRunner, stopping each step's session afterwards. Only the
 presentation differs: one plain line per step instead of the screen.
 
-Output:
-* DIR/<date>_<title>.md and .jsonl, the same files as 'Test: Save last
-  result' (#47), plus <...>.manifest.json (what was tested against);
-* with --report, one shareable `ovos-test-report/1` JSON document
-  (report.py) to a file, or to stdout with `-` for copy-paste. Progress
-  lines then go to stderr so stdout holds only the report.
+Output: the same two files as 'Test: Save result' in the TUI -
+DIR/<date>_<title>.md (readable) and .report.json (the shareable
+`ovos-test-report/1`, report.py). --report also puts a copy of the report
+in FILE, or on stdout with `-` for copy-paste; progress lines then go to
+stderr so stdout holds only the report.
 
 Exit code: 0 all checked steps passed, 1 something failed or timed out,
 2 could not run (no bus, no skill list, nothing to test).
@@ -39,7 +38,7 @@ from typing import Callable, Dict, List, Optional
 from ovos_tui_client.bus import OVOSBusConnection
 from ovos_tui_client.manifest import build_manifest
 from ovos_tui_client.report import build_report, report_json, submit_url
-from ovos_tui_client.results import RESULTS_DIR, save_result, summary_parts
+from ovos_tui_client.results import RESULTS_DIR, markdown_meta, save_result, summary_parts
 from ovos_tui_client.scripts import (FAIL, PASS, SENT, TIMEOUT, ScriptRunner, expand_includes,
                                      load_golden, parse_script)
 
@@ -207,22 +206,17 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
     else:
         log(f"Channel: {manifest['channel']} ({manifest.get('channel_source')})")
 
-    meta = {"OVOS": "local" if manifest["bus"] == "local" else "remote",
-            "Channel": manifest.get("channel") or "unknown", "Language": bus.lang,
-            "ovos-tui-client": tool_version}
-    versions = {sid: info.get("version") for sid, info in manifest["skills"].items()}
+    report = build_report(summary, manifest, include_replies=args.report_replies, notes=args.notes)
+    text = report_json(report)
+    meta, versions = markdown_meta(manifest)
     output_dir = Path(args.output).expanduser() if args.output else RESULTS_DIR
     try:
-        md, jsonl = save_result(summary, meta, versions, output_dir)
-        manifest_path = md.with_suffix(".manifest.json")
-        manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        log(f"Saved {md}, {jsonl.name} and {manifest_path.name}")
+        md, rep = save_result(summary, meta, versions, output_dir, report_text=text)
+        log(f"Saved {md} and {rep.name}")
     except OSError as e:
         log(f"Could not save the result in {output_dir}: {e}")
 
     if args.report:
-        report = build_report(summary, manifest, include_replies=args.report_replies, notes=args.notes)
-        text = report_json(report)
         if args.report == "-":
             out.write(text)
             out.flush()
@@ -234,11 +228,11 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
                 log(f"Report written to {path}")
             except OSError as e:
                 log(f"Could not write the report to {path}: {e}")
-        template = args.submit_url or config.get("submit_url")
-        if template:
-            link = submit_url(template, report)
-            log(f"Submit it here: {link}" if link else
-                "The report is too long for a link - open the store's page and paste the report instead.")
+    template = args.submit_url or config.get("submit_url")
+    if template:
+        link = submit_url(template, report)
+        log(f"Submit it here: {link}" if link else
+            "The report is too long for a link - open the store's page and paste the report instead.")
 
     _close(bus)
     if summary.cancelled or summary.count(FAIL) or summary.count(TIMEOUT):

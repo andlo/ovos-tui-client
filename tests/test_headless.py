@@ -103,8 +103,10 @@ def test_all_pass_exit_0_and_files_written(tmp_path):
     assert "✓ \"what's the weather\"" in out and "2/2 passed" in out
     files = sorted(p.name for p in (tmp_path / "results").iterdir())
     assert any(f.endswith(".md") for f in files)
-    assert any(f.endswith(".jsonl") for f in files)
-    assert any(f.endswith(".manifest.json") for f in files)
+    assert any(f.endswith(".report.json") for f in files)
+    assert not any(f.endswith(".jsonl") or f.endswith(".manifest.json") for f in files)
+    saved = json.loads(next((tmp_path / "results").glob("*.report.json")).read_text())
+    assert saved["schema"] == "ovos-test-report/1" and saved["manifest"]["bus"] == "local"
     # each step ran in its own session, and that session was stopped
     assert len({sid for _, sid in bus.sent}) == 2
     assert set(bus.stopped) >= {sid for _, sid in bus.sent}

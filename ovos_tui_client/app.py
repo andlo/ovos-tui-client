@@ -86,7 +86,7 @@ from ovos_tui_client.about import (
 )
 from rich.markup import escape
 from ovos_tui_client.test_picker import TestPickerScreen
-from ovos_tui_client.results import RESULTS_DIR, result_basename, save_result, summary_parts
+from ovos_tui_client.results import RESULTS_DIR, markdown_meta, save_result, summary_parts
 from ovos_tui_client.channel import channel_markdown
 from ovos_tui_client.manifest import build_manifest, channel_check, local_stack
 from ovos_tui_client.report import build_report, report_json, submit_url
@@ -671,12 +671,12 @@ class OVOSTUIApp(App):
         self.script_runner = None
         self._own_progress = ""  # header text for this TUI's own running script
         self._remote_runs = {}   # other TUI instance -> header text for ITS running script (#32)
-        self.last_summary = None  # the last test run, for 'Test: Save last result'
+        self.last_summary = None  # the last test run, for 'Test: Save result'
         self.results_dir = RESULTS_DIR
         # 'OVOS: Release channel' / the report window: channel.detect()'s
         # result for this device, None until checked (or when remote)
         self.channel_result = None
-        self.last_report = None  # {"title", "text", "path"} for 'Test: Show last report'
+        self.last_report = None  # {"title", "text", "path"} for 'Test: Show last result'
         self._channel_checked = False
         self.last_selection = {} # skill_id -> steps chosen in the picker last time (#34), this session only
         self._last_picked = {}   # skill_id -> utterances ticked last time, to pre-tick the picker again
@@ -1680,8 +1680,7 @@ class OVOSTUIApp(App):
             "failures": [[i, step.utterance, result.status, result.detail] for i, step, result in summary.failures],
         })
         if summary.results:
-            self._write_status("Ctrl+P → 'Test: Save last result' saves this run; "
-                               "'Test: Create shareable report' makes a report to share.")
+            self._write_status("Ctrl+P → 'Test: Save result' saves this run: a readable .md and a report to share.")
 
     # ----------------------------------------------------------------
     # Release channel and shareable reports (#51, interactive side)
@@ -1716,8 +1715,8 @@ class OVOSTUIApp(App):
         self._channel_worker(then=_show)
 
     def create_report(self) -> None:
-        """'Test: Create shareable report': asks for the channel, a note and
-        replies on/off, then writes one ovos-test-report/1 JSON file."""
+        """'Test: Save result…': asks for the channel, a note and replies
+        on/off, then saves the run as .md + .report.json (results.py)."""
         summary = self.last_summary
         if summary is None:
             return
@@ -1749,22 +1748,21 @@ class OVOSTUIApp(App):
                                   tool_version=_ovos_tui_version(), channel_result=channel_result)
         report = build_report(summary, manifest, include_replies=values["replies"], notes=values["notes"])
         text = report_json(report)
-        path = self.results_dir / f"{result_basename(summary)}.report.json"
+        meta, versions = markdown_meta(manifest)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
+            md, path = save_result(summary, meta, versions, self.results_dir, report_text=text)
         except OSError as e:
-            self._write_status(f"Could not save the report: {e}", ok=False)
+            self._write_status(f"Could not save the result: {e}", ok=False)
             return
-        self._write_status(f"Report saved: {path}")
+        self._write_status(f"Saved {md} (readable) and {path.name} (the report to share)")
         self.last_report = {"title": summary.title, "text": text, "path": path}
         if values.get("action") == "show":
             self.show_last_report()
         else:
             try:
                 self.copy_to_clipboard(text)
-                self._write_status("…and copied to the clipboard, if your terminal allows it. If nothing "
-                                   "arrives there: Ctrl+P → 'Test: Show last report' shows it to copy by hand.")
+                self._write_status("The report is copied to the clipboard, if your terminal allows it. If "
+                                   "nothing arrives there: Ctrl+P → 'Test: Show last result' shows it to copy by hand.")
             except Exception:  # noqa: BLE001 - clipboard is a convenience
                 pass
         if values["replies"]:
@@ -1780,7 +1778,7 @@ class OVOSTUIApp(App):
                                "The report is too long for a link: paste it on the store's page instead.")
 
     def show_last_report(self) -> None:
-        """'Test: Show last report': the report as text, from its file when
+        """'Test: Show last result': the report as text, from its file when
         it is still there (so it is exactly what was saved)."""
         report = self.last_report
         if report is None:
@@ -1791,26 +1789,6 @@ class OVOSTUIApp(App):
         except (OSError, TypeError):
             pass
         self.push_screen(ReportViewScreen(report["title"], text, report["path"]))
-
-    def save_last_result(self) -> None:
-        """'Test: Save last result': the last run as a .md report and a
-        .jsonl of every step, in RESULTS_DIR (see results.py)."""
-        summary = self.last_summary
-        if summary is None:
-            return
-        meta = {"OVOS": f"{self.host}:{self.port}", "Language": self.bus.lang,
-                "ovos-tui-client": _ovos_tui_version()}
-        versions = {}
-        for _, step, _ in summary.results:
-            if step.skill_id and step.skill_id not in versions:
-                dist = find_skill_distribution(step.skill_id)
-                versions[step.skill_id] = dist[1] if dist else None
-        try:
-            md, jsonl = save_result(summary, meta, versions, self.results_dir)
-        except OSError as e:
-            self._write_status(f"Could not save the result: {e}", ok=False)
-            return
-        self._write_status(f"Saved '{summary.title}' to {md} (and {jsonl.name} beside it)")
 
 
     # ----------------------------------------------------------------
@@ -2035,11 +2013,9 @@ class OVOSTUIApp(App):
         # #41: pick up skills installed/removed while the TUI is running
         yield SystemCommand("Refresh: Skills and services", "", self.refresh_all)
         if self.last_summary is not None:
-            yield SystemCommand(f"Test: Save last result ({self.last_summary.title})", "", self.save_last_result)
-            yield SystemCommand(f"Test: Create shareable report ({self.last_summary.title})", "",
-                                self.create_report)
+            yield SystemCommand(f"Test: Save result… ({self.last_summary.title})", "", self.create_report)
         if self.last_report is not None:
-            yield SystemCommand(f"Test: Show last report ({self.last_report['title']})", "", self.show_last_report)
+            yield SystemCommand(f"Test: Show last result ({self.last_report['title']})", "", self.show_last_report)
         channel = (self.channel_result or {}).get("channel") or ("checking…" if not self._channel_checked else "unknown")
         yield SystemCommand(f"OVOS: Release channel ({channel})", "", self.show_channel)
         yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
@@ -2276,9 +2252,9 @@ def build_arg_parser():
                           help="run tests without the UI and exit: 'all' (every installed skill), a skill_id, "
                                "or a .jsonl/.txt script file. Exit code 0 = all passed, 1 = failures, 2 = could not run")
     headless.add_argument("--output", metavar="DIR", default=None,
-                          help="where the .md/.jsonl result and its .manifest.json go (default: ~/.local/share/ovos-tui-client/results)")
+                          help="where the .md and .report.json go (default: ~/.local/share/ovos-tui-client/results)")
     headless.add_argument("--report", metavar="FILE", default=None,
-                          help="also write one shareable JSON report (ovos-test-report/1) to FILE, or '-' to print it for copy-paste")
+                          help="also put a copy of the report (ovos-test-report/1) in FILE, or '-' to print it for copy-paste")
     headless.add_argument("--report-replies", action="store_true",
                           help="include OVOS's replies in the report (off by default: replies can contain personal data)")
     headless.add_argument("--channel", default=None,
