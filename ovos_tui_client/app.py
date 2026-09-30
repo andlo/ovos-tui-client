@@ -87,7 +87,7 @@ from ovos_tui_client.about import (
 from rich.markup import escape
 from ovos_tui_client.test_picker import TestPickerScreen
 from ovos_tui_client.results import RESULTS_DIR, markdown_meta, save_result, summary_parts
-from ovos_tui_client.channel import channel_markdown
+from ovos_tui_client.channel import channel_markdown, summary as channel_summary
 from ovos_tui_client.manifest import build_manifest, channel_check, local_stack
 from ovos_tui_client.report import build_report, report_json, submit_url
 from ovos_tui_client.report_screen import ReportScreen, ReportViewScreen
@@ -678,6 +678,7 @@ class OVOSTUIApp(App):
         self.channel_result = None
         self.last_report = None  # {"title", "text", "path"} for 'Test: Show last result'
         self._channel_checked = False
+        self._channel_short = ""  # header text, from channel.summary()
         self.last_selection = {} # skill_id -> steps chosen in the picker last time (#34), this session only
         self._last_picked = {}   # skill_id -> utterances ticked last time, to pre-tick the picker again
         self.host = host
@@ -814,7 +815,7 @@ class OVOSTUIApp(App):
            'OK ready.' get written - genuinely accurate now, not just
            well-intentioned."""
         self._write_status(f"ovos-tui-client v{_ovos_tui_version()}")
-        self._channel_worker()
+        self._channel_worker(announce=True)
 
         if self.log_bridge_handles:
             # Bridging already happened in __init__() (see that
@@ -1029,9 +1030,8 @@ class OVOSTUIApp(App):
         if self._own_progress:
             parts.append(f"▶ {self._own_progress}")
         parts += [f"⚠ {text}" for text in self._remote_runs.values()]
-        channel = (self.channel_result or {}).get("channel")
-        if channel:
-            parts.append(f"OVOS {channel}")
+        if self._channel_checked and self._channel_short:
+            parts.append(self._channel_short)
         self.sub_title = "   ".join(parts)
 
     def _handle_bus_message(self, msg_type: str, data: dict, context: dict) -> None:
@@ -1687,19 +1687,25 @@ class OVOSTUIApp(App):
     # ----------------------------------------------------------------
 
     @work(thread=True, group="channel")
-    def _channel_worker(self, then=None) -> None:
+    def _channel_worker(self, then=None, announce: bool = False) -> None:
         """channel.detect() needs the network (the constraints files are
-        fetched live), so never on the UI thread."""
+        fetched live), so never on the UI thread. announce: write the
+        'OVOS: testing · ovos-core ...' line (at startup)."""
         result = None
+        stack = {}
         if self.is_local:
             try:
-                result = channel_check(local_stack())
+                stack = local_stack()
+                result = channel_check(stack)
             except Exception:  # noqa: BLE001 - informational only
                 result = None
 
         def _done():
             self.channel_result = result
             self._channel_checked = True
+            self._channel_short, line = channel_summary(result, stack, remote=not self.is_local)
+            if announce:
+                self._write_status(line)
             self._refresh_sub_title()
             if then is not None:
                 then()
@@ -2016,7 +2022,8 @@ class OVOSTUIApp(App):
             yield SystemCommand(f"Test: Save result… ({self.last_summary.title})", "", self.create_report)
         if self.last_report is not None:
             yield SystemCommand(f"Test: Show last result ({self.last_report['title']})", "", self.show_last_report)
-        channel = (self.channel_result or {}).get("channel") or ("checking…" if not self._channel_checked else "unknown")
+        channel = (self._channel_short.replace("OVOS: ", "").replace("OVOS ", "")
+                   if self._channel_checked else "checking…")
         yield SystemCommand(f"OVOS: Release channel ({channel})", "", self.show_channel)
         yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
         yield SystemCommand("Focus: Logs", "", self.action_focus_logs)
