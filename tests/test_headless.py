@@ -299,3 +299,31 @@ def test_resolve_steps_fills_sources():
     headless.resolve_steps("a.b", {"a.b": True}, "en-us", (), log=lambda _: None,
                            loader=lambda *a, **k: GoldenResult([step], "somewhere"), sources=sources)
     assert sources == {"a.b": "somewhere"}
+
+
+def test_manifest_lists_every_installed_skill_and_pipeline_plugins(tmp_path, monkeypatch):
+    # so a reader can tell what the test ran alongside (e.g. a store's
+    # reference set of skills) - ids and versions only
+    monkeypatch.setattr(manifest_mod, "read_installer_channel", lambda *a, **k: ("testing", None))
+    monkeypatch.setattr(manifest_mod, "find_skill_distribution",
+                        lambda sid: (sid.split(".")[0], "1.2.3") if sid != "x.y" else None)
+    monkeypatch.setattr(manifest_mod, "pipeline_plugins", lambda: {"ovos-common-reading-pipeline-plugin": "0.1.0"})
+    m = manifest_mod.build_manifest("127.0.0.1", "en-us", ["a.b"],
+                                    installed_skills={"a.b": True, "c.d": True, "x.y": False})
+    assert m["installed_skills"] == 3
+    assert m["installed"] == [
+        {"id": "a.b", "package": "a", "version": "1.2.3", "active": True},
+        {"id": "c.d", "package": "c", "version": "1.2.3", "active": True},
+        {"id": "x.y", "package": None, "version": None, "active": False},
+    ]
+    assert m["pipeline_plugins"] == {"ovos-common-reading-pipeline-plugin": "0.1.0"}
+
+
+def test_remote_manifest_lists_installed_ids_without_versions():
+    m = manifest_mod.build_manifest("192.0.2.5", "en-us", ["a.b"], installed_skills={"a.b": True, "c.d": None})
+    assert [r["id"] for r in m["installed"]] == ["a.b", "c.d"]
+    assert all(r["version"] is None for r in m["installed"]) and "pipeline_plugins" not in m
+
+
+def test_pipeline_plugins_reads_real_entry_points():
+    assert isinstance(manifest_mod.pipeline_plugins(), dict)
