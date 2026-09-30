@@ -339,3 +339,28 @@ async def test_report_can_be_shown_and_shown_again_from_the_palette(tmp_path, mo
             await pilot.pause()
             assert isinstance(app.screen, ReportViewScreen)
             assert app.screen.query_one(TextArea).text == text
+
+
+@pytest.mark.asyncio
+async def test_store_link_setting_saves_only_a_link_that_can_carry_the_report(tmp_path, monkeypatch):
+    from ovos_tui_client import headless
+    from ovos_tui_client.report_screen import SubmitUrlScreen
+    cfg = tmp_path / "config.json"
+    monkeypatch.setattr(headless, "CONFIG_FILE", cfg)
+    monkeypatch.setattr(headless.load_config, "__defaults__", (cfg,))
+    monkeypatch.setattr(headless.save_config, "__defaults__", (cfg,))
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.set_submit_url()
+        await pilot.pause()
+        assert isinstance(app.screen, SubmitUrlScreen)
+        box = app.screen.query_one("#submit-url", Input)
+        box.value = "https://store.example/submit"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, SubmitUrlScreen)   # refused: no {report...}
+        box.value = "https://store.example/d?skill={skill_id}#report={report_fragment}"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, SubmitUrlScreen)
+    assert json.loads(cfg.read_text())["submit_url"].endswith("#report={report_fragment}")

@@ -90,7 +90,7 @@ from ovos_tui_client.results import RESULTS_DIR, markdown_meta, save_result, sum
 from ovos_tui_client.channel import channel_markdown, summary as channel_summary
 from ovos_tui_client.manifest import build_manifest, channel_check, local_stack
 from ovos_tui_client.report import build_report, report_json, submit_url
-from ovos_tui_client.report_screen import ReportScreen, ReportViewScreen
+from ovos_tui_client.report_screen import ReportScreen, ReportViewScreen, SubmitUrlScreen
 
 LOG_POLL_INTERVAL = 0.5  # seconds
 # How long "OK ready." waits for the release-channel check at startup (it
@@ -1780,11 +1780,14 @@ class OVOSTUIApp(App):
         self.last_report = {"title": summary.title, "text": text, "path": path}
         if values.get("action") == "show":
             self.show_last_report()
+        elif values.get("action") == "share":
+            self.share_last_report()
         else:
             try:
                 self.copy_to_clipboard(text)
                 self._write_status("The report is copied to the clipboard, if your terminal allows it. If "
-                                   "nothing arrives there: Ctrl+P → 'Test: Show last result' shows it to copy by hand.")
+                                   "nothing arrives there (GNOME Terminal, over ssh): Ctrl+P → 'Test: Share last "
+                                   "result' gives a link to open it in your own browser.")
             except Exception:  # noqa: BLE001 - clipboard is a convenience
                 pass
         if values["replies"]:
@@ -1810,7 +1813,64 @@ class OVOSTUIApp(App):
             text = Path(report["path"]).read_text(encoding="utf-8")
         except (OSError, TypeError):
             pass
-        self.push_screen(ReportViewScreen(report["title"], text, report["path"]))
+        self.push_screen(ReportViewScreen(report["title"], text, report["path"]),
+                         callback=lambda result: self.share_last_report() if result == "share" else None)
+
+    def share_last_report(self) -> None:
+        """'Test: Share last result': a short link to the report served from
+        this device, and an scp command - for terminals that don't pass Copy
+        on to the clipboard (GNOME Terminal, over ssh). Asks once for a
+        store's report link, so the page can open the store with it."""
+        from ovos_tui_client.headless import load_config, save_config
+        if self.last_report is None:
+            return
+        config = load_config()
+        if not config.get("submit_url"):
+            def _answered(value):
+                if value:
+                    save_config({"submit_url": value})
+                self._share_report(value or None)
+            self.push_screen(SubmitUrlScreen(), callback=_answered)
+            return
+        self._share_report(config.get("submit_url"))
+
+    def set_submit_url(self) -> None:
+        """'Settings: Skill store report link': set or change the store link
+        the share page uses (kept as submit_url in the config file)."""
+        from ovos_tui_client.headless import CONFIG_FILE, load_config, save_config
+
+        def _answered(value):
+            if value is None:
+                return
+            save_config({"submit_url": value})
+            self._write_status(f"Skill store report link saved in {CONFIG_FILE}" if value else
+                               "Skill store report link removed.")
+        self.push_screen(SubmitUrlScreen(current=load_config().get("submit_url") or "", setting=True),
+                         callback=_answered)
+
+    def _share_report(self, template) -> None:
+        from ovos_tui_client.headless import share_report
+        from ovos_tui_client.share import scp_hint
+        report = self.last_report
+        text = report["text"]
+        try:
+            text = Path(report["path"]).read_text(encoding="utf-8")
+        except (OSError, TypeError):
+            pass
+        link = None
+        if template:
+            try:
+                link = submit_url(template, json.loads(text))
+            except ValueError:
+                link = None
+        try:
+            # outside the TUI the terminal's own link handling (Ctrl+click)
+            # and selection work, whatever the terminal
+            with self.suspend():
+                print(f"\nReport: {report['title']}")
+                share_report(text, report["title"], report["path"], link, print, wait=input)
+        except Exception:  # noqa: BLE001 - e.g. no suspend in the browser (--web)
+            self._write_status(f"Fetch the report with: {scp_hint(report['path'])}")
 
 
     # ----------------------------------------------------------------
@@ -2032,12 +2092,16 @@ class OVOSTUIApp(App):
         yield SystemCommand("Clear: Conversation", "", partial(self.clear_panes, "conversation"))
         yield SystemCommand("Clear: Activity", "", partial(self.clear_panes, "activity"))
         yield SystemCommand("Clear: All (keeps input history)", "", partial(self.clear_panes, "logs", "conversation", "activity"))
+        yield SystemCommand("Settings: Skill store report link", "The link template a skill store gives for test reports - used by 'Share'", self.set_submit_url)
         # #41: pick up skills installed/removed while the TUI is running
         yield SystemCommand("Refresh: Skills and services", "", self.refresh_all)
         if self.last_summary is not None:
             yield SystemCommand(f"Test: Save result… ({self.last_summary.title})", "", self.create_report)
         if self.last_report is not None:
             yield SystemCommand(f"Test: Show last result ({self.last_report['title']})", "", self.show_last_report)
+            yield SystemCommand(f"Test: Share last result - link / file ({self.last_report['title']})",
+                                "A short link to open it in your own browser, and a command to fetch the file",
+                                self.share_last_report)
         channel = (self._channel_short.replace("OVOS: ", "").replace("OVOS ", "")
                    if self._channel_checked else "checking…")
         yield SystemCommand(f"OVOS: Release channel ({channel})", "", self.show_channel)
@@ -2285,8 +2349,15 @@ def build_arg_parser():
     headless.add_argument("--notes", default=None,
                           help="free text for the report, e.g. what the skill needs ('API key set', 'Mark II')")
     headless.add_argument("--submit-url", metavar="TEMPLATE", default=None,
-                          help="print a link built from TEMPLATE with {report}, {skill_id}, {channel}, {title} filled in, "
-                               "e.g. a store's submit form. Also settable as 'submit_url' in ~/.config/ovos-tui-client/config.json")
+                          help="a skill store's report link template, with {report_fragment} (or {report}), {skill_id}, "
+                               "{channel}, {title}: ovos-tui fills it in so the store's page opens with the report - it "
+                               "never submits anything. Asked once when not set; kept as 'submit_url' in "
+                               "~/.config/ovos-tui-client/config.json")
+    headless.add_argument("--share", action="store_true",
+                          help="serve the report on a short temporary link (from this device, for 15 min) even when "
+                               "not run from a terminal; from a terminal this happens by itself")
+    headless.add_argument("--no-share", action="store_true",
+                          help="don't serve the report on a link, only save it")
     return parser
 
 

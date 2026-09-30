@@ -38,6 +38,7 @@ from typing import Callable, Dict, List, Optional
 from ovos_tui_client.bus import OVOSBusConnection
 from ovos_tui_client.manifest import build_manifest
 from ovos_tui_client.report import build_report, report_json, submit_url
+from ovos_tui_client.share import ASK_SUBMIT_URL_TEXT, SHARE_TTL, ReportShare, scp_hint
 from ovos_tui_client.results import RESULTS_DIR, markdown_meta, save_result, summary_parts
 from ovos_tui_client.scripts import (FAIL, PASS, SENT, TIMEOUT, ScriptRunner, expand_includes,
                                      load_golden, parse_script)
@@ -57,6 +58,73 @@ SKILL_SETTLE_MAX = 180.0
 CONFIG_FILE = Path("~/.config/ovos-tui-client/config.json").expanduser()
 
 _MARK = {PASS: "✓", FAIL: "✗", TIMEOUT: "⏱", SENT: "→"}
+
+
+def save_config(values: Dict, path: Path = CONFIG_FILE) -> None:
+    """Merges values into the config file (best effort)."""
+    data = load_config(path)
+    data.update(values)
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def ask_submit_url(log: Callable[[str], None], ask: Callable[[str], str] = input,
+                   path: Path = CONFIG_FILE) -> Optional[str]:
+    """Asks (from a terminal) for a store's report link template and keeps
+    it in the config file. An empty answer isn't kept: it's asked again next
+    time (set it any time with --submit-url, or in the TUI: Ctrl+P ->
+    'Settings: Skill store report link')."""
+    log("")
+    for line in ASK_SUBMIT_URL_TEXT.splitlines():
+        log(line)
+    log("Press Enter to skip for now (asked again next time; or set it with --submit-url, "
+        "or in the TUI: Ctrl+P → 'Settings: Skill store report link').")
+    try:
+        answer = ask("Store report link: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if answer and "{report" not in answer:
+        log("That link has no {report_fragment} or {report} in it, so it can't carry the report - not saved.")
+        answer = ""
+    if answer:
+        save_config({"submit_url": answer}, path)
+        log(f"Saved in {path}.")
+    return answer or None
+
+
+def share_report(text: str, title: str, path, store_link: Optional[str], log: Callable[[str], None],
+                 wait: Optional[Callable[[str], str]] = input, ttl: float = SHARE_TTL,
+                 share_cls=None) -> None:
+    """Puts the report on a short temporary link and says how to get it."""
+    share_cls = share_cls or ReportShare
+    share = share_cls(text, title=title, store_link=store_link, ttl=ttl)
+    try:
+        url = share.start()
+    except OSError as e:
+        log(f"Could not serve the report on a link ({e}).")
+        url = None
+    if url:
+        log("")
+        log(f"Open the report in your browser (Ctrl+click): {url}")
+        log("  " + ("Copy, Download, and 'Open in' the store with the report filled in." if store_link
+                    else "Copy and Download there.") + f" The link works for {ttl / 60:.0f} min.")
+    if path:
+        log(f"Or fetch the file: {scp_hint(path)}")
+    if url:
+        if wait is None:
+            try:
+                threading.Event().wait(ttl)
+            except KeyboardInterrupt:
+                pass
+        else:
+            try:
+                wait("Press Enter when you're done with the link... ")
+            except (EOFError, KeyboardInterrupt):
+                pass
+        share.stop()
 
 
 def load_config(path: Path = CONFIG_FILE) -> Dict:
@@ -257,8 +325,10 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
     text = report_json(report)
     meta, versions = markdown_meta(manifest)
     output_dir = Path(args.output).expanduser() if args.output else RESULTS_DIR
+    saved = None
     try:
         md, rep = save_result(summary, meta, versions, output_dir, report_text=text)
+        saved = rep
         log(f"Saved {md} and {rep.name}")
     except OSError as e:
         log(f"Could not save the result in {output_dir}: {e}")
@@ -275,11 +345,20 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
                 log(f"Report written to {path}")
             except OSError as e:
                 log(f"Could not write the report to {path}: {e}")
+    interactive = _interactive(out if args.report != "-" else err)
     template = args.submit_url or config.get("submit_url")
-    if template:
-        link = submit_url(template, report)
-        log(f"Submit it here: {link}" if link else
-            "The report is too long for a link - open the store's page and paste the report instead.")
+    if not template and interactive and not getattr(args, "no_share", False):
+        template = ask_submit_url(log)
+    link = submit_url(template, report) if template else None
+    if template and not link:
+        log("The report is too long for the store's link - open the store's page and paste or upload it instead.")
+    if not getattr(args, "no_share", False) and (interactive or getattr(args, "share", False)):
+        share_report(text, title, saved, link, log, wait=input if interactive else None)
+    else:
+        if link:
+            log(f"Submit it here: {link}")
+        if saved:
+            log(f"Fetch the file with: {scp_hint(saved)}")
 
     _close(bus)
     if summary.cancelled or summary.count(FAIL) or summary.count(TIMEOUT):
@@ -305,6 +384,14 @@ def note_steps_sources(manifest: Dict, sources: Dict[str, str], log: Callable[[s
                                   "than the installed release: " + ", ".join(newer))
         log(f"Note: {len(newer)} skill(s) were tested with golden files from the repo's default "
             "branch, which may be newer than the installed release (see steps_from in the manifest).")
+
+
+def _interactive(stream) -> bool:
+    """Run by a person in a terminal (not cron/CI/a pipe)."""
+    try:
+        return sys.stdin.isatty() and stream.isatty()
+    except (AttributeError, ValueError):
+        return False
 
 
 def _close(bus) -> None:
