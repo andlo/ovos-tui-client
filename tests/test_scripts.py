@@ -649,11 +649,14 @@ def test_step_left_in_get_response_is_answered_cancel_in_its_own_session():
 
     def reply(r, step):
         r.feed(f"{WEATHER}:weather.intent")
-        r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER})
+        r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER},
+               {"session": {"session_id": r.session_id, "response_mode": [WEATHER]}})
         r.feed("ovos.utterance.handled")
 
-    def answer(session_id, text, lang):
-        answered.append((session_id, text, lang))
+    def answer(session, text, lang):
+        # the full session the skill serialized, not just its id
+        assert session.get("response_mode") == [WEATHER]
+        answered.append((session["session_id"], text, lang))
         # the skill gets its answer: cancel -> get_response returns
         holder["r"].feed(f"{WEATHER}.converse.get_response", {})
         holder["r"].feed("skill.converse.get_response.disable", {"skill_id": WEATHER})

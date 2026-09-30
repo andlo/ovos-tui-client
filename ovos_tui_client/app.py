@@ -1594,7 +1594,7 @@ class OVOSTUIApp(App):
                 self._write_status,
                 f"[{i}/{n}] no response yet: waiting up to {wait / 60:.0f} min for OVOS to finish it before "
                 "the next step (OVOS handles one sentence at a time). 'Script: Stop running script' ends the run."),
-            answer=lambda session_id, text, lang: self.bus.send_utterance(text, lang=lang, session_id=session_id),
+            answer=lambda session, text, lang: self.bus.send_utterance(text, lang=lang, session_id=session),
         )
         self.script_runner = runner
         self.call_from_thread(self._script_started, title, len(steps))

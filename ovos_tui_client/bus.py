@@ -204,7 +204,11 @@ class OVOSBusConnection:
         use (one session per row); confirmed live that a fresh session
         is routed normally while the default one was captured."""
         context = self._tui_context(script)
-        if session_id:
+        if isinstance(session_id, dict):
+            # a full serialized session (e.g. one a skill left waiting in
+            # get_response) - its state has to travel with the utterance
+            context["session"] = dict(session_id)
+        elif session_id:
             context["session"] = {"session_id": session_id}
         self._client.emit(Message("recognizer_loop:utterance", {
             "utterances": [text],
