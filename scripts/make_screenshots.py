@@ -325,6 +325,31 @@ async def scene_report_view(app, pilot):
     await _settle(pilot, 0.3)
 
 
+async def scene_share(app, pilot):
+    """'Save and share': the report on a short link, in a window."""
+    import ovos_tui_client.headless as headless_mod
+    import ovos_tui_client.share as share_mod
+
+    class DemoShare:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            return "http://192.168.1.50:41733/q3v9XcA2Lk0e/"
+
+        def stop(self):
+            pass
+
+    path = "~/.local/share/ovos-tui-client/results/2026-10-01_101500_test-weather-all.report.json"
+    app.last_report = {"title": "Test: Weather - All", "text": json.dumps(DEMO_REPORT), "path": None}
+    with patch.object(share_mod, "ReportShare", DemoShare), \
+         patch.object(share_mod, "scp_hint", lambda p, address=None: f"scp ovos@192.168.1.50:{path} ."), \
+         patch.object(headless_mod, "load_config", lambda *a, **k: {"submit_url": "https://store.example/r#report={report_fragment}"}):
+        app.last_report["path"] = path
+        app.share_last_report()
+        await _settle(pilot, 0.3)
+
+
 SCENES = {
     "overview": scene_overview,
     "palette": scene_palette,
@@ -339,6 +364,7 @@ SCENES = {
     "report-save": scene_report_save,
     "store-link": scene_store_link,
     "report-view": scene_report_view,
+    "share": scene_share,
 }
 
 # A short, believable report for the report window (not a real run)

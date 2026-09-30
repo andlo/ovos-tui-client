@@ -90,7 +90,7 @@ from ovos_tui_client.results import RESULTS_DIR, markdown_meta, save_result, sum
 from ovos_tui_client.channel import channel_markdown, summary as channel_summary
 from ovos_tui_client.manifest import build_manifest, channel_check, local_stack
 from ovos_tui_client.report import build_report, report_json, submit_url
-from ovos_tui_client.report_screen import ReportScreen, ReportViewScreen, SubmitUrlScreen
+from ovos_tui_client.report_screen import ReportScreen, ReportViewScreen, ShareScreen, SubmitUrlScreen
 
 LOG_POLL_INTERVAL = 0.5  # seconds
 # How long "OK ready." waits for the release-channel check at startup (it
@@ -1863,9 +1863,31 @@ class OVOSTUIApp(App):
                 link = submit_url(template, json.loads(text))
             except ValueError:
                 link = None
+        from ovos_tui_client.share import SHARE_TTL, ReportShare
+        share = ReportShare(text, title=report["title"], store_link=link)
         try:
-            # outside the TUI the terminal's own link handling (Ctrl+click)
-            # and selection work, whatever the terminal
+            url = share.start()
+        except OSError as e:
+            self._write_status(f"Could not serve the report on a link ({e}). "
+                               f"Fetch the file with: {scp_hint(report['path'])}", ok=False)
+            return
+        scp = scp_hint(report["path"]) if report.get("path") else ""
+
+        def _closed(result):
+            share.stop()
+            if result == "outside":
+                self._share_outside(text, report, link)
+            else:
+                self._write_status("Stopped sharing the report.")
+        self.push_screen(ShareScreen(report["title"], url, scp, bool(link), int(SHARE_TTL // 60)),
+                         callback=_closed)
+
+    def _share_outside(self, text, report, link) -> None:
+        """The same, printed outside the TUI, where the terminal's own link
+        handling and selection work whatever the terminal."""
+        from ovos_tui_client.headless import share_report
+        from ovos_tui_client.share import scp_hint
+        try:
             with self.suspend():
                 print(f"\nReport: {report['title']}")
                 share_report(text, report["title"], report["path"], link, print, wait=input)

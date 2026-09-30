@@ -122,15 +122,20 @@ The buttons:
   share it. **Copy** (`Ctrl+C`) there tries the clipboard again, and
   **Share** (`Ctrl+L`) gets it out another way.
 - **Save and share** (`Ctrl+L`): gets the report to your own computer, from
-  any terminal and over ssh. The TUI steps aside and prints two things,
-  where your terminal's own links and selection work:
-    - a **short link** (Ctrl+click it) to a page with the report, **Copy
-      report**, **Download report.json** and, when a store link is set,
-      **Open in &lt;store&gt;** with the report filled in;
+  any terminal and over ssh. A window shows:
+    - a **short link**: Ctrl+click it (Ctrl+Shift+click in some terminals),
+      or select it with Shift + mouse and paste it in your browser. The page
+      has **Copy report**, **Download report.json** and, when a store link is
+      set, **Open in &lt;store&gt;** with the report filled in;
     - an **`scp` command** to fetch the file.
 
-    Press Enter to come back to the TUI. The link stops then (or after 15
-    minutes). See [Getting the report off the device](headless.md#getting-the-report-off-the-device).
+    The link works while the window is open (at most 15 minutes);
+    **Stop sharing** (`Esc`) ends it. If your terminal can't click or select
+    anything inside an app, **Show outside the TUI** prints the same where the
+    terminal's own links and selection work. See
+    [Getting the report off the device](headless.md#getting-the-report-off-the-device).
+
+    ![Sharing the report](images/share.svg)
 
 ![The report window](images/report-view.svg)
 

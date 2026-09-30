@@ -264,3 +264,75 @@ class SubmitUrlScreen(ModalScreen):
 
     def action_skip(self) -> None:
         self.dismiss(None if self._setting else "")
+
+
+class ShareScreen(ModalScreen):
+    """The report on a short link, inside the TUI: the link (open it in your
+    own browser), an scp command for the file, and Stop sharing. The link
+    stays up while this window is open (at most share.SHARE_TTL). Dismisses
+    with "outside" to show the same outside the TUI, for terminals where a
+    link in an app can't be clicked or selected."""
+    __test__ = False
+
+    BINDINGS = [
+        Binding("escape", "stop", "Stop sharing"),
+        Binding("ctrl+c", "copy", "Copy link"),
+    ]
+
+    DEFAULT_CSS = """
+    ShareScreen { align: center middle; }
+    #share-box { width: 90%; max-width: 120; height: auto; border: heavy $accent;
+                 background: $surface; padding: 0 1; }
+    #share-title { text-style: bold; margin-bottom: 1; }
+    .report-help { color: $text-muted; margin-bottom: 1; }
+    .share-label { text-style: bold; }
+    #share-url { text-style: bold; color: $accent; padding: 0 2; margin-bottom: 1; }
+    #share-scp { padding: 0 2; margin-bottom: 1; }
+    #share-buttons { height: auto; margin-top: 1; }
+    #share-buttons Button { margin-right: 2; }
+    """
+
+    def __init__(self, title: str, url: str, scp: str, store: bool, minutes: int):
+        super().__init__()
+        self._title = title
+        self._url = url
+        self._scp = scp
+        self._store = store
+        self._minutes = minutes
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="share-box"):
+            yield Label(f"Share the report: {self._title}", id="share-title")
+            yield Label("Open it in your own browser", classes="share-label")
+            yield Static(self._url, id="share-url", markup=False)
+            yield Static(
+                "Ctrl+click the link (in some terminals Ctrl+Shift+click), or select it with Shift + mouse and "
+                "paste it in your browser. The page has Copy report and Download report.json"
+                + (", and Open in the store with the report filled in." if self._store else
+                   ". Set a store link (Ctrl+P → 'Settings: Skill store report link') to also get Open in the store.")
+                + f" The link works while this window is open (at most {self._minutes} min), on the same network "
+                "as this device.", classes="report-help")
+            yield Label("Or fetch the file", classes="share-label")
+            yield Static(self._scp, id="share-scp", markup=False)
+            with Horizontal(id="share-buttons"):
+                yield Button("Stop sharing (Esc)", id="share-stop", variant="primary")
+                yield Button("Copy link (Ctrl+C)", id="share-copy")
+                yield Button("Show outside the TUI", id="share-outside")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "share-copy":
+            self.action_copy()
+        elif event.button.id == "share-outside":
+            self.dismiss("outside")
+        else:
+            self.action_stop()
+
+    def action_copy(self) -> None:
+        try:
+            self.app.copy_to_clipboard(self._url)
+            self.notify("Link copied, if your terminal allows it. Otherwise: Shift + mouse to select it.")
+        except Exception:  # noqa: BLE001
+            self.notify("This terminal can't copy. Shift + mouse selects the link.", severity="warning")
+
+    def action_stop(self) -> None:
+        self.dismiss(None)
