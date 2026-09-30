@@ -728,3 +728,27 @@ def test_ocp_play_is_credited_to_the_media_skill_that_serves_it():
     assert r.status == PASS and "via OCP" in r.detail
     other = ScriptStep("play white noise", "en-us", "ovos-skill-soundboard.andlo", None)
     assert "played by ovos-skill-white-noise.andlo" in evaluate(other, obs).detail
+
+
+def test_a_skill_asking_a_question_ends_the_step_without_the_busy_wait(monkeypatch):
+    # a quiz: matched, asked, and its handler waits for an answer (no
+    # utterance.handled). Not "core still busy" - no BUSY_WAIT, just cancel.
+    monkeypatch.setattr("ovos_tui_client.scripts.RELEASE_SETTLE", 0)
+    busy, answered = [], []
+    holder = {}
+
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")
+        r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER},
+               {"session": {"session_id": r.session_id, "active_skills": [[WEATHER, 1]]}})
+
+    def answer(session, text, lang):
+        answered.append(text)
+        holder["r"].feed("skill.converse.get_response.disable", {"skill_id": WEATHER})
+
+    runner, done = _runner([_step()], reply, stop_session=lambda s: None, answer=answer,
+                           step_timeout=5, busy_wait=60, on_busy=lambda *a: busy.append(a))
+    holder["r"] = runner
+    summary = runner.run()
+    assert done == [(1, PASS)] and busy == [] and answered == ["cancel"]
+    assert summary.duration < 5

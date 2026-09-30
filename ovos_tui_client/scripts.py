@@ -809,8 +809,11 @@ class ScriptRunner:
                 # replied but TTS hasn't started yet (synthesis can take a
                 # few seconds) - wait longer before calling it done
                 waiting_for_tts = bool(self._obs and self._obs.spoke) and not self._speech_seen
+                # the skill took it and now waits for an answer: its handler
+                # won't finish (no utterance.handled) until it gets one
+                asking = bool(self._pending_response)
             needed = self.quiet_after_match * (3 if waiting_for_tts else 1)
-            if matched and not speaking and not awaiting_provider and quiet >= needed:
+            if matched and not speaking and not awaiting_provider and (quiet >= needed or asking):
                 timed_out = False
                 break
 
@@ -820,7 +823,11 @@ class ScriptRunner:
         if timed_out and not self._cancel.is_set():
             with self._lock:
                 silent = not (self._obs and (self._obs.intents or self._obs.skills or self._obs.failed))
-            late, busy_gave_up = self._wait_until_core_is_done(index, total, step)
+                asking = bool(self._pending_response)
+            # a skill waiting for an answer isn't "core still busy": it
+            # would wait out BUSY_WAIT for nothing - the cancel below ends it
+            if not asking:
+                late, busy_gave_up = self._wait_until_core_is_done(index, total, step)
 
         if not self._cancel.is_set():
             # the reading pipeline fetches from its provider after the
