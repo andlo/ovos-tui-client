@@ -174,6 +174,9 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
             f"[{i}/{n}] {_MARK.get(result.status, '?')} \"{step.utterance}\"  {result.detail}"),
         known_skills=lambda: list(installed),
         stop_session=bus.stop_session,
+        on_busy=lambda i, n, step, wait: log(
+            f"[{i}/{n}] ⏳ no response yet; waiting up to {wait / 60:.0f} min for OVOS to finish it "
+            "before the next step (OVOS handles one sentence at a time)"),
     )
     bus.on_message(runner.feed)
 
@@ -200,7 +203,9 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
             "read. Run on the device itself for a complete report.")
     elif not manifest.get("channel"):
         log(f"Note: the release channel is unknown ({manifest.get('channel_note')}). "
-            "Add --channel testing (or alpha, ...) to record it.")
+            "Add --channel testing (or alpha, stable) to record it.")
+    else:
+        log(f"Channel: {manifest['channel']} ({manifest.get('channel_source')})")
 
     meta = {"OVOS": "local" if manifest["bus"] == "local" else "remote",
             "Channel": manifest.get("channel") or "unknown", "Language": bus.lang,

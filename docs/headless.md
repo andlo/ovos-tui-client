@@ -48,7 +48,7 @@ skill list, or nothing to test.
 | `--output DIR` | Where the `.md`, `.jsonl` and `.manifest.json` go (default `~/.local/share/ovos-tui-client/results`). |
 | `--report FILE` | Also write one shareable report (below). `-` prints it, for copy-paste; progress then goes to stderr. |
 | `--report-replies` | Include what OVOS said in the report. Off by default. |
-| `--channel NAME` | The release channel of this install, if it can't be read automatically (below). |
+| `--channel NAME` | The release channel of this install, if it can't be worked out automatically (below). |
 | `--notes TEXT` | Free text for the report, e.g. what the skill needs: `"OpenWeather API key set"`, `"Mark II"`. |
 | `--submit-url TEMPLATE` | Print a link to submit the report (below). |
 | `--golden-dir DIR` | Local skill checkouts to take golden utterances from, before GitHub. |
@@ -58,9 +58,13 @@ skill list, or nothing to test.
 A result is only useful if it says exactly which install produced it. The
 manifest records:
 
-- **channel:** the OVOS release channel (`testing`, `alpha`, ...). Read from
-  the OVOS installer's own state file (`~/.local/state/ovos/installer.json`);
-  `--channel` overrides it. Unknown otherwise.
+- **channel:** the OVOS release channel (`stable`, `testing`, `alpha`) and
+  how it was found (`channel_source`). What the install declares (the OVOS
+  installer's state file, raspOVOS's `/opt/ovos/tag`) is checked against the
+  installed versions and each channel's constraints file as it is today;
+  with nothing declared, as on Docker, Buildroot or a hand-made venv, the
+  versions alone decide. `--channel` overrides it. See
+  [Release channels](channels.md).
 - **stack:** the versions of the packages that decide how skills load and
   where an utterance goes: ovos-core, ovos-workshop, ovos-bus-client,
   ovos-plugin-manager, the intent engines, the pipeline plugins.
@@ -131,6 +135,9 @@ nothing anywhere by itself. You decide where a report goes:
     tested skill (when there is one), `{channel}`, `{title}`. You open the
     link yourself. If the report is too long for a link (about 8 KB),
     it says so and you paste the report instead.
+
+A report can also be made from the TUI after an ordinary run: `Ctrl+P` →
+`Test: Create shareable report`. See [Testing skills](testing.md#share-the-result-as-a-report).
 
 ## Scheduled runs
 

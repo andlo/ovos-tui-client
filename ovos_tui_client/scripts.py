@@ -88,6 +88,15 @@ PROVIDER_WAIT = 30.0
 # STOP_WAIT to go quiet.
 STORY_START_WAIT = 10.0
 STOP_WAIT = 5.0
+# ovos-core handles one utterance at a time. When a step times out, core
+# is usually still working on it (seen live on testing: a fallback solver
+# waiting minutes for the OVOS translate servers), and every step sent
+# meanwhile just queues behind it and times out too. So after a timeout
+# the runner waits up to BUSY_WAIT for core to finish that utterance
+# before it sends the next one: one slow sentence is one timeout, not a
+# cascade. The step still counts as a timeout; its detail says how long
+# core took and what handled it in the end.
+BUSY_WAIT = 300.0
 
 FALLBACK_PREFIX = "ovos.skills.fallback."
 READING_FETCH_PREFIX = "ovos.common_reading.fetch_content."
@@ -586,6 +595,8 @@ class ScriptRunner:
                  provider_wait: float = None,
                  stop_session: Callable[[str], None] = None,
                  story_start_wait: float = None, stop_wait: float = None,
+                 busy_wait: float = None,
+                 on_busy: Callable[[int, int, ScriptStep, float], None] = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.steps = list(steps)
         self.title = title
@@ -602,6 +613,8 @@ class ScriptRunner:
         self.provider_wait = PROVIDER_WAIT if provider_wait is None else provider_wait
         self.story_start_wait = STORY_START_WAIT if story_start_wait is None else story_start_wait
         self.stop_wait = STOP_WAIT if stop_wait is None else stop_wait
+        self.busy_wait = BUSY_WAIT if busy_wait is None else busy_wait
+        self._on_busy = on_busy or (lambda *a: None)
         self._stop_session = stop_session
         self._last_msg = 0.0
         self._clock = clock
@@ -723,6 +736,14 @@ class ScriptRunner:
                 timed_out = False
                 break
 
+        late = None
+        busy_gave_up = False
+        silent = False  # nothing at all had happened when the step timed out
+        if timed_out and not self._cancel.is_set():
+            with self._lock:
+                silent = not (self._obs and (self._obs.intents or self._obs.skills or self._obs.failed))
+            late, busy_gave_up = self._wait_until_core_is_done(index, total, step)
+
         if not self._cancel.is_set():
             # the reading pipeline fetches from its provider after the
             # handler is done - wait for that before judging the step
@@ -754,7 +775,35 @@ class ScriptRunner:
 
         with self._lock:
             obs, self._obs = self._obs, None
-        return evaluate(step, obs, timed_out=timed_out), obs
+        result = evaluate(step, obs, timed_out=timed_out)
+        if silent and late is not None:
+            later = evaluate(step, obs)
+            result = StepResult(TIMEOUT, f"no response in {self.step_timeout:.0f} s; OVOS finished it after "
+                                         f"{late:.0f} s ({'handled by ' if later.status == PASS else ''}"
+                                         f"{later.detail or later.status})")
+        elif silent and busy_gave_up:
+            result = StepResult(TIMEOUT, f"no response; OVOS was still busy with it after "
+                                         f"{self.step_timeout + self.busy_wait:.0f} s")
+        return result, obs
+
+    def _wait_until_core_is_done(self, index: int, total: int, step: ScriptStep):
+        """After a timeout: (seconds core took in all, or None; gave up?).
+        See BUSY_WAIT."""
+        if self.busy_wait <= 0:
+            return None, False
+        self._on_busy(index, total, step, self.busy_wait)
+        started = self._clock() - self.step_timeout
+        deadline = self._clock() + self.busy_wait
+        while not self._cancel.is_set() and self._clock() < deadline:
+            if self._handled.wait(0.2) or self._soft_done.is_set():
+                return self._clock() - started, False
+            with self._lock:
+                matched = bool(self._obs and (self._obs.intents or self._obs.skills or self._obs.failed))
+                quiet = self._clock() - self._last_msg
+                speaking = self._speaking
+            if matched and not speaking and quiet >= self.quiet_after_match:
+                return self._clock() - started, False
+        return None, not self._cancel.is_set()
 
     def _stop_step_session(self) -> None:
         if self._stop_session and self.session_id and not self._cancel.is_set():
