@@ -24,6 +24,7 @@ home path, and nothing from skill settings (API keys live there). The
 bus address is recorded only as "local" or "remote".
 """
 import importlib.metadata
+import re
 import json
 import platform
 import time
@@ -203,5 +204,7 @@ def pipeline_plugins() -> Dict[str, Optional[str]]:
             continue
         name = getattr(dist, "name", None) or dist.metadata.get("Name")
         if name:
+            # canonical form (PEP 503), as pip and constraints files write it
+            name = re.sub(r"[-_.]+", "-", name).lower()
             out[name] = getattr(dist, "version", None)
     return dict(sorted(out.items()))
