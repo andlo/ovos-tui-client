@@ -619,12 +619,18 @@ class ScriptRunner:
         self.story_start_wait = STORY_START_WAIT if story_start_wait is None else story_start_wait
         self.stop_wait = STOP_WAIT if stop_wait is None else stop_wait
         self._stop_session = stop_session
-        # answer(session_id, text, lang) - sends an utterance into a step's
-        # session; used to cancel a get_response the step left open
+        # answer(session, text, lang) - sends an utterance into a step's
+        # session; used to cancel a get_response the step left open.
+        # `session` is the full serialized session from the skill's
+        # get_response.enable message: a non-default session lives only
+        # in message context, so the "waiting for an answer" state must
+        # travel with the answer or core routes it as a new utterance
+        # (seen live - a bare session_id left all 6 waits hanging).
         self._answer = answer
         self.response_release_wait = (RESPONSE_RELEASE_WAIT if response_release_wait is None
                                       else response_release_wait)
         self._pending_response = set()   # skills waiting in get_response in this step's session
+        self._response_session = None    # that session, as the skill serialized it
         self._response_released = threading.Event()
         self._releasing = False
         self.released_responses = 0      # how many get_response waits the run cancelled
@@ -672,6 +678,8 @@ class ScriptRunner:
             # still used for "is TTS playing" below, whatever session.
             if not other_session and msg_type == "skill.converse.get_response.enable":
                 self._pending_response.add((data or {}).get("skill_id") or "?")
+                if isinstance(context.get("session"), dict):
+                    self._response_session = dict(context["session"])
                 self._response_released.clear()
             elif not other_session and msg_type == "skill.converse.get_response.disable":
                 self._pending_response.discard((data or {}).get("skill_id") or "?")
@@ -722,6 +730,7 @@ class ScriptRunner:
             self._last_msg = self._clock()
             self._speech_seen = False
             self._pending_response = set()
+            self._response_session = None
             self._releasing = False
         self._response_released.set()
         self._handled.clear()
@@ -805,10 +814,11 @@ class ScriptRunner:
             pending = bool(self._pending_response)
             if pending and self._answer and self.session_id and not self._cancel.is_set():
                 self._releasing = True
+                session = self._response_session or {"session_id": self.session_id}
             else:
                 return
         try:
-            self._answer(self.session_id, CANCEL_UTTERANCE, step.lang)
+            self._answer(session, CANCEL_UTTERANCE, step.lang)
         except Exception:
             with self._lock:
                 self._releasing = False

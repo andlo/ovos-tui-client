@@ -180,7 +180,7 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
             f"[{i}/{n}] {_MARK.get(result.status, '?')} \"{step.utterance}\"  {result.detail}"),
         known_skills=lambda: list(installed),
         stop_session=bus.stop_session,
-        answer=lambda session_id, text, lang: bus.send_utterance(text, lang=lang, session_id=session_id),
+        answer=lambda session, text, lang: bus.send_utterance(text, lang=lang, session_id=session),
     )
     bus.on_message(runner.feed)
 
