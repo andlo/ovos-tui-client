@@ -103,6 +103,8 @@ RELEASE_SETTLE = 1.0   # time for a handler to ask its next question after a can
 FALLBACK_PREFIX = "ovos.skills.fallback."
 READING_FETCH_PREFIX = "ovos.common_reading.fetch_content."
 READING_SEARCH = "ovos.common_reading.search"
+OCP_PLAY = "ovos.common_play.play"   # OCP starts playing the best search result
+OCP_ID = "ovos.common_play"
 
 
 # --------------------------------------------------------------------
@@ -377,7 +379,8 @@ class StepObservation:
     # a common-reading search went out and no provider has been fetched
     # from yet - see PROVIDER_WAIT
     awaiting_provider: bool = False
-    provider: str = ""  # the provider skill the reading pipeline fetched from
+    provider: str = ""  # the provider skill the reading pipeline fetched from / OCP played
+    provider_via: str = ""  # "the reading pipeline" or "OCP"
     last_speak_type: str = ""  # see observe(): drops a dual-emitted duplicate
 
     def _add(self, lst, value):
@@ -416,8 +419,11 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
 
     if msg_type.startswith("ocp:"):
         # the OCP media pipeline took it ('start a metronome' -> ocp:play,
-        # seen live) - there's no skill id at this point, only the action
+        # seen live) - there's no skill id at this point, only the action;
+        # which media skill it picks comes with ovos.common_play.play
         obs.add_intent(msg_type)
+        if msg_type == "ocp:play":
+            obs.awaiting_provider = True
         return
 
     if ":" in msg_type:
@@ -443,11 +449,20 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
             obs.add_skill(msg_type[len(FALLBACK_PREFIX):-len(".response")])
     elif msg_type == "question:action":
         obs.add_skill(data.get("skill_id"))
+    elif msg_type == OCP_PLAY:
+        # OCP picked a result - its media carries the skill that serves it
+        media = data.get("media") or {}
+        skill = media.get("skill_id") if isinstance(media, dict) else None
+        if skill and skill != OCP_ID:
+            obs.provider, obs.provider_via = skill, "OCP"
+            obs.add_skill(skill)
+        obs.awaiting_provider = False
     elif msg_type == READING_SEARCH:
         obs.awaiting_provider = True
     elif msg_type.startswith(READING_FETCH_PREFIX) and not msg_type.endswith(".response"):
         # common-reading pipeline picked this provider skill's content
         obs.provider = msg_type[len(READING_FETCH_PREFIX):]
+        obs.provider_via = "the reading pipeline"
         obs.add_skill(obs.provider)
         obs.awaiting_provider = False
     elif msg_type in ("intent_failure", "complete_intent_failure"):
@@ -511,7 +526,10 @@ def describe(obs: StepObservation) -> str:
     if obs.intents:
         text = ", ".join(obs.intents)
         # the reading pipeline matched - say whose story it read
-        return f"{text}, read from {obs.provider}" if obs.provider else text
+        if obs.provider:
+            verb = "played by" if obs.provider_via == "OCP" else "read from"
+            return f"{text}, {verb} {obs.provider}"
+        return text
     if obs.skills:
         return ", ".join(obs.skills)
     if obs.failed:
@@ -541,7 +559,7 @@ def evaluate(step: ScriptStep, obs: StepObservation, timed_out: bool = False) ->
         if expected and own:
             return StepResult(FAIL, f"expected {step.intent_label}, got {', '.join(i.split(':', 1)[1] for i in own)}")
         passed = expected or step.skill_id
-        return StepResult(PASS, f"{passed}, via the reading pipeline" if obs.provider else passed)
+        return StepResult(PASS, f"{passed}, via {obs.provider_via or 'the reading pipeline'}" if obs.provider else passed)
 
     if timed_out and not (obs.intents or obs.skills or obs.failed):
         return StepResult(TIMEOUT, "no response")

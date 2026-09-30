@@ -81,6 +81,7 @@ def _fast(monkeypatch, tmp_path):
     monkeypatch.setattr("ovos_tui_client.scripts.STEP_TIMEOUT", 1)
     monkeypatch.setattr(headless, "load_golden", _golden(STEPS))
     monkeypatch.setattr(headless, "SKILL_LIST_RETRY_DELAYS", (0, 0))
+    monkeypatch.setattr(headless, "SKILL_SETTLE_INTERVAL", 0)
     monkeypatch.setattr(manifest_mod, "INSTALLER_STATE_FILE", tmp_path / "no-installer.json")
 
 
@@ -322,3 +323,19 @@ def test_remote_manifest_lists_installed_ids_without_versions():
 
 def test_pipeline_plugins_reads_real_entry_points():
     assert isinstance(manifest_mod.pipeline_plugins(), dict)
+
+
+
+def test_waits_until_the_skill_count_holds_still(monkeypatch):
+    # a freshly restarted core answers while still loading (seen live: 36 of 60)
+    monkeypatch.setattr(headless, "SKILL_SETTLE_INTERVAL", 0)
+    counts = iter([36, 48, 60, 60, 60, 60])
+
+    class Bus:
+        def list_skills(self, cb):
+            cb({f"s{i}.x": True for i in range(next(counts))})
+
+    lines = []
+    skills = headless.wait_for_skills(Bus(), delays=(), sleep=lambda s: None, log=lines.append)
+    assert len(skills) == 60
+    assert any("36 -> 48" in l for l in lines)
