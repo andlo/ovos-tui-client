@@ -65,6 +65,13 @@ manifest records:
   where an utterance goes: ovos-core, ovos-workshop, ovos-bus-client,
   ovos-plugin-manager, the intent engines, the pipeline plugins.
 - **skills:** each tested skill's package and version.
+- **installed:** every skill on the device (id, package, version, active),
+  not only the tested ones, so a reader can see what the test ran alongside.
+  **pipeline_plugins:** the installed pipeline plugins and their versions
+  (which stages *could* run; the order that does run is `config.pipeline`).
+- **steps_from / steps_note:** where each skill's steps came from, and a
+  note when golden files came from a repo's default branch (possibly newer
+  than the installed release).
 - **config:** `lang`, `secondary_langs`, the intent pipeline order, and the STT and TTS plugin names (only the names: a plugin's own settings can hold keys or server addresses, so they are never read into the report).
 - **machine:** architecture, and the board model when there is one
   (`Raspberry Pi 5`, a Mark II ...).
@@ -89,7 +96,11 @@ a summary and one row per step:
   "manifest": {
     "channel": "testing", "channel_source": "ovos-installer", "bus": "local",
     "stack": { "ovos-core": "2.1.0", "ovos-workshop": "7.0.6", "...": "..." },
-    "skills": { "ovos-skill-weather.openvoiceos": { "package": "ovos-skill-weather", "version": "1.2.0" } },
+    "skills": { "ovos-skill-weather.openvoiceos": { "package": "ovos-skill-weather", "version": "1.2.0",
+                                                    "steps_from": "https://raw.githubusercontent.com/..." } },
+    "installed": [ { "id": "ovos-skill-alerts.openvoiceos", "package": "ovos-skill-alerts", "version": "0.1.28", "active": true },
+                   "..." ],
+    "pipeline_plugins": { "ovos-common-query-pipeline-plugin": "1.1.9", "...": "..." },
     "config": { "lang": "en-us", "secondary_langs": ["da-dk"], "pipeline": ["..."],
                 "stt": "ovos-stt-plugin-server", "tts": "ovos-tts-plugin-piper" },
     "machine": { "arch": "aarch64", "model": "Raspberry Pi 5 Model B Rev 1.0" },
