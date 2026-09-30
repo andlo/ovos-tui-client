@@ -180,6 +180,7 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
             f"[{i}/{n}] {_MARK.get(result.status, '?')} \"{step.utterance}\"  {result.detail}"),
         known_skills=lambda: list(installed),
         stop_session=bus.stop_session,
+        answer=lambda session_id, text, lang: bus.send_utterance(text, lang=lang, session_id=session_id),
     )
     bus.on_message(runner.feed)
 
@@ -197,6 +198,9 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
     finally:
         signal.signal(signal.SIGINT, previous)
     log(f"{title}: {' · '.join(summary_parts(summary))}")
+    if runner.released_responses:
+        log(f"Answered \"cancel\" to {runner.released_responses} question(s) a skill was left waiting on "
+            "(get_response), so its handler thread was freed.")
 
     manifest = build_manifest(args.host, bus.lang, tested, installed_skills=installed,
                               channel=args.channel, mycroft_conf_override=args.mycroft_conf,

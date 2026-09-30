@@ -604,3 +604,45 @@ def test_norm_intent_treats_camelcase_like_snake_case():
         _norm_intent("ovos-skill-alerts.openvoiceos:cancel_alert")
     assert _norm_intent("x.y:what.time.is.it.intent") == _norm_intent("x.y:what_time_is_it")
     assert _norm_intent("x.y:CancelAlert") != _norm_intent("x.y:ListAlerts")
+
+
+def test_step_left_in_get_response_is_answered_cancel_in_its_own_session():
+    # py-spy on a hung ovos-core: 8/8 handler threads waiting forever in
+    # ask_yesno for sessions no one would ever answer
+    answered, stopped = [], []
+    holder = {}
+
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")
+        r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER})
+        r.feed("ovos.utterance.handled")
+
+    def answer(session_id, text, lang):
+        answered.append((session_id, text, lang))
+        # the skill gets its answer: cancel -> get_response returns
+        holder["r"].feed(f"{WEATHER}.converse.get_response", {})
+        holder["r"].feed("skill.converse.get_response.disable", {"skill_id": WEATHER})
+
+    runner, done = _runner([_step(), _step()], reply, stop_session=stopped.append, answer=answer)
+    holder["r"] = runner
+    runner.run()
+    assert done == [(1, PASS), (2, PASS)]    # the cancel traffic doesn't change the verdict
+    assert [a[0] for a in answered] == runner.session_ids
+    assert all(a[1] == "cancel" and a[2] == "en-us" for a in answered)
+    assert runner.released_responses == 2
+    assert stopped == runner.session_ids
+
+
+def test_no_cancel_sent_when_nothing_waits_for_an_answer():
+    answered = []
+
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")
+        r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER})
+        r.feed("skill.converse.get_response.disable", {"skill_id": WEATHER})
+        r.feed("ovos.utterance.handled")
+
+    runner, done = _runner([_step()], reply, stop_session=lambda s: None,
+                           answer=lambda *a: answered.append(a))
+    runner.run()
+    assert done == [(1, PASS)] and answered == [] and runner.released_responses == 0
