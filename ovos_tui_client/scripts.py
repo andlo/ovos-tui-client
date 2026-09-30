@@ -107,6 +107,8 @@ BUSY_WAIT = 300.0
 # 6x date-time ask_yesno, alerts _ocp_query, reading-pipeline ask_yesno).
 RESPONSE_RELEASE_WAIT = 5.0
 CANCEL_UTTERANCE = "cancel"
+RELEASE_ROUNDS = 5
+RELEASE_SETTLE = 1.0   # time for a handler to ask its next question after a cancel
 
 FALLBACK_PREFIX = "ovos.skills.fallback."
 READING_FETCH_PREFIX = "ovos.common_reading.fetch_content."
@@ -645,7 +647,9 @@ class ScriptRunner:
                                       else response_release_wait)
         self._pending_response = set()   # skills waiting in get_response in this step's session
         self._response_session = None    # that session, as the skill serialized it
+        self._step_session = None        # latest full serialization of the step's session seen on the bus
         self._response_released = threading.Event()
+        self._disable_seen = threading.Event()   # any get_response.disable since the last cancel
         self._releasing = False
         self.released_responses = 0      # how many get_response waits the run cancelled
         self._last_msg = 0.0
@@ -690,6 +694,12 @@ class ScriptRunner:
             # the default session, e.g. a story being read) don't count
             # toward this step's result - seen live. Audio events are
             # still used for "is TTS playing" below, whatever session.
+            if (not other_session and msg_session and isinstance(context.get("session"), dict)
+                    and len(context["session"]) > 1):
+                # the session as core/skills last serialized it (active
+                # skills, response mode...) - a stop or answer sent with
+                # just the id reaches nobody (seen live)
+                self._step_session = dict(context["session"])
             if not other_session and msg_type == "skill.converse.get_response.enable":
                 self._pending_response.add((data or {}).get("skill_id") or "?")
                 if isinstance(context.get("session"), dict):
@@ -697,6 +707,7 @@ class ScriptRunner:
                 self._response_released.clear()
             elif not other_session and msg_type == "skill.converse.get_response.disable":
                 self._pending_response.discard((data or {}).get("skill_id") or "?")
+                self._disable_seen.set()
                 if not self._pending_response:
                     self._response_released.set()
             if self._releasing:
@@ -745,6 +756,7 @@ class ScriptRunner:
             self._speech_seen = False
             self._pending_response = set()
             self._response_session = None
+            self._step_session = None
             self._releasing = False
         self._response_released.set()
         self._handled.clear()
@@ -867,21 +879,31 @@ class ScriptRunner:
                 session = self._response_session or {"session_id": self.session_id}
             else:
                 return
-        try:
-            self._answer(session, CANCEL_UTTERANCE, step.lang)
-        except Exception:
-            with self._lock:
-                self._releasing = False
-            return
-        if self._response_released.wait(self.response_release_wait):
+        # A quiz answers a cancel by asking its next question - answer
+        # those too, a few rounds at most (seen live: geometry-practice).
+        for _ in range(RELEASE_ROUNDS):
+            self._disable_seen.clear()
+            try:
+                self._answer(session, CANCEL_UTTERANCE, step.lang)
+            except Exception:
+                break
+            if not self._disable_seen.wait(self.response_release_wait):
+                break
             self.released_responses += 1
+            self._sleep(RELEASE_SETTLE)
+            with self._lock:
+                if not self._pending_response:
+                    break
+                session = self._response_session or session
         with self._lock:
             self._releasing = False
 
     def _stop_step_session(self) -> None:
         if self._stop_session and self.session_id and not self._cancel.is_set():
+            with self._lock:
+                session = self._step_session
             try:
-                self._stop_session(self.session_id)
+                self._stop_session(session or self.session_id)
             except Exception:
                 pass
 
