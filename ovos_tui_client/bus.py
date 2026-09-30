@@ -167,7 +167,9 @@ class OVOSBusConnection:
         """mycroft.stop scoped to one session - stops whatever a test step
         started there. A stop in the default session doesn't reach it."""
         context = self._tui_context()
-        context["session"] = {"session_id": session_id}
+        # a full serialized session carries the active skills the stop
+        # service asks - with just the id nobody in it is stopped
+        context["session"] = dict(session_id) if isinstance(session_id, dict) else {"session_id": session_id}
         self._client.emit(Message("mycroft.stop", {}, context))
 
     def on_speak(self, handler):

@@ -633,7 +633,8 @@ def test_step_left_in_get_response_is_answered_cancel_in_its_own_session():
     assert [a[0] for a in answered] == runner.session_ids
     assert all(a[1] == "cancel" and a[2] == "en-us" for a in answered)
     assert runner.released_responses == 2
-    assert stopped == runner.session_ids
+    # the stop carries the session as the skill serialized it
+    assert [x["session_id"] for x in stopped] == runner.session_ids
 
 
 def test_no_cancel_sent_when_nothing_waits_for_an_answer():
@@ -649,3 +650,31 @@ def test_no_cancel_sent_when_nothing_waits_for_an_answer():
                            answer=lambda *a: answered.append(a))
     runner.run()
     assert done == [(1, PASS)] and answered == [] and runner.released_responses == 0
+
+
+def test_quiz_asking_again_after_cancel_is_cancelled_again_and_stop_carries_the_session(monkeypatch):
+    # geometry-practice (live): a cancel ends one question, the quiz asks
+    # the next; and a mycroft.stop with only the session id stops nobody
+    monkeypatch.setattr("ovos_tui_client.scripts.RELEASE_SETTLE", 0)
+    answered, stopped = [], []
+    holder = {}
+    full = lambda r: {"session_id": r.session_id, "active_skills": [[WEATHER, 1]]}
+
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent", {}, {"session": full(r)})
+        r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER}, {"session": full(r)})
+        r.feed("ovos.utterance.handled")
+
+    def answer(session, text, lang):
+        r = holder["r"]
+        answered.append(text)
+        r.feed("skill.converse.get_response.disable", {"skill_id": WEATHER})
+        if len(answered) < 3:   # the quiz asks two more questions
+            r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER}, {"session": full(r)})
+
+    runner, done = _runner([_step()], reply, stop_session=stopped.append, answer=answer)
+    holder["r"] = runner
+    runner.run()
+    assert done == [(1, PASS)]
+    assert answered == ["cancel"] * 3 and runner.released_responses == 3
+    assert stopped == [full(runner)]
