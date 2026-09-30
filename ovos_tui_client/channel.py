@@ -230,6 +230,44 @@ channel's constraints file (add `--pre` for alpha):
 """
 
 
+def summary(result: Optional[Dict], stack: Dict[str, str], remote: bool = False) -> Tuple[str, str]:
+    """(short, line): 'OVOS testing' for the header, and the startup line.
+
+    Says plainly when the installed versions are not what any channel
+    installs today (a hand-made mix, or an old install), rather than
+    guessing a channel."""
+    core = (stack or {}).get("ovos-core")
+    core_txt = f" · ovos-core {core}" if core else ""
+    if remote:
+        return "OVOS: channel unknown", "OVOS: on another machine, so its channel can't be seen from here."
+    result = result or {}
+    ch = result.get("channel")
+    if ch:
+        how = {"ovos-installer": "the OVOS installer says so", "raspOVOS": "raspOVOS says so",
+               "installed versions": "from the installed versions"}.get(result.get("source"), "")
+        if result.get("declared") and ch in result.get("matches", []):
+            how += ", and the versions agree"
+        return f"OVOS {ch}", f"OVOS: {ch}{core_txt} ({how})."
+    matches = result.get("matches") or []
+    if result.get("declared"):
+        return ("OVOS: not an official mix",
+                f"OVOS: not an official {result['declared']} install{core_txt}: {result.get('declared_source')} "
+                f"says {result['declared']}, but the versions are not what it installs today. "
+                "Ctrl+P → 'OVOS: Release channel' shows why.")
+    if len(matches) > 1:
+        return (f"OVOS {' or '.join(matches)}",
+                f"OVOS: {' or '.join(matches)}{core_txt} (the versions fit both).")
+    if result.get("checked"):
+        return ("OVOS: not an official mix",
+                f"OVOS: not an official channel{core_txt}: these versions are not what stable, testing or "
+                "alpha installs today (a hand-made mix, or an older install). "
+                "Ctrl+P → 'OVOS: Release channel' shows why.")
+    if not core:
+        return "OVOS: channel unknown", "OVOS: channel unknown (ovos-core is not in this Python environment)."
+    return ("OVOS: channel unknown",
+            f"OVOS: channel unknown{core_txt} (the channels' constraints could not be fetched - no network?).")
+
+
 def channel_markdown(result: Dict, stack: Dict[str, str], remote: bool = False) -> str:
     lines = ["# OVOS release channel", ""]
     if remote:

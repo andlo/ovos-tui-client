@@ -12,8 +12,11 @@ used by the OVOS installer, raspOVOS and ovos-docker alike:
 
 ## Which one am I running?
 
-`Ctrl+P` → **`OVOS: Release channel`**. The header shows it too
-(`OVOS testing`).
+The startup lines say it, e.g. `OVOS: testing · ovos-core 2.1.1 (from the
+installed versions)`, and so does the header (`OVOS testing`). When the
+installed versions are not what any channel installs today, a hand-made
+mix or an older install, it says `not an official channel` instead of
+guessing. `Ctrl+P` → **`OVOS: Release channel`** shows the details.
 
 Not every install is made by the OVOS installer, and the installer's own
 state file is often not readable by the user OVOS runs as, so

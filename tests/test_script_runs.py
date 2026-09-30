@@ -76,7 +76,7 @@ async def test_user_script_runs_shows_steps_results_and_summary(tmp_path):
             assert app.script_runner is None
             assert not app.query_one("#utterance-input", Input).disabled
             assert not app.query_one("#conversation", RichLog).has_class("script-running")
-            assert app.sub_title == ""
+            assert app.sub_title.split("   ")[0].startswith("OVOS")  # only the channel is left
 
 
 @pytest.mark.asyncio
@@ -90,7 +90,7 @@ async def test_running_state_is_visible_while_a_step_is_in_flight(tmp_path):
         seen["class"] = conv.has_class("script-running")
         seen["title"] = str(conv.border_title)
         seen["disabled"] = app.query_one("#utterance-input", Input).disabled
-        seen["sub_title"] = app.sub_title
+        seen["sub_title"] = app.sub_title.split("   OVOS")[0]  # the channel may be shown after it
         seen["own_session"] = bool(session_id and session_id == app.script_runner.session_id)
         app.script_runner.feed(f"{WEATHER}:weather.intent")
         app.script_runner.feed("ovos.utterance.handled")
@@ -169,7 +169,7 @@ async def test_another_tuis_script_run_is_visible_in_conversation_and_header(tmp
         app._show_remote_script_event("ovos.tui.script.step", {"title": "Test: weather", "i": 1, "n": 3,
                                                               "status": "pass", "detail": "weather.intent"}, ctx)
         await pilot.pause()
-        assert app.sub_title == "⚠ laptop: Test: weather 1/3"
+        assert app.sub_title.startswith("⚠ laptop: Test: weather 1/3")
         app._show_remote_script_event("ovos.tui.script.finished", {
             "title": "Test: weather", "state": "finished", "summary": "2/3 passed · 1 failed · 9s", "colour": "red",
             "failures": [[3, "er det godt udenfor", "fail", "expected x, got y"]]}, ctx)
@@ -179,7 +179,7 @@ async def test_another_tuis_script_run_is_visible_in_conversation_and_header(tmp
         assert "💻 laptop [1/3] ✓ weather.intent" in text
         assert "💻 laptop ■ Test: weather finished: 2/3 passed · 1 failed · 9s" in text
         assert '[3] "er det godt udenfor" → expected x, got y' in text
-        assert app.sub_title == ""
+        assert "⚠" not in app.sub_title
 
 
 @pytest.mark.asyncio

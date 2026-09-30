@@ -86,3 +86,17 @@ def test_markdown_explains_switching():
     md = ch.channel_markdown(detect({"ovos-core": "2.1.0"}), {"ovos-core": "2.1.0"})
     assert "runs **testing**" in md and "Changing channel" in md and "/opt/ovos/tag" in md
     assert "Not **alpha**" in md
+
+
+def test_summary_lines():
+    stack = {"ovos-core": "2.3.0"}
+    short, line = ch.summary(detect({"ovos-core": "2.3.0"}), stack)
+    assert short == "OVOS testing" and line.startswith("OVOS: testing · ovos-core 2.3.0 (from the installed versions")
+    short, line = ch.summary(detect({"ovos-core": "0.9.0"}), {"ovos-core": "0.9.0"})
+    assert short == "OVOS: not an official mix" and "not an official channel" in line
+    short, line = ch.summary(detect({"ovos-core": "3.7.1"}, declared=("testing", "ovos-installer", None)),
+                             {"ovos-core": "3.7.1"})
+    assert short == "OVOS: not an official mix" and "ovos-installer says testing" in line
+    short, line = ch.summary(detect({"ovos-core": "3.7.1"}, constraints={}), {"ovos-core": "3.7.1"})
+    assert short == "OVOS: channel unknown" and "no network" in line
+    assert ch.summary(None, {}, remote=True)[0] == "OVOS: channel unknown"
