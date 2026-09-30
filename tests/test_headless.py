@@ -82,6 +82,9 @@ def _fast(monkeypatch, tmp_path):
     monkeypatch.setattr(headless, "load_golden", _golden(STEPS))
     monkeypatch.setattr(headless, "SKILL_LIST_RETRY_DELAYS", (0, 0))
     monkeypatch.setattr(manifest_mod, "INSTALLER_STATE_FILE", tmp_path / "no-installer.json")
+    # no network in tests: the live constraints check sees nothing
+    monkeypatch.setattr("ovos_tui_client.channel.fetch_text", lambda *a, **k: None)
+    monkeypatch.setattr("ovos_tui_client.channel.RASPOVOS_TAG_FILE", tmp_path / "no-tag")
 
 
 def _run(bus, tmp_path, **kw):

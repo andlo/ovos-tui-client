@@ -594,3 +594,38 @@ def test_observe_counts_the_spec_speak_message_and_one_dual_emit():
     assert obs.spoke == ["It is nine"]
     observe(obs, "ovos.utterance.speak", {"utterance": "Anything else?"}, {})
     assert obs.spoke == ["It is nine", "Anything else?"]
+
+
+# --- a timed-out step: wait for OVOS to finish it before the next one ---
+
+def test_timeout_waits_for_core_and_says_how_long_it_took():
+    import threading
+    busy = []
+
+    def reply(r, step):
+        if len(r.session_ids) == 1:
+            # core answers long after the step timeout (queued behind a slow fallback)
+            def late():
+                r.feed(f"{WEATHER}:weather.intent")
+                r.feed("ovos.utterance.handled")
+            threading.Timer(0.5, late).start()
+        else:
+            r.feed(f"{WEATHER}:weather.intent")
+            r.feed("ovos.utterance.handled")
+
+    runner, done = _runner([_step(), _step()], reply, step_timeout=0.2, busy_wait=5,
+                           on_busy=lambda i, n, s, w: busy.append(i))
+    summary = runner.run()
+    assert busy == [1]
+    first = summary.results[0][2]
+    assert first.status == TIMEOUT and "OVOS finished it after" in first.detail
+    assert "handled by" in first.detail
+    # the next step was sent only after core was done, so it passes
+    assert summary.results[1][2].status == PASS
+
+
+def test_timeout_gives_up_waiting_after_busy_wait():
+    runner, done = _runner([_step()], lambda r, s: None, step_timeout=0.1, busy_wait=0.3)
+    summary = runner.run()
+    result = summary.results[0][2]
+    assert result.status == TIMEOUT and "still busy" in result.detail

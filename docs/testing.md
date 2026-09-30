@@ -95,6 +95,41 @@ title:
 
 Only the last run can be saved, and only until the TUI is closed.
 
+## Share the result as a report
+
+To give a result to a skill's maintainer, put it in an issue or send it to
+a skill store, `Ctrl+P` → **`Test: Create shareable report (<title>)`**
+after a run. A small window asks for the three things ovos-tui-client
+can't know by itself:
+
+- **Release channel:** pre-set to the channel this install runs, and the
+  window says how it was found. Change it only if you know better, or
+  leave it `unknown`. See [Release channels](channels.md).
+- **Notes (optional):** what the skill needed or what is special about the
+  setup: `API key set`, `Mark II`, `Raspberry Pi 5 with ReSpeaker`. No names,
+  addresses or keys: the report is meant to be shared.
+- **Include OVOS's replies:** off. Replies can hold personal data ("14
+  degrees in *your town*"), and a store will refuse a report with them.
+  Tick it only for a report you keep yourself.
+
+`Ctrl+S` saves `….report.json` next to the other results and copies it to
+the clipboard (when the terminal allows it). It is the same
+`ovos-test-report/1` file a [headless run](headless.md#the-shareable-report)
+writes: the installed versions, the channel, machine type, language, STT and
+TTS plugin names, and each sentence with what handled it; no hostname, IP
+address, user name or settings. If a `submit_url` is set in
+`~/.config/ovos-tui-client/config.json`, the link to submit it is shown too.
+
+## When OVOS is slow
+
+OVOS handles one sentence at a time. When a step gets no answer in 30
+seconds, OVOS is usually still busy with it, e.g. a fallback skill waiting
+for an online service, and every sentence sent meanwhile would only queue
+up behind it and time out too. So after a timeout the run waits, up to 5
+minutes, for OVOS to finish that sentence before it sends the next one, and
+says so in the conversation pane. The step still counts as a timeout; its
+line says how long OVOS took and what handled it in the end.
+
 ## Stop a run
 
 `Ctrl+P` → **`Script: Stop running script`**. The steps that already

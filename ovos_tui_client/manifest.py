@@ -3,8 +3,11 @@
 A result is only useful if it says exactly which install produced it, so
 every headless run records:
 
-* the installer channel (testing / alpha / ...), from the OVOS installer's
-  own state file, unless given with --channel;
+* the release channel (stable / testing / alpha), unless given with
+  --channel: what the install declares (the OVOS installer's state file,
+  raspOVOS's /opt/ovos/tag), checked against the installed versions and
+  the channels' live constraints files, or found from the versions alone
+  when nothing is declared (see channel.py);
 * the versions of the packages that decide how skills load and route
   (ovos-core, ovos-workshop, the intent engines, the bus client, ...) and
   of every skill that was tested;
@@ -30,6 +33,7 @@ import time
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
+from ovos_tui_client import channel as channel_mod
 from ovos_tui_client.skill_examples import find_skill_distribution
 
 # Written by ovos-installer (tui/channels.sh): {"channel": "testing"|"alpha", ...}
@@ -122,17 +126,51 @@ def routing_config(mycroft_conf_override: Optional[str] = None) -> Dict:
     }
 
 
+def local_stack() -> Dict[str, str]:
+    return {name: v for name in KEY_PACKAGES if (v := package_version(name))}
+
+
+def channel_check(stack: Dict[str, str], fetch=None) -> Dict:
+    """channel.detect() for this device: declared channel + live check."""
+    declared = channel_mod.declared_channel(lambda: read_installer_channel(INSTALLER_STATE_FILE))
+    return channel_mod.detect(stack, declared, fetch=fetch or channel_mod.fetch_text)
+
+
+def detect_channel(stack: Dict[str, str], fetch=None):
+    """(channel, source, note) for a manifest. Never raises."""
+    try:
+        res = channel_check(stack, fetch)
+    except Exception as e:  # noqa: BLE001 - a manifest must never break a run
+        return None, None, f"the channel check failed ({e.__class__.__name__})"
+    if res["channel"]:
+        return res["channel"], res["source"], None
+    if res["declared"]:
+        note = f"{res['declared_source']} says {res['declared']}, but the installed versions don't match it"
+    elif len(res["matches"]) > 1:
+        note = "the installed versions fit " + " and ".join(res["matches"])
+    elif res["checked"]:
+        note = "the installed versions match no channel as it is today"
+    else:
+        note = res.get("declared_note") or "the channels' constraints could not be fetched"
+    return None, None, note
+
+
 def build_manifest(host: str, lang: str, tested_skill_ids: Iterable[str],
                    installed_skills: Optional[Dict[str, Optional[bool]]] = None,
                    channel: Optional[str] = None, mycroft_conf_override: Optional[str] = None,
-                   tool_version: str = "unknown", now: Optional[float] = None) -> Dict:
+                   tool_version: str = "unknown", now: Optional[float] = None,
+                   fetch=None, channel_result: Optional[tuple] = None) -> Dict:
+    """channel_result: (channel, source, note) already settled by the
+    caller (the TUI's report window), so nothing is checked again."""
     local = (host or "").strip().lower() in LOCAL_HOSTS
     tested = sorted(set(tested_skill_ids))
+    stack = local_stack() if local else {}
     if channel:
         detected, channel_source, channel_note = channel, "argument", None
+    elif channel_result is not None:
+        detected, channel_source, channel_note = channel_result
     elif local:
-        detected, channel_note = read_installer_channel(INSTALLER_STATE_FILE)
-        channel_source = "ovos-installer" if detected else None
+        detected, channel_source, channel_note = detect_channel(stack, fetch)
     else:
         detected, channel_source, channel_note = None, None, "OVOS is on another machine"
     manifest = {
@@ -152,7 +190,7 @@ def build_manifest(host: str, lang: str, tested_skill_ids: Iterable[str],
     if channel_note:
         manifest["channel_note"] = channel_note
     if local:
-        manifest["stack"] = {name: v for name in KEY_PACKAGES if (v := package_version(name))}
+        manifest["stack"] = stack
         for skill_id in tested:
             dist = find_skill_distribution(skill_id)
             manifest["skills"][skill_id] = {

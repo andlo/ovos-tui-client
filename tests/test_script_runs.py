@@ -244,3 +244,49 @@ async def test_last_result_can_be_saved_as_report(tmp_path):
             assert [d["status"] for d in data] == ["pass", "fail"]
             assert data[1]["handled_by"] == "ovos-skill-wikipedia.openvoiceos:wiki"
             assert "Saved 'Script: smoke' to" in _conversation(app)
+
+
+@pytest.mark.asyncio
+async def test_shareable_report_asks_channel_notes_and_replies(tmp_path, monkeypatch):
+    from textual.widgets import Checkbox, Select
+    from ovos_tui_client.report_screen import ReportScreen
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "smoke.jsonl").write_text(json.dumps(
+        {"utterance": "what's the weather", "skill_id": WEATHER, "intent_label": "weather.intent"}))
+    app = _app(tmp_path, scripts)
+    app.results_dir = tmp_path / "results"
+    app.installed_skills = {WEATHER: True}
+    # the channel check (network) is replaced by a settled result
+    monkeypatch.setattr("ovos_tui_client.app.channel_check", lambda stack: {
+        "channel": "testing", "source": "installed versions", "declared": None, "declared_source": None,
+        "declared_note": None, "checked": ["stable", "testing", "alpha"], "unreachable": [],
+        "problems": {}, "matches": ["testing"]})
+    _fake_ovos(app, {"what's the weather": f"{WEATHER}:weather.intent"})
+    with patch("ovos_tui_client.scripts.SETTLE", 0):
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            titles = [c.title for c in app.get_system_commands(app.screen)]
+            assert "OVOS: Release channel (testing)" in titles
+            app.start_user_script(scripts / "smoke.jsonl")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            cmd = [c for c in app.get_system_commands(app.screen)
+                   if c.title == "Test: Create shareable report (Script: smoke)"]
+            assert cmd
+            cmd[0].callback()
+            await pilot.pause()
+            assert isinstance(app.screen, ReportScreen)
+            assert app.screen.query_one("#report-channel", Select).value == "testing"
+            assert app.screen.query_one("#report-replies", Checkbox).value is False
+            app.screen.query_one("#report-notes", Input).value = "Mark II"
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            files = list((tmp_path / "results").glob("*.report.json"))
+            assert len(files) == 1
+            report = json.loads(files[0].read_text())
+            assert report["schema"] == "ovos-test-report/1" and report["notes"] == "Mark II"
+            assert report["manifest"]["channel"] == "testing"
+            assert report["manifest"]["channel_source"] == "installed versions"
+            assert "replies" not in report["steps"][0]
+            assert "Report saved:" in _conversation(app)
