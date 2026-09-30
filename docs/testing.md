@@ -110,20 +110,49 @@ date, time and title:
   or settings. Also what to compare two runs with, e.g. testing against
   alpha, or before and after a fix.
 
+![Save the result](images/report-save.svg)
+
 The buttons:
 
 - **Save and copy** (`Ctrl+S`): also copies the report to the clipboard.
-  Not every terminal passes that on (it uses the OSC 52 escape code); if
-  nothing arrives, use Show.
+  Not every terminal passes that on: it uses the OSC 52 escape code, which
+  GNOME Terminal / Ptyxis (Fedora's and Ubuntu's default) ignore, over ssh
+  or not. If nothing arrives, use Share.
 - **Save and show** (`Ctrl+O`): shows the report as text, to read before you
-  share it. **Copy** (`Ctrl+C`) there tries the clipboard again; otherwise
-  select the text with the mouse while holding Shift (Option on macOS), or
-  attach the file.
+  share it. **Copy** (`Ctrl+C`) there tries the clipboard again, and
+  **Share** (`Ctrl+L`) gets it out another way.
+- **Save and share** (`Ctrl+L`): gets the report to your own computer, from
+  any terminal and over ssh. The TUI steps aside and prints two things,
+  where your terminal's own links and selection work:
+    - a **short link** (Ctrl+click it) to a page with the report, **Copy
+      report**, **Download report.json** and, when a store link is set,
+      **Open in &lt;store&gt;** with the report filled in;
+    - an **`scp` command** to fetch the file.
 
-`Ctrl+P` → **`Test: Show last result (<title>)`** shows the report again.
-Only the last run can be saved, and only until the TUI is closed. If a
-`submit_url` is set in `~/.config/ovos-tui-client/config.json`, the link to
-submit the report is shown too.
+    Press Enter to come back to the TUI. The link stops then (or after 15
+    minutes). See [Getting the report off the device](headless.md#getting-the-report-off-the-device).
+
+![The report window](images/report-view.svg)
+
+`Ctrl+P` → **`Test: Show last result (<title>)`** shows the report again,
+and **`Test: Share last result`** shares it. Only the last run can be saved,
+and only until the TUI is closed.
+
+### A skill store's report link
+
+The first time you share while no store link is set, the TUI asks for one.
+It's the link a skill store gives in its instructions; with it, the share
+page gets an **Open in &lt;store&gt;** button that opens the store's page
+with your report filled in. ovos-tui-client never submits anything: you
+check the report on the store's page and submit it there yourself.
+
+![Asked for the store link](images/store-link.svg)
+
+**Skip** if you don't use a store: you still get the link to the report
+itself, and it's asked again next time. Set or change it any time with
+`Ctrl+P` → **`Settings: Skill store report link`**. It's kept as `submit_url`
+in `~/.config/ovos-tui-client/config.json`, shared with
+[headless runs](headless.md#a-skill-stores-report-link).
 
 ## When OVOS is slow
 

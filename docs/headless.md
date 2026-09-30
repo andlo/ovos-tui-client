@@ -51,7 +51,8 @@ skill list, or nothing to test.
 | `--report-replies` | Include what OVOS said in the report. Off by default. |
 | `--channel NAME` | The release channel of this install, if it can't be worked out automatically (below). |
 | `--notes TEXT` | Free text for the report, e.g. what the skill needs: `"OpenWeather API key set"`, `"Mark II"`. |
-| `--submit-url TEMPLATE` | Print a link to submit the report (below). |
+| `--submit-url TEMPLATE` | A skill store's report link, so the share page can open the store with the report filled in (below). Asked for when not set. |
+| `--share` / `--no-share` | Serve the report on a short link even when not run from a terminal / never. From a terminal it's shared by itself. |
 | `--golden-dir DIR` | Local skill checkouts to take golden utterances from, before GitHub. |
 
 ## What was tested against: the manifest
@@ -129,25 +130,70 @@ OVOS's replies are left out too, because they can contain personal data
 answered. Add them with `--report-replies` for a report you keep yourself.
 Read the report before you share it; it is plain JSON.
 
-## Sending a report somewhere
+## Getting the report off the device
 
 ovos-tui-client does not know about any skill store or service, and sends
-nothing anywhere by itself. You decide where a report goes:
+nothing anywhere by itself. You decide where a report goes. Most people
+test on the OVOS device over ssh, where the clipboard is the hard part, so
+there are several ways:
 
-- **Copy-paste:** `--report -` prints it; paste it where you want it.
-- **A file:** the `….report.json` in the results folder, or a copy where you want it with `--report report.json`; attach or upload it.
-- **A link:** if a store or project tells you to, give its link template
-  with `--submit-url`, or set it once in `~/.config/ovos-tui-client/config.json`:
+- **A short link (from a terminal, by itself).** When you run it from a
+  terminal, the report is served on a short, temporary link from the
+  device, and the command it needs to fetch the file is printed:
 
-    ```json
-    { "submit_url": "https://example.org/submit?skill={skill_id}&report={report}" }
+    ```text
+    Open the report in your browser (Ctrl+click): http://192.168.1.50:41733/q3v9XcA2Lk0e/
+      Copy, Download, and 'Open in' the store with the report filled in. The link works for 15 min.
+    Or fetch the file: scp ovos@192.168.1.50:/home/ovos/.local/share/ovos-tui-client/results/2026-10-01_101500_test-ovos-skill-weather-openvoiceos.report.json .
+    Press Enter when you're done with the link...
     ```
 
-    After the run, ovos-tui-client prints the link with the placeholders
-    filled in (each URL-encoded): `{report}` the report, `{skill_id}` the
-    tested skill (when there is one), `{channel}`, `{title}`. You open the
-    link yourself. If the report is too long for a link (about 8 KB),
-    it says so and you paste the report instead.
+    Ctrl+click (or copy) the link on your own computer. The page shows the
+    report with **Copy report** and **Download report.json**, and, when a
+    store link is set (below), **Open in &lt;store&gt;**:
+
+    ![The page a report link opens](images/share-page.png)
+
+    The link is read-only, carries a random token, serves this one report
+    and stops when you press Enter or after 15 minutes. It works on the
+    same network as the device. `--no-share` turns it off; `--share` also
+    serves it from a script (it then stays up the 15 minutes).
+- **The file:** the `….report.json` in the results folder (or a copy where
+  you want it with `--report report.json`). Fetch it with the printed `scp`
+  command and attach or upload it.
+- **Copy-paste:** `--report -` prints it; paste it where you want it.
+
+### A skill store's report link
+
+A store can give a link template that opens its own page with the report
+filled in. You don't submit anything from the device: the store's page
+shows the report, checks it, and you submit it there yourself.
+
+When no store link is set and you run from a terminal, ovos-tui-client asks
+for it, and says that it never submits anything. Paste the link from the
+store's instructions, or press Enter to skip; a skipped question comes back
+next time. Set or change it any time:
+
+- `--submit-url 'https://…'` on the command line,
+- in the TUI: `Ctrl+P` → **`Settings: Skill store report link`**,
+- or in `~/.config/ovos-tui-client/config.json`:
+
+    ```json
+    { "submit_url": "https://example.org/report?skill={skill_id}#report={report_fragment}" }
+    ```
+
+Placeholders, each filled in and URL-encoded:
+
+| Placeholder | |
+|---|---|
+| `{report_fragment}` | The report packed for the part of a link after `#`: gzip, then base64url. That part never goes to a server, and a one-skill report is ~2-5 KB. Preferred. |
+| `{report}` | The report as JSON, for a query string. Limited to about 8 KB; longer reports say so. |
+| `{skill_id}` | The tested skill, when there is one. |
+| `{channel}` | The release channel. |
+| `{title}` | The run's title. |
+
+For a store: unpack `{report_fragment}` in the browser with
+`atob` → `DecompressionStream("gzip")` → `JSON.parse`.
 
 The TUI saves the same two files after an ordinary run: `Ctrl+P` →
 `Test: Save result…`. See [Testing skills](testing.md#save-the-result).

@@ -12,6 +12,7 @@ Actions publishes it to GitHub Pages on every push to `main`.
 | `docs/*.md` | The pages |
 | `docs/images/*.svg` | Screenshots, **generated** - don't edit by hand |
 | `scripts/make_screenshots.py` | Draws the screenshots |
+| `scripts/make_share_page.py` | Draws `share-page.png`, the page a report link opens (needs Firefox) |
 | `scripts/build_docs.sh` | Screenshots + build, in one go |
 | `.github/workflows/docs.yml` | Checks docs on PRs, publishes on `main` |
 
@@ -38,7 +39,10 @@ python scripts/make_screenshots.py --list     # scene names
 ```
 
 Regenerate them whenever the UI changes, and commit the SVGs with the
-change. The docs workflow regenerates them on every PR and warns if
+change. One picture is a PNG from a real browser instead:
+`share-page.png`, the page a report link opens. Redraw it with
+`python scripts/make_share_page.py` (needs Firefox) when `share.py`'s page
+changes; the docs workflow doesn't regenerate it. The docs workflow regenerates them on every PR and warns if
 they differ from the committed ones. The published site always uses
 freshly generated screenshots, so it never shows a stale UI.
 

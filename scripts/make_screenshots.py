@@ -291,6 +291,40 @@ async def scene_others(app, pilot):
     await _settle(pilot)
 
 
+async def scene_report_save(app, pilot):
+    """'Test: Save result…' after a run, with the channel already found."""
+    fixed = property(lambda self: 23.0, lambda self, value: None)
+    with patch.object(RunSummary, "duration", fixed), patch("ovos_tui_client.scripts.QUIET_AFTER_MATCH", 0.3), \
+         patch("ovos_tui_client.scripts.SETTLE", 0.05):
+        await _start_weather_run(app, pilot, GOLDEN[:4])
+        await app.workers.wait_for_complete()
+    app.channel_result = {"channel": "testing", "source": "ovos-installer", "checked": True}
+    app._channel_checked = True
+    app.create_report()
+    await _settle(pilot, 0.3)
+    app.screen.query_one("#report-notes", Input).value = "Raspberry Pi 5 with ReSpeaker"
+    await _settle(pilot)
+
+
+async def scene_store_link(app, pilot):
+    """Asked before the first share while no store link is set."""
+    from ovos_tui_client.report_screen import SubmitUrlScreen
+    app.push_screen(SubmitUrlScreen())
+    await _settle(pilot, 0.3)
+    app.screen.query_one("#submit-url", Input).value = (
+        "https://andlo.github.io/ovos-klondike-mercantile/detail.html?skill={skill_id}#report={report_fragment}")
+    await _settle(pilot)
+
+
+async def scene_report_view(app, pilot):
+    """The report window: Copy, Share, Close."""
+    from ovos_tui_client.report_screen import ReportViewScreen
+    text = json.dumps(DEMO_REPORT, indent=2) + "\n"
+    app.push_screen(ReportViewScreen("Test: Weather - All", text,
+                                     "~/.local/share/ovos-tui-client/results/2026-10-01_101500_test-weather-all.report.json"))
+    await _settle(pilot, 0.3)
+
+
 SCENES = {
     "overview": scene_overview,
     "palette": scene_palette,
@@ -302,6 +336,29 @@ SCENES = {
     "skills": scene_skills,
     "about-tui": scene_about_tui,
     "others": scene_others,
+    "report-save": scene_report_save,
+    "store-link": scene_store_link,
+    "report-view": scene_report_view,
+}
+
+# A short, believable report for the report window (not a real run)
+DEMO_REPORT = {
+    "schema": "ovos-test-report/1",
+    "title": "Test: Weather - All",
+    "manifest": {
+        "channel": "testing", "channel_source": "ovos-installer", "bus": "local", "lang": "en-us",
+        "stack": {"ovos-core": "2.1.1", "ovos-workshop": "7.0.6", "ovos-padatious": "1.4.3"},
+        "skills": {WEATHER: {"package": "ovos-skill-weather", "version": "1.0.6"}},
+        "installed_skills": 60,
+        "machine": {"arch": "aarch64", "model": "Raspberry Pi 5 Model B Rev 1.0"},
+        "tool": "ovos-tui-client 0.2.0",
+    },
+    "summary": {"steps": 4, "checked": 4, "passed": 3, "failed": 1, "timed_out": 0, "answered": 4},
+    "steps": [
+        {"i": 1, "utterance": "what's the weather like", "lang": "en-us",
+         "expected": f"{WEATHER}:current_weather.intent", "status": "pass", "answered": True},
+    ],
+    "notes": "Raspberry Pi 5 with ReSpeaker",
 }
 
 
