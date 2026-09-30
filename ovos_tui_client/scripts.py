@@ -98,6 +98,16 @@ STOP_WAIT = 5.0
 # core took and what handled it in the end.
 BUSY_WAIT = 300.0
 
+# A step whose skill is left waiting in get_response()/ask_yesno() (e.g.
+# date-time's "did you mean <timezone>?") is answered "cancel" in its
+# own session before the next step. ovos-workshop 7.x waits for that
+# answer forever (num_retries=-1), each wait holds one of the bus
+# client's 8 handler threads, and after 8 of them ovos-core stops
+# handling anything - seen live on the testing channel (py-spy dump:
+# 6x date-time ask_yesno, alerts _ocp_query, reading-pipeline ask_yesno).
+RESPONSE_RELEASE_WAIT = 5.0
+CANCEL_UTTERANCE = "cancel"
+
 FALLBACK_PREFIX = "ovos.skills.fallback."
 READING_FETCH_PREFIX = "ovos.common_reading.fetch_content."
 READING_SEARCH = "ovos.common_reading.search"
@@ -602,6 +612,8 @@ class ScriptRunner:
                  story_start_wait: float = None, stop_wait: float = None,
                  busy_wait: float = None,
                  on_busy: Callable[[int, int, ScriptStep, float], None] = None,
+                 answer: Callable[[str, str, Optional[str]], None] = None,
+                 response_release_wait: float = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.steps = list(steps)
         self.title = title
@@ -621,6 +633,15 @@ class ScriptRunner:
         self.busy_wait = BUSY_WAIT if busy_wait is None else busy_wait
         self._on_busy = on_busy or (lambda *a: None)
         self._stop_session = stop_session
+        # answer(session_id, text, lang) - sends an utterance into a step's
+        # session; used to cancel a get_response the step left open
+        self._answer = answer
+        self.response_release_wait = (RESPONSE_RELEASE_WAIT if response_release_wait is None
+                                      else response_release_wait)
+        self._pending_response = set()   # skills waiting in get_response in this step's session
+        self._response_released = threading.Event()
+        self._releasing = False
+        self.released_responses = 0      # how many get_response waits the run cancelled
         self._last_msg = 0.0
         self._clock = clock
         self._sleep = sleep
@@ -663,6 +684,16 @@ class ScriptRunner:
             # the default session, e.g. a story being read) don't count
             # toward this step's result - seen live. Audio events are
             # still used for "is TTS playing" below, whatever session.
+            if not other_session and msg_type == "skill.converse.get_response.enable":
+                self._pending_response.add((data or {}).get("skill_id") or "?")
+                self._response_released.clear()
+            elif not other_session and msg_type == "skill.converse.get_response.disable":
+                self._pending_response.discard((data or {}).get("skill_id") or "?")
+                if not self._pending_response:
+                    self._response_released.set()
+            if self._releasing:
+                # traffic from our own "cancel" - not part of the step's result
+                return
             if not other_session:
                 observe(self._obs, msg_type, data or {}, context, known)
                 if not self._obs.awaiting_provider:
@@ -704,6 +735,9 @@ class ScriptRunner:
             self._speaking = False
             self._last_msg = self._clock()
             self._speech_seen = False
+            self._pending_response = set()
+            self._releasing = False
+        self._response_released.set()
         self._handled.clear()
         self._soft_done.clear()
         self._speech_done.set()
@@ -759,7 +793,7 @@ class ScriptRunner:
                 # verdict known - don't sit through (or leave running) a
                 # story that can last minutes; see STORY_START_WAIT
                 self._speech_started.wait(self.story_start_wait)
-                self._stop_step_session()
+                self._end_step_session(step)
                 self._speech_done.wait(self.stop_wait)
             else:
                 with self._lock:
@@ -770,7 +804,7 @@ class ScriptRunner:
                 # nothing it started (counting forever, a metronome, speech
                 # past SPEECH_TIMEOUT) goes on under the next one. Only this
                 # step's own session is touched.
-                self._stop_step_session()
+                self._end_step_session(step)
                 with self._lock:
                     speaking = self._speaking
                 if speaking:
@@ -809,6 +843,30 @@ class ScriptRunner:
             if matched and not speaking and quiet >= self.quiet_after_match:
                 return self._clock() - started, False
         return None, not self._cancel.is_set()
+
+    def _end_step_session(self, step: ScriptStep) -> None:
+        self._release_pending_response(step)
+        self._stop_step_session()
+
+    def _release_pending_response(self, step: ScriptStep) -> None:
+        """Answer "cancel" to a get_response the step left waiting, so the
+        skill's handler thread is freed (see RESPONSE_RELEASE_WAIT)."""
+        with self._lock:
+            pending = bool(self._pending_response)
+            if pending and self._answer and self.session_id and not self._cancel.is_set():
+                self._releasing = True
+            else:
+                return
+        try:
+            self._answer(self.session_id, CANCEL_UTTERANCE, step.lang)
+        except Exception:
+            with self._lock:
+                self._releasing = False
+            return
+        if self._response_released.wait(self.response_release_wait):
+            self.released_responses += 1
+        with self._lock:
+            self._releasing = False
 
     def _stop_step_session(self) -> None:
         if self._stop_session and self.session_id and not self._cancel.is_set():
