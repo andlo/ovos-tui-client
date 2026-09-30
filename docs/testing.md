@@ -112,8 +112,20 @@ can't know by itself:
   degrees in *your town*"), and a store will refuse a report with them.
   Tick it only for a report you keep yourself.
 
-`Ctrl+S` saves `….report.json` next to the other results and copies it to
-the clipboard (when the terminal allows it). It is the same
+Then either:
+
+- **Save and copy** (`Ctrl+S`): saves `….report.json` next to the other
+  results and copies it to the clipboard. Not every terminal passes that on
+  (it uses the OSC 52 escape code); if nothing arrives, use Show.
+- **Save and show** (`Ctrl+O`): saves it and shows it as text, to read
+  before you share it. **Copy** (`Ctrl+C`) there tries the clipboard again;
+  otherwise select the text with the mouse while holding Shift (Option on
+  macOS), or attach the file.
+
+`Ctrl+P` → **`Test: Show last report (<title>)`** shows the last report
+again, until the TUI is closed. The file stays in the results folder.
+
+The report is the same
 `ovos-test-report/1` file a [headless run](headless.md#the-shareable-report)
 writes: the installed versions, the channel, machine type, language, STT and
 TTS plugin names, and each sentence with what handled it; no hostname, IP

@@ -290,3 +290,47 @@ async def test_shareable_report_asks_channel_notes_and_replies(tmp_path, monkeyp
             assert report["manifest"]["channel_source"] == "installed versions"
             assert "replies" not in report["steps"][0]
             assert "Report saved:" in _conversation(app)
+
+
+@pytest.mark.asyncio
+async def test_report_can_be_shown_and_shown_again_from_the_palette(tmp_path, monkeypatch):
+    from textual.widgets import TextArea
+    from ovos_tui_client.report_screen import ReportScreen, ReportViewScreen
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "smoke.jsonl").write_text(json.dumps(
+        {"utterance": "what's the weather", "skill_id": WEATHER, "intent_label": "weather.intent"}))
+    app = _app(tmp_path, scripts)
+    app.results_dir = tmp_path / "results"
+    app.installed_skills = {WEATHER: True}
+    monkeypatch.setattr("ovos_tui_client.app.channel_check", lambda stack: {
+        "channel": None, "source": None, "declared": None, "declared_source": None, "declared_note": None,
+        "checked": [], "unreachable": ["stable", "testing", "alpha"], "problems": {}, "matches": []})
+    _fake_ovos(app, {"what's the weather": f"{WEATHER}:weather.intent"})
+    with patch("ovos_tui_client.scripts.SETTLE", 0):
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            titles = [c.title for c in app.get_system_commands(app.screen)]
+            assert not any(t.startswith("Test: Show last report") for t in titles)
+            app.start_user_script(scripts / "smoke.jsonl")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            app.create_report()
+            await pilot.pause()
+            assert isinstance(app.screen, ReportScreen)
+            await pilot.press("ctrl+o")
+            await pilot.pause()
+            assert isinstance(app.screen, ReportViewScreen)
+            text = app.screen.query_one(TextArea).text
+            assert json.loads(text)["schema"] == "ovos-test-report/1"
+            assert json.loads(text)["manifest"]["channel"] is None
+            await pilot.press("escape")
+            await pilot.pause()
+            assert len(list((tmp_path / "results").glob("*.report.json"))) == 1
+            cmd = [c for c in app.get_system_commands(app.screen)
+                   if c.title == "Test: Show last report (Script: smoke)"]
+            assert cmd
+            cmd[0].callback()
+            await pilot.pause()
+            assert isinstance(app.screen, ReportViewScreen)
+            assert app.screen.query_one(TextArea).text == text
