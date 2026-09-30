@@ -90,7 +90,7 @@ async def test_running_state_is_visible_while_a_step_is_in_flight(tmp_path):
         seen["class"] = conv.has_class("script-running")
         seen["title"] = str(conv.border_title)
         seen["disabled"] = app.query_one("#utterance-input", Input).disabled
-        seen["sub_title"] = app.sub_title
+        seen["sub_title"] = app.sub_title.split("   OVOS")[0]  # the channel may be shown after it
         seen["own_session"] = bool(session_id and session_id == app.script_runner.session_id)
         app.script_runner.feed(f"{WEATHER}:weather.intent")
         app.script_runner.feed("ovos.utterance.handled")
