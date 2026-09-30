@@ -93,6 +93,9 @@ from ovos_tui_client.report import build_report, report_json, submit_url
 from ovos_tui_client.report_screen import ReportScreen, ReportViewScreen
 
 LOG_POLL_INTERVAL = 0.5  # seconds
+# How long "OK ready." waits for the release-channel check at startup (it
+# fetches the constraints files); a slower answer is written when it comes.
+CHANNEL_STARTUP_WAIT = 6.0
 LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
 
 SOURCE_TAG_WIDTH = max(len(name) for name in KNOWN_LOG_NAMES)
@@ -815,7 +818,6 @@ class OVOSTUIApp(App):
            'OK ready.' get written - genuinely accurate now, not just
            well-intentioned."""
         self._write_status(f"ovos-tui-client v{_ovos_tui_version()}")
-        self._channel_worker(announce=True)
 
         if self.log_bridge_handles:
             # Bridging already happened in __init__() (see that
@@ -880,9 +882,14 @@ class OVOSTUIApp(App):
         self.set_interval(LOG_POLL_INTERVAL, self._poll_logs)
         self.query_one("#utterance-input", Input).focus()
 
-        self._startup_steps_remaining = 2
+        # services, skills, and the release channel (which needs the
+        # network, so 'OK ready.' waits for it at most CHANNEL_STARTUP_WAIT)
+        self._startup_steps_remaining = 3
+        self._channel_step_done = False
         self._check_services_worker()
         self._refresh_installed_skills(on_complete=self._after_installed_skills_known)
+        self._channel_worker(announce=True)
+        self.set_timer(CHANNEL_STARTUP_WAIT, self._channel_startup_step_done)
 
     def _after_installed_skills_known(self) -> None:
         """Runs once _refresh_installed_skills() has populated
@@ -1706,10 +1713,18 @@ class OVOSTUIApp(App):
             self._channel_short, line = channel_summary(result, stack, remote=not self.is_local)
             if announce:
                 self._write_status(line)
+                self._channel_startup_step_done()
             self._refresh_sub_title()
             if then is not None:
                 then()
         self.call_from_thread(_done)
+
+    def _channel_startup_step_done(self) -> None:
+        """The channel's part of startup is over: its line is written, or
+        CHANNEL_STARTUP_WAIT passed (then the line comes when it's ready)."""
+        if not self._channel_step_done:
+            self._channel_step_done = True
+            self._finish_startup()
 
     def show_channel(self) -> None:
         """'OVOS: Release channel': what this install runs, and how to change."""
