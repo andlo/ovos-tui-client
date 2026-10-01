@@ -77,7 +77,8 @@ manifest records:
   (which stages *could* run; the order that does run is `config.pipeline`).
 - **steps_from / steps_note:** where each skill's steps came from, and a
   note when golden files came from a repo's default branch (possibly newer
-  than the installed release).
+  than the installed release). Normally they come from the installed
+  version's tag; see [where the test utterances come from](testing.md#where-the-test-utterances-come-from).
 - **config:** `lang`, `secondary_langs`, the intent pipeline order, and the STT and TTS plugin names (only the names: a plugin's own settings can hold keys or server addresses, so they are never read into the report).
 - **machine:** architecture, and the board model when there is one
   (`Raspberry Pi 5`, a Mark II ...).
