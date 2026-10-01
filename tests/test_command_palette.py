@@ -5,6 +5,7 @@ the result to the conversation pane (dim/grey text) via
 App._write_status(), instead of opening a screen. services.py's and
 bus.py's own functions are mocked throughout; this file tests the
 Provider/glue layer, not systemctl or the real bus."""
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -740,7 +741,16 @@ async def test_startup_ends_with_ok_ready(tmp_path):
     above."""
     app = _app_with_fake_bus(tmp_path)
     app.bus.list_skills = MagicMock(side_effect=lambda cb: cb({"ovos-skill-grimm-tales.andlo": True}))
-    app.call_from_thread = MagicMock(side_effect=lambda fn, *a, **kw: fn(*a, **kw))
+    # The real call_from_thread runs each callback on the UI thread, one at
+    # a time. Run them in the worker thread here, but serialized, so the
+    # services and channel workers can't interleave their writes (that
+    # race, not the app, put the channel line after 'OK ready.' on CI).
+    ui_lock = threading.RLock()
+
+    def _serialized(fn, *a, **kw):
+        with ui_lock:
+            return fn(*a, **kw)
+    app.call_from_thread = MagicMock(side_effect=_serialized)
     with patch("ovos_tui_client.app.discover_services_with_state", return_value=[]):
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()
