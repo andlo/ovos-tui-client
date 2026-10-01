@@ -752,3 +752,115 @@ def test_a_skill_asking_a_question_ends_the_step_without_the_busy_wait(monkeypat
     summary = runner.run()
     assert done == [(1, PASS)] and busy == [] and answered == ["cancel"]
     assert summary.duration < 5
+
+
+# --- golden files from the installed version's tag ---
+
+from unittest.mock import patch as _patch  # noqa: E402
+
+from ovos_tui_client import scripts as _scripts  # noqa: E402
+
+REPO = "https://github.com/OpenVoiceOS/ovos-skill-weather"
+
+
+def test_tag_for_version_matches_v_prefix_and_version_forms():
+    tags = ["V0.4.19", "V0.4.20", "0.5.0a3", "v1.0.0"]
+    assert _scripts.tag_for_version(tags, "0.4.20") == "V0.4.20"
+    assert _scripts.tag_for_version(tags, "0.5.0a3") == "0.5.0a3"
+    assert _scripts.tag_for_version(tags, "1.0.0") == "v1.0.0"
+    assert _scripts.tag_for_version(tags, "2.0.0") is None
+    assert _scripts.tag_for_version(tags, "") is None
+
+
+def test_load_golden_uses_the_installed_versions_tag(tmp_path):
+    urls = []
+
+    def fetch(url):
+        urls.append(url)
+        return _row(utterance="old phrasing") if "/V0.4.20/" in url else _row(utterance="head phrasing")
+
+    result = load_golden(WEATHER, "en-us", fetch=fetch, repo_url_finder=lambda s: REPO,
+                         version_finder=lambda s: "0.4.20", tag_lister=lambda r: ["V0.4.19", "V0.4.20"],
+                         cache_dir=tmp_path)
+    assert [s.utterance for s in result.steps] == ["old phrasing"]
+    assert "/V0.4.20/test/end2end/" in result.source
+    assert not any("/HEAD/" in u for u in urls)
+    assert list((tmp_path / WEATHER / "V0.4.20").iterdir())
+
+
+def test_load_golden_release_without_golden_file_uses_examples_not_head(tmp_path):
+    urls = []
+
+    def fetch(url):
+        urls.append(url)
+        return None if "/V0.4.20/" in url else _row(utterance="head phrasing")
+
+    result = load_golden(WEATHER, "en-us", fetch=fetch, repo_url_finder=lambda s: REPO,
+                         version_finder=lambda s: "0.4.20", tag_lister=lambda r: ["V0.4.20"],
+                         examples_finder=lambda s, l: ["what's the weather"], cache_dir=tmp_path)
+    assert [s.utterance for s in result.steps] == ["what's the weather"]
+    assert "V0.4.20 has no golden file" in result.source
+    assert not any("/HEAD/" in u for u in urls)
+
+
+def test_load_golden_release_without_golden_or_examples_is_empty(tmp_path):
+    result = load_golden(WEATHER, "en-us", fetch=lambda u: None if "/V0.4.20/" in u else _row(),
+                         repo_url_finder=lambda s: REPO, version_finder=lambda s: "0.4.20",
+                         tag_lister=lambda r: ["V0.4.20"], examples_finder=lambda s, l: [], cache_dir=tmp_path)
+    assert result.steps == [] and result.source is None
+
+
+def test_load_golden_falls_back_to_head_when_version_has_no_tag(tmp_path):
+    urls = []
+
+    def fetch(url):
+        urls.append(url)
+        return _row(utterance="head phrasing")
+
+    result = load_golden(WEATHER, "en-us", fetch=fetch, repo_url_finder=lambda s: REPO,
+                         version_finder=lambda s: "0.4.21", tag_lister=lambda r: ["V0.4.20"],
+                         cache_dir=tmp_path)
+    assert [s.utterance for s in result.steps] == ["head phrasing"]
+    assert "/HEAD/" in result.source
+
+
+def test_load_golden_falls_back_to_head_when_tags_unreadable(tmp_path):
+    result = load_golden(WEATHER, "en-us", fetch=lambda u: _row(), repo_url_finder=lambda s: REPO,
+                         version_finder=lambda s: "0.4.20", tag_lister=lambda r: None, cache_dir=tmp_path)
+    assert "/HEAD/" in result.source
+
+
+def test_load_golden_tag_cache_used_offline(tmp_path):
+    kw = dict(repo_url_finder=lambda s: REPO, version_finder=lambda s: "0.4.20",
+              tag_lister=lambda r: ["V0.4.20"], cache_dir=tmp_path)
+    load_golden(WEATHER, "en-us", fetch=lambda u: _row(utterance="old phrasing") if "/V0.4.20/" in u else None, **kw)
+    offline = load_golden(WEATHER, "en-us", fetch=lambda u: None, **kw)
+    assert [s.utterance for s in offline.steps] == ["old phrasing"] and "cached" in offline.source
+
+
+def test_list_repo_tags_parses_git_ref_advertisement():
+    body = ("001e# service=git-upload-pack\n0000"
+            "00f5abc123 HEAD\x00multi_ack thin-pack\n"
+            "003fdef456 refs/heads/dev\n"
+            "0041aaa111 refs/tags/V0.4.20\n"
+            "0044bbb222 refs/tags/V0.4.20^{}\n"
+            "0041ccc333 refs/tags/V0.4.21\n0000").encode()
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return body
+
+    _scripts._TAGS_CACHE.clear()
+    with _patch.object(_scripts.urllib.request, "urlopen", return_value=_Resp()) as op:
+        tags = _scripts.list_repo_tags(REPO)
+        assert _scripts.list_repo_tags(REPO) == tags  # cached: one request per repo
+    assert tags == ["V0.4.20", "V0.4.21"]
+    assert op.call_count == 1
+    assert op.call_args[0][0] == "https://github.com/OpenVoiceOS/ovos-skill-weather.git/info/refs?service=git-upload-pack"
+    _scripts._TAGS_CACHE.clear()

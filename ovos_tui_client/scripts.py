@@ -278,13 +278,78 @@ def find_repo_url(skill_id: str) -> Optional[str]:
     return None
 
 
-def github_raw_url(repo_url: str, path: str) -> Optional[str]:
+def github_raw_url(repo_url: str, path: str, ref: str = "HEAD") -> Optional[str]:
     parsed = parse_github_repo(repo_url)
     if not parsed:
         return None
     # HEAD resolves to the repo's default branch (dev for most OVOS
     # skills, main/master elsewhere) without having to know which.
-    return f"https://raw.githubusercontent.com/{parsed[0]}/{parsed[1]}/HEAD/{path}"
+    return f"https://raw.githubusercontent.com/{parsed[0]}/{parsed[1]}/{ref}/{path}"
+
+
+def find_installed_version(skill_id: str) -> Optional[str]:
+    """The installed version of skill_id's distribution, found the same
+    way as find_repo_url(). None if it isn't installed here."""
+    module = guess_module_name(skill_id)
+    try:
+        dists = list(importlib.metadata.packages_distributions().get(module, []))
+    except Exception:
+        dists = []
+    dists += repo_dir_candidates(skill_id)
+    for dist in dict.fromkeys(dists):
+        try:
+            return importlib.metadata.version(dist)
+        except Exception:
+            continue
+    return None
+
+
+_TAG_RE = re.compile(r"refs/tags/([^\s^\x00]+)")
+_TAGS_CACHE: dict = {}
+
+
+def list_repo_tags(repo_url: str, timeout: float = 10.0) -> Optional[List[str]]:
+    """The repo's tag names, from git's own ref advertisement
+    (<repo>.git/info/refs). One request per repo, no GitHub API rate
+    limit, no git binary. None when it can't be read (offline)."""
+    parsed = parse_github_repo(repo_url)
+    if not parsed:
+        return None
+    key = (parsed[0].lower(), parsed[1].lower())
+    if key in _TAGS_CACHE:
+        return _TAGS_CACHE[key]
+    url = f"https://github.com/{parsed[0]}/{parsed[1]}.git/info/refs?service=git-upload-pack"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    tags = list(dict.fromkeys(_TAG_RE.findall(body)))
+    _TAGS_CACHE[key] = tags
+    return tags
+
+
+def _normalize_version(v: str) -> str:
+    v = (v or "").strip()
+    if v[:1] in ("v", "V"):
+        v = v[1:]
+    try:
+        from packaging.version import Version
+        return str(Version(v))
+    except Exception:
+        return v.lower()
+
+
+def tag_for_version(tags: Iterable[str], version: str) -> Optional[str]:
+    """The tag that names `version`: 'V0.4.20', 'v0.4.20' or '0.4.20'
+    (also 0.2.0a3 vs 0.2.0.a3 and the like, compared as versions)."""
+    if not version:
+        return None
+    want = _normalize_version(version)
+    for tag in tags or ():
+        if _normalize_version(tag) == want:
+            return tag
+    return None
 
 
 def http_get_text(url: str, timeout: float = 10.0) -> Optional[str]:
@@ -307,11 +372,18 @@ def load_golden(skill_id: str, lang: str, golden_dirs: Iterable = (),
                 fetch: Callable[[str], Optional[str]] = http_get_text,
                 repo_url_finder: Callable[[str], Optional[str]] = find_repo_url,
                 cache_dir: Path = GOLDEN_CACHE_DIR,
-                examples_finder: Optional[Callable[[str, str], list]] = find_skill_examples) -> GoldenResult:
+                examples_finder: Optional[Callable[[str, str], list]] = find_skill_examples,
+                version_finder: Optional[Callable[[str], Optional[str]]] = find_installed_version,
+                tag_lister: Optional[Callable[[str], Optional[List[str]]]] = list_repo_tags) -> GoldenResult:
     """Golden utterances for skill_id in lang. Lookup order:
 
     1. local checkouts: <golden_dir>/<repo-name>/test/end2end/<file>
-    2. the skill's GitHub repo (fresh fetch, written to the cache)
+    2. the skill's GitHub repo at the tag of the INSTALLED version, so
+       the steps match the code that answers them. If that release
+       ships no golden file, its skill.json examples are used (step 4)
+       rather than the default branch's file, which describes another
+       version. Only when the installed version has no tag (or it
+       can't be found out) is the default branch (HEAD) used.
     3. the cache from an earlier successful fetch (offline fallback)
     4. the skill's own skill.json "examples" (#28) - many skills have
        no golden file but do ship examples. These carry no intent
@@ -335,6 +407,50 @@ def load_golden(skill_id: str, lang: str, golden_dirs: Iterable = (),
 
     cache_base = Path(cache_dir) / skill_id
     repo_url = repo_url_finder(skill_id)
+
+    def _examples(note: str) -> Optional[GoldenResult]:
+        if examples_finder is None:
+            return None
+        try:
+            examples = examples_finder(skill_id, normalize_lang(lang))
+        except Exception:
+            examples = []
+        steps = [ScriptStep(e.strip(), lang, skill_id, None) for e in examples if isinstance(e, str) and e.strip()]
+        return GoldenResult(steps, note) if steps else None
+
+    tag = None
+    if repo_url and version_finder is not None and tag_lister is not None:
+        try:
+            version = version_finder(skill_id)
+            tag = tag_for_version(tag_lister(repo_url) or [], version) if version else None
+        except Exception:
+            tag = None
+    if tag:
+        tag_cache = cache_base / tag
+        for name in names:
+            url = github_raw_url(repo_url, f"{GOLDEN_SUBPATH}/{name}", ref=tag)
+            text = fetch(url) if url else None
+            if text is not None:
+                try:
+                    tag_cache.mkdir(parents=True, exist_ok=True)
+                    (tag_cache / name).write_text(text, encoding="utf-8")
+                except OSError:
+                    pass
+                return GoldenResult(parse_script(text, lang, skill_id), url)
+        for name in names:
+            path = tag_cache / name
+            if path.is_file():
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                return GoldenResult(parse_script(text, lang, skill_id), f"{path} (cached)")
+        # The installed release has no golden file. The default branch's
+        # describes another version (renamed or new intents), so don't
+        # fall back to it.
+        return _examples(f"skill.json examples (skill-level check only - release {tag} has no golden file)") \
+            or GoldenResult([], None)
+
     if repo_url:
         for name in names:
             url = github_raw_url(repo_url, f"{GOLDEN_SUBPATH}/{name}")

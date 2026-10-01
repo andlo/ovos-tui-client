@@ -218,13 +218,22 @@ TUI looks in this order:
 1. **`--golden-dir DIR`** (can be repeated): local checkouts, as
    `DIR/<skill-repo>/test/end2end/golden_utterances_<lang>.jsonl`. Use
    this while you edit a skill's golden file.
-2. **The skill's GitHub repository**, found from the installed
-   package's own metadata. The file is fetched fresh on each run and
-   cached in `~/.cache/ovos-tui-client/golden/`.
+2. **The skill's GitHub repository, at the tag of the installed
+   version** (`v0.4.20`, `V0.4.20` or `0.4.20`), found from the
+   installed package's own metadata. That way the sentences and intent
+   names match the code that answers them, also on a channel that runs
+   an older release. The file is fetched fresh on each run and cached
+   in `~/.cache/ovos-tui-client/golden/`.
+   - If that release ships no golden file, the TUI uses the skill's
+     `skill.json` examples (step 4) instead of the newest file, which
+     may describe intents the installed version doesn't have.
+   - Only when the installed version has no tag (a git install, say),
+     or the tags can't be read, is the repository's default branch
+     used. A headless report notes that in `steps_note`.
 3. **That cache**, when you're offline.
 4. **The skill's `skill.json` examples**, if there is no golden file
-   anywhere. Examples have no intent label, so they are only checked
-   at skill level: "did this skill answer".
+   for the installed version. Examples have no intent label, so they
+   are only checked at skill level: "did this skill answer".
 
 The language is the TUI's `--lang`. `da-dk` also finds `da-DK` and
 `da` files.
