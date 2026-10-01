@@ -629,3 +629,126 @@ def test_timeout_gives_up_waiting_after_busy_wait():
     summary = runner.run()
     result = summary.results[0][2]
     assert result.status == TIMEOUT and "still busy" in result.detail
+
+
+def test_norm_intent_treats_camelcase_like_snake_case():
+    # ovos-skill-alerts 0.1.28 (testing channel) dispatches 'CancelAlert';
+    # the golden file on its default branch expects 'cancel_alert'
+    from ovos_tui_client.scripts import _norm_intent
+    assert _norm_intent("ovos-skill-alerts.openvoiceos:CancelAlert") == \
+        _norm_intent("ovos-skill-alerts.openvoiceos:cancel_alert")
+    assert _norm_intent("x.y:what.time.is.it.intent") == _norm_intent("x.y:what_time_is_it")
+    assert _norm_intent("x.y:CancelAlert") != _norm_intent("x.y:ListAlerts")
+
+
+def test_step_left_in_get_response_is_answered_cancel_in_its_own_session():
+    # py-spy on a hung ovos-core: 8/8 handler threads waiting forever in
+    # ask_yesno for sessions no one would ever answer
+    answered, stopped = [], []
+    holder = {}
+
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")
+        r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER},
+               {"session": {"session_id": r.session_id, "response_mode": [WEATHER]}})
+        r.feed("ovos.utterance.handled")
+
+    def answer(session, text, lang):
+        # the full session the skill serialized, not just its id
+        assert session.get("response_mode") == [WEATHER]
+        answered.append((session["session_id"], text, lang))
+        # the skill gets its answer: cancel -> get_response returns
+        holder["r"].feed(f"{WEATHER}.converse.get_response", {})
+        holder["r"].feed("skill.converse.get_response.disable", {"skill_id": WEATHER})
+
+    runner, done = _runner([_step(), _step()], reply, stop_session=stopped.append, answer=answer)
+    holder["r"] = runner
+    runner.run()
+    assert done == [(1, PASS), (2, PASS)]    # the cancel traffic doesn't change the verdict
+    assert [a[0] for a in answered] == runner.session_ids
+    assert all(a[1] == "cancel" and a[2] == "en-us" for a in answered)
+    assert runner.released_responses == 2
+    # the stop carries the session as the skill serialized it
+    assert [x["session_id"] for x in stopped] == runner.session_ids
+
+
+def test_no_cancel_sent_when_nothing_waits_for_an_answer():
+    answered = []
+
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")
+        r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER})
+        r.feed("skill.converse.get_response.disable", {"skill_id": WEATHER})
+        r.feed("ovos.utterance.handled")
+
+    runner, done = _runner([_step()], reply, stop_session=lambda s: None,
+                           answer=lambda *a: answered.append(a))
+    runner.run()
+    assert done == [(1, PASS)] and answered == [] and runner.released_responses == 0
+
+
+def test_quiz_asking_again_after_cancel_is_cancelled_again_and_stop_carries_the_session(monkeypatch):
+    # geometry-practice (live): a cancel ends one question, the quiz asks
+    # the next; and a mycroft.stop with only the session id stops nobody
+    monkeypatch.setattr("ovos_tui_client.scripts.RELEASE_SETTLE", 0)
+    answered, stopped = [], []
+    holder = {}
+    full = lambda r: {"session_id": r.session_id, "active_skills": [[WEATHER, 1]]}
+
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent", {}, {"session": full(r)})
+        r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER}, {"session": full(r)})
+        r.feed("ovos.utterance.handled")
+
+    def answer(session, text, lang):
+        r = holder["r"]
+        answered.append(text)
+        r.feed("skill.converse.get_response.disable", {"skill_id": WEATHER})
+        if len(answered) < 3:   # the quiz asks two more questions
+            r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER}, {"session": full(r)})
+
+    runner, done = _runner([_step()], reply, stop_session=stopped.append, answer=answer)
+    holder["r"] = runner
+    runner.run()
+    assert done == [(1, PASS)]
+    assert answered == ["cancel"] * 3 and runner.released_responses == 3
+    assert stopped == [full(runner)]
+
+
+def test_ocp_play_is_credited_to_the_media_skill_that_serves_it():
+    # 'play white noise' -> ocp:play; then OCP plays the best result, whose
+    # media names the skill - that's the skill the step is about (seen live)
+    step = ScriptStep("play white noise", "en-us", "ovos-skill-white-noise.andlo", None)
+    obs = StepObservation()
+    observe(obs, "ocp:play", {}, {})
+    assert obs.awaiting_provider
+    observe(obs, "ovos.common_play.play", {"media": {"skill_id": "ovos-skill-white-noise.andlo", "uri": "x"}}, {})
+    assert not obs.awaiting_provider
+    r = evaluate(step, obs)
+    assert r.status == PASS and "via OCP" in r.detail
+    other = ScriptStep("play white noise", "en-us", "ovos-skill-soundboard.andlo", None)
+    assert "played by ovos-skill-white-noise.andlo" in evaluate(other, obs).detail
+
+
+def test_a_skill_asking_a_question_ends_the_step_without_the_busy_wait(monkeypatch):
+    # a quiz: matched, asked, and its handler waits for an answer (no
+    # utterance.handled). Not "core still busy" - no BUSY_WAIT, just cancel.
+    monkeypatch.setattr("ovos_tui_client.scripts.RELEASE_SETTLE", 0)
+    busy, answered = [], []
+    holder = {}
+
+    def reply(r, step):
+        r.feed(f"{WEATHER}:weather.intent")
+        r.feed("skill.converse.get_response.enable", {"skill_id": WEATHER},
+               {"session": {"session_id": r.session_id, "active_skills": [[WEATHER, 1]]}})
+
+    def answer(session, text, lang):
+        answered.append(text)
+        holder["r"].feed("skill.converse.get_response.disable", {"skill_id": WEATHER})
+
+    runner, done = _runner([_step()], reply, stop_session=lambda s: None, answer=answer,
+                           step_timeout=5, busy_wait=60, on_busy=lambda *a: busy.append(a))
+    holder["r"] = runner
+    summary = runner.run()
+    assert done == [(1, PASS)] and busy == [] and answered == ["cancel"]
+    assert summary.duration < 5

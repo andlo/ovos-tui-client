@@ -81,6 +81,7 @@ def _fast(monkeypatch, tmp_path):
     monkeypatch.setattr("ovos_tui_client.scripts.STEP_TIMEOUT", 1)
     monkeypatch.setattr(headless, "load_golden", _golden(STEPS))
     monkeypatch.setattr(headless, "SKILL_LIST_RETRY_DELAYS", (0, 0))
+    monkeypatch.setattr(headless, "SKILL_SETTLE_INTERVAL", 0)
     monkeypatch.setattr(manifest_mod, "INSTALLER_STATE_FILE", tmp_path / "no-installer.json")
     # no network in tests: the live constraints check sees nothing
     monkeypatch.setattr("ovos_tui_client.channel.fetch_text", lambda *a, **k: None)
@@ -277,3 +278,134 @@ def test_cli_dispatches_to_headless():
         with pytest.raises(SystemExit) as exc:
             run()
     assert exc.value.code == 0 and rh.called
+
+
+def test_steps_sources_recorded_and_head_flagged():
+    manifest = {"skills": {"a.b": {"package": "a", "version": "0.1.28", "active": True}}}
+    lines = []
+    headless.note_steps_sources(
+        manifest,
+        {"a.b": "https://raw.githubusercontent.com/o/a/HEAD/test/end2end/golden_utterances_en-US.jsonl",
+         "c.d": "skill.json examples (skill-level check only - no golden file)"},
+        lines.append)
+    assert manifest["skills"]["a.b"]["steps_from"].endswith("golden_utterances_en-US.jsonl")
+    assert manifest["skills"]["c.d"]["steps_from"].startswith("skill.json")
+    assert "a.b 0.1.28" in manifest["steps_note"] and "c.d" not in manifest["steps_note"]
+    assert any("default branch" in line for line in lines)
+
+
+def test_resolve_steps_fills_sources():
+    step = ScriptStep(utterance="hi", skill_id="a.b")
+    sources = {}
+    headless.resolve_steps("a.b", {"a.b": True}, "en-us", (), log=lambda _: None,
+                           loader=lambda *a, **k: GoldenResult([step], "somewhere"), sources=sources)
+    assert sources == {"a.b": "somewhere"}
+
+
+def test_manifest_lists_every_installed_skill_and_pipeline_plugins(tmp_path, monkeypatch):
+    # so a reader can tell what the test ran alongside (e.g. a store's
+    # reference set of skills) - ids and versions only
+    monkeypatch.setattr(manifest_mod, "read_installer_channel", lambda *a, **k: ("testing", None))
+    monkeypatch.setattr(manifest_mod, "find_skill_distribution",
+                        lambda sid: (sid.split(".")[0], "1.2.3") if sid != "x.y" else None)
+    monkeypatch.setattr(manifest_mod, "pipeline_plugins", lambda: {"ovos-common-reading-pipeline-plugin": "0.1.0"})
+    m = manifest_mod.build_manifest("127.0.0.1", "en-us", ["a.b"],
+                                    installed_skills={"a.b": True, "c.d": True, "x.y": False})
+    assert m["installed_skills"] == 3
+    assert m["installed"] == [
+        {"id": "a.b", "package": "a", "version": "1.2.3", "active": True},
+        {"id": "c.d", "package": "c", "version": "1.2.3", "active": True},
+        {"id": "x.y", "package": None, "version": None, "active": False},
+    ]
+    assert m["pipeline_plugins"] == {"ovos-common-reading-pipeline-plugin": "0.1.0"}
+
+
+def test_remote_manifest_lists_installed_ids_without_versions():
+    m = manifest_mod.build_manifest("192.0.2.5", "en-us", ["a.b"], installed_skills={"a.b": True, "c.d": None})
+    assert [r["id"] for r in m["installed"]] == ["a.b", "c.d"]
+    assert all(r["version"] is None for r in m["installed"]) and "pipeline_plugins" not in m
+
+
+def test_pipeline_plugins_reads_real_entry_points():
+    assert isinstance(manifest_mod.pipeline_plugins(), dict)
+
+
+
+def test_waits_until_the_skill_count_holds_still(monkeypatch):
+    # a freshly restarted core answers while still loading (seen live: 36 of 60)
+    monkeypatch.setattr(headless, "SKILL_SETTLE_INTERVAL", 0)
+    counts = iter([36, 48, 60, 60, 60, 60])
+
+    class Bus:
+        def list_skills(self, cb):
+            cb({f"s{i}.x": True for i in range(next(counts))})
+
+    lines = []
+    skills = headless.wait_for_skills(Bus(), delays=(), sleep=lambda s: None, log=lines.append)
+    assert len(skills) == 60
+    assert any("36 -> 48" in l for l in lines)
+
+
+def test_report_fragment_round_trips_and_fills_the_template():
+    import base64, gzip
+    report = {"schema": "ovos-test-report/1", "title": "T", "manifest": {"skills": {"a.b": {}}, "channel": "testing"},
+              "steps": [{"u": "æøå " * 50}]}
+    frag = report_mod.report_fragment(report)
+    raw = gzip.decompress(base64.urlsafe_b64decode(frag + "=" * (-len(frag) % 4)))
+    assert json.loads(raw) == report
+    url = report_mod.submit_url("https://store.example/d?skill={skill_id}#report={report_fragment}", report)
+    assert url == f"https://store.example/d?skill=a.b#report={frag}"
+    # a fragment link isn't held to the 8 KB limit of a query-string link
+    big = dict(report, steps=[{"u": str(i) * 40} for i in range(3000)])
+    assert report_mod.submit_url("https://s/#report={report_fragment}", big) is not None
+
+
+def test_asks_for_the_store_link_and_keeps_only_a_real_one(tmp_path):
+    cfg = tmp_path / "config.json"
+    lines = []
+    got = headless.ask_submit_url(lines.append, ask=lambda prompt: "https://s/d#report={report_fragment}", path=cfg)
+    assert got == "https://s/d#report={report_fragment}"
+    assert "never submits anything" in " ".join(lines)
+    assert json.loads(cfg.read_text()) == {"submit_url": got}
+    # an empty answer isn't kept: asked again next time
+    cfg2 = tmp_path / "c2.json"
+    assert headless.ask_submit_url(lines.append, ask=lambda p: "", path=cfg2) is None
+    assert not cfg2.exists()
+    # a link that can't carry the report isn't kept either
+    cfg3 = tmp_path / "c3.json"
+    assert headless.ask_submit_url(lines.append, ask=lambda p: "https://s/submit", path=cfg3) is None
+    assert not cfg3.exists()
+
+
+def test_share_serves_the_report_page_and_file(tmp_path):
+    import urllib.request
+    from ovos_tui_client.share import ReportShare
+    text = json.dumps({"schema": "ovos-test-report/1", "summary": {"passed": 2, "checked": 3}}) + "\n"
+    share = ReportShare(text, title="Test: x", store_link="https://store.example/d#report=abc",
+                        host="127.0.0.1", address="127.0.0.1", ttl=30)
+    url = share.start()
+    try:
+        page = urllib.request.urlopen(url, timeout=5).read().decode()
+        assert "2/3 passed" in page and "Open detailed page" in page and "store.example" in page and "Copy report" in page
+        assert urllib.request.urlopen(url + "report.json", timeout=5).read().decode() == text
+        try:
+            urllib.request.urlopen(url.rsplit("/", 2)[0] + "/wrong-token/", timeout=5)
+            assert False, "other paths must 404"
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
+    finally:
+        share.stop()
+
+
+def test_share_report_prints_link_and_scp(tmp_path):
+    lines = []
+
+    class FakeShare:
+        def __init__(self, *a, **k): self.stopped = False
+        def start(self): return "http://10.0.0.5:1234/tok/"
+        def stop(self): self.stopped = True
+
+    headless.share_report("{}", "T", tmp_path / "r.report.json", "https://s/#report=x", lines.append,
+                          wait=lambda prompt: "", share_cls=FakeShare)
+    text = "\n".join(lines)
+    assert "http://10.0.0.5:1234/tok/" in text and "scp " in text and "r.report.json" in text

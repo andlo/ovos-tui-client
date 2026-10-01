@@ -372,3 +372,15 @@ def test_dual_emitted_speak_is_shown_once_but_a_real_repeat_is_not_lost():
     conn._last_speak = (msg.data["utterance"], conn._last_speak[1] - 5)  # much later
     conn._on_speak(msg)
     assert len(received) == 2
+
+
+def test_send_utterance_carries_a_full_session_dict():
+    from ovos_tui_client.bus import OVOSBusConnection
+    conn = OVOSBusConnection.__new__(OVOSBusConnection)
+    sent = []
+    conn._client = type("C", (), {"emit": lambda self, m: sent.append(m)})()
+    conn.lang = "en-us"
+    conn._tui_context = lambda script=None: {}
+    session = {"session_id": "s1", "response_mode": ["x.y"]}
+    conn.send_utterance("cancel", session_id=session)
+    assert sent[0].context["session"] == session and sent[0].context["session"] is not session

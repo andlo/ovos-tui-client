@@ -339,3 +339,62 @@ async def test_report_can_be_shown_and_shown_again_from_the_palette(tmp_path, mo
             await pilot.pause()
             assert isinstance(app.screen, ReportViewScreen)
             assert app.screen.query_one(TextArea).text == text
+
+
+@pytest.mark.asyncio
+async def test_store_link_setting_saves_only_a_link_that_can_carry_the_report(tmp_path, monkeypatch):
+    from ovos_tui_client import headless
+    from ovos_tui_client.report_screen import SubmitUrlScreen
+    cfg = tmp_path / "config.json"
+    monkeypatch.setattr(headless, "CONFIG_FILE", cfg)
+    monkeypatch.setattr(headless.load_config, "__defaults__", (cfg,))
+    monkeypatch.setattr(headless.save_config, "__defaults__", (cfg,))
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.set_submit_url()
+        await pilot.pause()
+        assert isinstance(app.screen, SubmitUrlScreen)
+        box = app.screen.query_one("#submit-url", Input)
+        box.value = "https://store.example/submit"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, SubmitUrlScreen)   # refused: no {report...}
+        box.value = "https://store.example/d?skill={skill_id}#report={report_fragment}"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, SubmitUrlScreen)
+    assert json.loads(cfg.read_text())["submit_url"].endswith("#report={report_fragment}")
+
+
+@pytest.mark.asyncio
+async def test_share_shows_the_link_in_a_window_and_stops_when_closed(tmp_path, monkeypatch):
+    from ovos_tui_client import headless, share as share_mod
+    from ovos_tui_client.report_screen import ShareScreen
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"submit_url": "https://store.example/d?skill={skill_id}#report={report_fragment}"}))
+    monkeypatch.setattr(headless.load_config, "__defaults__", (cfg,))
+    started, stopped = [], []
+
+    class FakeShare:
+        def __init__(self, text, title="", store_link=None, **kw):
+            started.append(store_link)
+        def start(self):
+            return "http://10.0.0.5:4321/tok/"
+        def stop(self):
+            stopped.append(True)
+
+    monkeypatch.setattr(share_mod, "ReportShare", FakeShare)
+    report = tmp_path / "r.report.json"
+    report.write_text(json.dumps({"schema": "ovos-test-report/1", "manifest": {"skills": {WEATHER: {}}}}))
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.last_report = {"title": "Test: Weather - All", "text": report.read_text(), "path": report}
+        app.share_last_report()
+        await pilot.pause()
+        assert isinstance(app.screen, ShareScreen)
+        assert "http://10.0.0.5:4321/tok/" in str(app.screen.query_one("#share-url").render())
+        assert "scp " in str(app.screen.query_one("#share-scp").render())
+        assert started and started[0].startswith(f"https://store.example/d?skill={WEATHER}#report=")
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ShareScreen) and stopped == [True]

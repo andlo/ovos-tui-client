@@ -98,9 +98,23 @@ STOP_WAIT = 5.0
 # core took and what handled it in the end.
 BUSY_WAIT = 300.0
 
+# A step whose skill is left waiting in get_response()/ask_yesno() (e.g.
+# date-time's "did you mean <timezone>?") is answered "cancel" in its
+# own session before the next step. ovos-workshop 7.x waits for that
+# answer forever (num_retries=-1), each wait holds one of the bus
+# client's 8 handler threads, and after 8 of them ovos-core stops
+# handling anything - seen live on the testing channel (py-spy dump:
+# 6x date-time ask_yesno, alerts _ocp_query, reading-pipeline ask_yesno).
+RESPONSE_RELEASE_WAIT = 5.0
+CANCEL_UTTERANCE = "cancel"
+RELEASE_ROUNDS = 5
+RELEASE_SETTLE = 1.0   # time for a handler to ask its next question after a cancel
+
 FALLBACK_PREFIX = "ovos.skills.fallback."
 READING_FETCH_PREFIX = "ovos.common_reading.fetch_content."
 READING_SEARCH = "ovos.common_reading.search"
+OCP_PLAY = "ovos.common_play.play"   # OCP starts playing the best search result
+OCP_ID = "ovos.common_play"
 
 
 # --------------------------------------------------------------------
@@ -375,7 +389,8 @@ class StepObservation:
     # a common-reading search went out and no provider has been fetched
     # from yet - see PROVIDER_WAIT
     awaiting_provider: bool = False
-    provider: str = ""  # the provider skill the reading pipeline fetched from
+    provider: str = ""  # the provider skill the reading pipeline fetched from / OCP played
+    provider_via: str = ""  # "the reading pipeline" or "OCP"
     last_speak_type: str = ""  # see observe(): drops a dual-emitted duplicate
 
     def _add(self, lst, value):
@@ -414,8 +429,11 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
 
     if msg_type.startswith("ocp:"):
         # the OCP media pipeline took it ('start a metronome' -> ocp:play,
-        # seen live) - there's no skill id at this point, only the action
+        # seen live) - there's no skill id at this point, only the action;
+        # which media skill it picks comes with ovos.common_play.play
         obs.add_intent(msg_type)
+        if msg_type == "ocp:play":
+            obs.awaiting_provider = True
         return
 
     if ":" in msg_type:
@@ -441,11 +459,20 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
             obs.add_skill(msg_type[len(FALLBACK_PREFIX):-len(".response")])
     elif msg_type == "question:action":
         obs.add_skill(data.get("skill_id"))
+    elif msg_type == OCP_PLAY:
+        # OCP picked a result - its media carries the skill that serves it
+        media = data.get("media") or {}
+        skill = media.get("skill_id") if isinstance(media, dict) else None
+        if skill and skill != OCP_ID:
+            obs.provider, obs.provider_via = skill, "OCP"
+            obs.add_skill(skill)
+        obs.awaiting_provider = False
     elif msg_type == READING_SEARCH:
         obs.awaiting_provider = True
     elif msg_type.startswith(READING_FETCH_PREFIX) and not msg_type.endswith(".response"):
         # common-reading pipeline picked this provider skill's content
         obs.provider = msg_type[len(READING_FETCH_PREFIX):]
+        obs.provider_via = "the reading pipeline"
         obs.add_skill(obs.provider)
         obs.awaiting_provider = False
     elif msg_type in ("intent_failure", "complete_intent_failure"):
@@ -476,8 +503,13 @@ def is_converse_capture(intent: str) -> bool:
 
 
 def _norm_intent(name: str) -> str:
-    name = (name or "").strip().lower()
-    skill, _, label = name.partition(":")
+    skill, _, label = (name or "").strip().partition(":")
+    skill = skill.lower()
+    # Older skill releases name their intents in CamelCase ('CancelAlert',
+    # ovos-skill-alerts 0.1.28 on the testing channel) where the golden
+    # file on the repo's default branch already says 'cancel_alert' -
+    # split CamelCase before comparing so both count as the same intent.
+    label = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", label).lower()
     if label.endswith(".intent"):
         label = label[:-len(".intent")]
     # Golden rows name padacioso intents 'what_time_is_it'; the same
@@ -504,7 +536,10 @@ def describe(obs: StepObservation) -> str:
     if obs.intents:
         text = ", ".join(obs.intents)
         # the reading pipeline matched - say whose story it read
-        return f"{text}, read from {obs.provider}" if obs.provider else text
+        if obs.provider:
+            verb = "played by" if obs.provider_via == "OCP" else "read from"
+            return f"{text}, {verb} {obs.provider}"
+        return text
     if obs.skills:
         return ", ".join(obs.skills)
     if obs.failed:
@@ -534,7 +569,7 @@ def evaluate(step: ScriptStep, obs: StepObservation, timed_out: bool = False) ->
         if expected and own:
             return StepResult(FAIL, f"expected {step.intent_label}, got {', '.join(i.split(':', 1)[1] for i in own)}")
         passed = expected or step.skill_id
-        return StepResult(PASS, f"{passed}, via the reading pipeline" if obs.provider else passed)
+        return StepResult(PASS, f"{passed}, via {obs.provider_via or 'the reading pipeline'}" if obs.provider else passed)
 
     if timed_out and not (obs.intents or obs.skills or obs.failed):
         return StepResult(TIMEOUT, "no response")
@@ -597,6 +632,8 @@ class ScriptRunner:
                  story_start_wait: float = None, stop_wait: float = None,
                  busy_wait: float = None,
                  on_busy: Callable[[int, int, ScriptStep, float], None] = None,
+                 answer: Callable[[str, str, Optional[str]], None] = None,
+                 response_release_wait: float = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.steps = list(steps)
         self.title = title
@@ -616,6 +653,23 @@ class ScriptRunner:
         self.busy_wait = BUSY_WAIT if busy_wait is None else busy_wait
         self._on_busy = on_busy or (lambda *a: None)
         self._stop_session = stop_session
+        # answer(session, text, lang) - sends an utterance into a step's
+        # session; used to cancel a get_response the step left open.
+        # `session` is the full serialized session from the skill's
+        # get_response.enable message: a non-default session lives only
+        # in message context, so the "waiting for an answer" state must
+        # travel with the answer or core routes it as a new utterance
+        # (seen live - a bare session_id left all 6 waits hanging).
+        self._answer = answer
+        self.response_release_wait = (RESPONSE_RELEASE_WAIT if response_release_wait is None
+                                      else response_release_wait)
+        self._pending_response = set()   # skills waiting in get_response in this step's session
+        self._response_session = None    # that session, as the skill serialized it
+        self._step_session = None        # latest full serialization of the step's session seen on the bus
+        self._response_released = threading.Event()
+        self._disable_seen = threading.Event()   # any get_response.disable since the last cancel
+        self._releasing = False
+        self.released_responses = 0      # how many get_response waits the run cancelled
         self._last_msg = 0.0
         self._clock = clock
         self._sleep = sleep
@@ -658,6 +712,25 @@ class ScriptRunner:
             # the default session, e.g. a story being read) don't count
             # toward this step's result - seen live. Audio events are
             # still used for "is TTS playing" below, whatever session.
+            if (not other_session and msg_session and isinstance(context.get("session"), dict)
+                    and len(context["session"]) > 1):
+                # the session as core/skills last serialized it (active
+                # skills, response mode...) - a stop or answer sent with
+                # just the id reaches nobody (seen live)
+                self._step_session = dict(context["session"])
+            if not other_session and msg_type == "skill.converse.get_response.enable":
+                self._pending_response.add((data or {}).get("skill_id") or "?")
+                if isinstance(context.get("session"), dict):
+                    self._response_session = dict(context["session"])
+                self._response_released.clear()
+            elif not other_session and msg_type == "skill.converse.get_response.disable":
+                self._pending_response.discard((data or {}).get("skill_id") or "?")
+                self._disable_seen.set()
+                if not self._pending_response:
+                    self._response_released.set()
+            if self._releasing:
+                # traffic from our own "cancel" - not part of the step's result
+                return
             if not other_session:
                 observe(self._obs, msg_type, data or {}, context, known)
                 if not self._obs.awaiting_provider:
@@ -699,6 +772,11 @@ class ScriptRunner:
             self._speaking = False
             self._last_msg = self._clock()
             self._speech_seen = False
+            self._pending_response = set()
+            self._response_session = None
+            self._step_session = None
+            self._releasing = False
+        self._response_released.set()
         self._handled.clear()
         self._soft_done.clear()
         self._speech_done.set()
@@ -731,8 +809,11 @@ class ScriptRunner:
                 # replied but TTS hasn't started yet (synthesis can take a
                 # few seconds) - wait longer before calling it done
                 waiting_for_tts = bool(self._obs and self._obs.spoke) and not self._speech_seen
+                # the skill took it and now waits for an answer: its handler
+                # won't finish (no utterance.handled) until it gets one
+                asking = bool(self._pending_response)
             needed = self.quiet_after_match * (3 if waiting_for_tts else 1)
-            if matched and not speaking and not awaiting_provider and quiet >= needed:
+            if matched and not speaking and not awaiting_provider and (quiet >= needed or asking):
                 timed_out = False
                 break
 
@@ -742,7 +823,11 @@ class ScriptRunner:
         if timed_out and not self._cancel.is_set():
             with self._lock:
                 silent = not (self._obs and (self._obs.intents or self._obs.skills or self._obs.failed))
-            late, busy_gave_up = self._wait_until_core_is_done(index, total, step)
+                asking = bool(self._pending_response)
+            # a skill waiting for an answer isn't "core still busy": it
+            # would wait out BUSY_WAIT for nothing - the cancel below ends it
+            if not asking:
+                late, busy_gave_up = self._wait_until_core_is_done(index, total, step)
 
         if not self._cancel.is_set():
             # the reading pipeline fetches from its provider after the
@@ -754,7 +839,7 @@ class ScriptRunner:
                 # verdict known - don't sit through (or leave running) a
                 # story that can last minutes; see STORY_START_WAIT
                 self._speech_started.wait(self.story_start_wait)
-                self._stop_step_session()
+                self._end_step_session(step)
                 self._speech_done.wait(self.stop_wait)
             else:
                 with self._lock:
@@ -765,7 +850,7 @@ class ScriptRunner:
                 # nothing it started (counting forever, a metronome, speech
                 # past SPEECH_TIMEOUT) goes on under the next one. Only this
                 # step's own session is touched.
-                self._stop_step_session()
+                self._end_step_session(step)
                 with self._lock:
                     speaking = self._speaking
                 if speaking:
@@ -805,10 +890,45 @@ class ScriptRunner:
                 return self._clock() - started, False
         return None, not self._cancel.is_set()
 
+    def _end_step_session(self, step: ScriptStep) -> None:
+        self._release_pending_response(step)
+        self._stop_step_session()
+
+    def _release_pending_response(self, step: ScriptStep) -> None:
+        """Answer "cancel" to a get_response the step left waiting, so the
+        skill's handler thread is freed (see RESPONSE_RELEASE_WAIT)."""
+        with self._lock:
+            pending = bool(self._pending_response)
+            if pending and self._answer and self.session_id and not self._cancel.is_set():
+                self._releasing = True
+                session = self._response_session or {"session_id": self.session_id}
+            else:
+                return
+        # A quiz answers a cancel by asking its next question - answer
+        # those too, a few rounds at most (seen live: geometry-practice).
+        for _ in range(RELEASE_ROUNDS):
+            self._disable_seen.clear()
+            try:
+                self._answer(session, CANCEL_UTTERANCE, step.lang)
+            except Exception:
+                break
+            if not self._disable_seen.wait(self.response_release_wait):
+                break
+            self.released_responses += 1
+            self._sleep(RELEASE_SETTLE)
+            with self._lock:
+                if not self._pending_response:
+                    break
+                session = self._response_session or session
+        with self._lock:
+            self._releasing = False
+
     def _stop_step_session(self) -> None:
         if self._stop_session and self.session_id and not self._cancel.is_set():
+            with self._lock:
+                session = self._step_session
             try:
-                self._stop_session(self.session_id)
+                self._stop_session(session or self.session_id)
             except Exception:
                 pass
 

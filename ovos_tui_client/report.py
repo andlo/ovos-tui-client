@@ -16,6 +16,8 @@ Private by default:
   hold personal data ("it's 14 degrees in <your town>"). --report-replies
   adds them for a report you only keep yourself.
 """
+import base64
+import gzip
 import json
 import urllib.parse
 from typing import Dict, Optional
@@ -26,6 +28,16 @@ SCHEMA = "ovos-test-report/1"
 
 # Browsers and servers commonly cut URLs around 8 KB.
 MAX_SUBMIT_URL = 8000
+# ...but the part after '#' never goes to a server; browsers take MBs there.
+MAX_FRAGMENT_URL = 1_000_000
+
+
+def report_fragment(report: Dict) -> str:
+    """The report packed for a URL fragment: base64url(gzip(compact JSON)),
+    without padding. A store's page unpacks it in the browser (e.g. with
+    DecompressionStream("gzip")); ~2-5 KB for a one-skill report."""
+    raw = report_json(report, compact=True).encode("utf-8")
+    return base64.urlsafe_b64encode(gzip.compress(raw, 9)).decode("ascii").rstrip("=")
 
 
 def build_report(summary: RunSummary, manifest: Dict, include_replies: bool = False,
@@ -86,13 +98,16 @@ def submit_url(template: str, report: Dict) -> Optional[str]:
     too long for a URL (then the report has to be pasted by hand).
 
     Placeholders (each URL-encoded): {report} the compact report JSON,
+    {report_fragment} the report packed for a '#' fragment (see
+    report_fragment(); much shorter, and never sent to a server),
     {skill_id} the tested skill when there is exactly one, {channel},
     {title}. ovos-tui-client knows no store: the template comes from the
     user (--submit-url, or "submit_url" in the config file), typically
     copied from the store's own instructions."""
     skills = list((report.get("manifest") or {}).get("skills") or {})
     values = {
-        "report": report_json(report, compact=True),
+        "report": report_json(report, compact=True) if "{report}" in template else "",
+        "report_fragment": report_fragment(report) if "{report_fragment}" in template else "",
         "skill_id": skills[0] if len(skills) == 1 else "",
         "channel": (report.get("manifest") or {}).get("channel") or "",
         "title": report.get("title") or "",
@@ -100,4 +115,6 @@ def submit_url(template: str, report: Dict) -> Optional[str]:
     url = template
     for key, value in values.items():
         url = url.replace("{" + key + "}", urllib.parse.quote(value, safe=""))
-    return url if len(url) <= MAX_SUBMIT_URL else None
+    if "{report}" in template:
+        return url if len(url) <= MAX_SUBMIT_URL else None
+    return url if len(url) <= MAX_FRAGMENT_URL else None

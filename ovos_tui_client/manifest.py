@@ -27,6 +27,7 @@ home path, and nothing from skill settings (API keys live there). The
 bus address is recorded only as "local" or "remote".
 """
 import importlib.metadata
+import re
 import json
 import platform
 import time
@@ -204,4 +205,44 @@ def build_manifest(host: str, lang: str, tested_skill_ids: Iterable[str],
                               for skill_id in tested}
     if installed_skills is not None:
         manifest["installed_skills"] = len(installed_skills)
+        # Every skill on the device, not only the tested ones - so a
+        # reader can tell what the test ran alongside (e.g. whether a
+        # given set of skills was present). Skill ids and versions only.
+        manifest["installed"] = installed_list(installed_skills, manifest["skills"], local)
+    if local:
+        manifest["pipeline_plugins"] = pipeline_plugins()
     return manifest
+
+
+def installed_list(installed_skills: Dict[str, Optional[bool]], known: Dict, local: bool) -> list:
+    rows = []
+    for skill_id in sorted(installed_skills):
+        info = known.get(skill_id)
+        if info is None and local:
+            dist = find_skill_distribution(skill_id)
+            info = {"package": dist[0] if dist else None, "version": dist[1] if dist else None}
+        info = info or {}
+        rows.append({"id": skill_id, "package": info.get("package"), "version": info.get("version"),
+                     "active": installed_skills.get(skill_id)})
+    return rows
+
+
+def pipeline_plugins() -> Dict[str, Optional[str]]:
+    """{distribution: version} of the installed pipeline plugins
+    (entry point group 'opm.pipeline') - which stages *could* run; the
+    order that does run is config.pipeline."""
+    out = {}
+    try:
+        eps = importlib.metadata.entry_points(group="opm.pipeline")
+    except Exception:
+        return out
+    for ep in eps:
+        dist = getattr(ep, "dist", None)
+        if dist is None:
+            continue
+        name = getattr(dist, "name", None) or dist.metadata.get("Name")
+        if name:
+            # canonical form (PEP 503), as pip and constraints files write it
+            name = re.sub(r"[-_.]+", "-", name).lower()
+            out[name] = getattr(dist, "version", None)
+    return dict(sorted(out.items()))
