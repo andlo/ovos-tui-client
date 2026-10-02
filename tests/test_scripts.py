@@ -224,13 +224,27 @@ def test_runner_judges_each_step_from_fed_messages():
 
 
 def test_runner_accepts_handler_complete_as_end_on_older_core():
+    # the handler's messages carry the step's session (ovos-workshop
+    # forwards the utterance's context)
     def reply(r, step):
-        r.feed("mycroft.skill.handler.start", {}, {"skill_id": WEATHER})
+        r.feed("mycroft.skill.handler.start", {}, {"skill_id": WEATHER,
+                                                   "session": {"session_id": r.session_id}})
         r.feed("mycroft.skill.handler.complete")
 
     runner, done = _runner([_step()], reply)
     runner.run()
     assert done == [(1, PASS)]
+
+
+def test_sessionless_handler_of_another_skill_is_no_claim():
+    # background activity (a scheduled event's handler) arrives without a
+    # session and must not be read as the step's result (ovos-routing-judge)
+    obs = StepObservation(session_id="step")
+    observe(obs, "mycroft.skill.handler.start", {}, {"skill_id": "ovos-skill-news.openvoiceos"},
+            [WEATHER, "ovos-skill-news.openvoiceos"])
+    assert obs.skills == []
+    observe(obs, f"{WEATHER}:weather.intent", {}, {}, [WEATHER])
+    assert evaluate(_step(), obs).status == PASS
 
 
 def test_runner_times_out_when_nothing_happens():
