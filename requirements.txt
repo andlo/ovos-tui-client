@@ -17,3 +17,5 @@ ovos-config
 # see find_log_dir()) rather than crashing, but this floor means that
 # fallback path shouldn't normally be needed.
 ovos-utils>=0.8.0
+# the routing judge shared with store CI (#60): same verdicts on a device and in CI
+ovos-routing-judge>=0.0.1,<0.1

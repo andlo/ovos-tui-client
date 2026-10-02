@@ -40,6 +40,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
+from ovos_routing_judge import Claim, judge, normalize_intent
+from ovos_routing_judge.claim import INTENT as INTENT_TIER, SKILL as SKILL_TIER
+from ovos_routing_judge.claim import is_converse_capture  # noqa: F401 - re-exported
+from ovos_routing_judge.judge import CAPTURED, HANG, HIT, WRONG_INTENT
+from ovos_routing_judge.judge import describe as judge_describe
+
 from ovos_tui_client.skill_examples import find_skill_examples, guess_module_name
 
 SCRIPTS_DIR = Path("~/.config/ovos-tui-client/scripts").expanduser()
@@ -127,6 +133,9 @@ class ScriptStep:
     lang: Optional[str] = None
     skill_id: Optional[str] = None
     intent_label: Optional[str] = None
+    # "ocp": the row must reach its skill through OCP's search (golden files
+    # say so with `"intent_type": "ocp"`), see ovos-routing-judge
+    intent_type: Optional[str] = None
 
     @property
     def has_expectation(self) -> bool:
@@ -202,6 +211,7 @@ def parse_script(text: str, lang: Optional[str] = None, default_skill_id: Option
             lang=row_lang or lang,
             skill_id=row.get("skill_id") or default_skill_id,
             intent_label=row.get("intent_label") or None,
+            intent_type=row.get("intent_type") or None,
         ))
     return items
 
@@ -497,29 +507,33 @@ def list_user_scripts(scripts_dir: Path = SCRIPTS_DIR) -> List[Path]:
 # --------------------------------------------------------------------
 
 @dataclass
-class StepObservation:
-    intents: List[str] = field(default_factory=list)  # "<skill_id>:<intent>"
-    skills: List[str] = field(default_factory=list)
-    failed: bool = False
-    spoke: List[str] = field(default_factory=list)
-    # a common-reading search went out and no provider has been fetched
-    # from yet - see PROVIDER_WAIT
-    awaiting_provider: bool = False
-    provider: str = ""  # the provider skill the reading pipeline fetched from / OCP played
-    provider_via: str = ""  # "the reading pipeline" or "OCP"
-    last_speak_type: str = ""  # see observe(): drops a dual-emitted duplicate
+class StepObservation(Claim):
+    """What one step's session showed - an ovos-routing-judge Claim (#60),
+    the same judge a store's CI uses, so a CI result reads the same here.
+    Kept under this name for the runner and the UI; `skills` is the
+    judge's `handlers`, `known` the last skill ids it was given."""
+    known: set = field(default_factory=set)
 
-    def _add(self, lst, value):
-        if value and value not in lst:
-            lst.append(value)
+    @property
+    def skills(self) -> List[str]:
+        return self.handlers
 
-    def add_intent(self, name: str):
-        self._add(self.intents, name)
-        if ":" in name:
-            self._add(self.skills, name.split(":", 1)[0])
+    def add_intent(self, name: str) -> None:
+        """A dispatched '<skill_id>:<intent>' (tests, and callers that
+        already know what matched)."""
+        if name:
+            self._add(INTENT_TIER, name.split(":", 1)[0] if ":" in name else name, name, "add_intent")
 
-    def add_skill(self, skill_id: str):
-        self._add(self.skills, skill_id)
+    def add_skill(self, skill_id: str) -> None:
+        self._add(SKILL_TIER, skill_id, "", "add_skill")
+
+    def observe(self, msg, known_ids=()) -> None:  # noqa: D401 - Claim.observe plus bookkeeping
+        known = set(known_ids)
+        self.known |= known
+        super().observe(msg, known)
+        # "nobody matched" ends a step like an intent failure does
+        if self.unmatched:
+            self.failed = True
 
 
 def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
@@ -528,111 +542,12 @@ def observe(obs: StepObservation, msg_type: str, data: dict, context: dict,
     ids plus the step's expected one) is what tells a dispatched
     '<skill_id>:<intent>' message apart from other colon-containing
     message types like 'recognizer_loop:utterance'."""
-    data = data or {}
-    context = context or {}
-    known = set(known_skills)
-
-    if msg_type == "ovos.intent.matched":
-        name = data.get("intent_name") or data.get("intent_type") or data.get("match_type") or ""
-        skill = data.get("skill_id") or context.get("skill_id")
-        if name and ":" not in name and skill:
-            name = f"{skill}:{name}"
-        if name:
-            obs.add_intent(name)
-        if skill:
-            obs.add_skill(skill)
-        return
-
-    if msg_type.startswith("ocp:"):
-        # the OCP media pipeline took it ('start a metronome' -> ocp:play,
-        # seen live) - there's no skill id at this point, only the action;
-        # which media skill it picks comes with ovos.common_play.play
-        obs.add_intent(msg_type)
-        if msg_type == "ocp:play":
-            obs.awaiting_provider = True
-        return
-
-    if ":" in msg_type:
-        prefix = msg_type.split(":", 1)[0]
-        if prefix in known or _looks_like_component_id(prefix):
-            obs.add_intent(msg_type)
-            return
-
-    # A skill (or pipeline plugin) waiting in get_response()/converse
-    # captures the utterance before any intent matching - dispatched as
-    # '<id>.converse.get_response' (seen live on ovos-core 2.1.1, from
-    # both a skill and ovos-common-reading-pipeline-plugin).
-    if ".converse." in msg_type:
-        owner, _, rest = msg_type.partition(".converse.")
-        if owner in known or _looks_like_component_id(owner):
-            obs.add_intent(f"{owner}:converse.{rest}")
-            return
-
-    if msg_type == "mycroft.skill.handler.start":
-        obs.add_skill(context.get("skill_id") or data.get("skill_id"))
-    elif msg_type.startswith(FALLBACK_PREFIX) and msg_type.endswith(".response"):
-        if data.get("result"):
-            obs.add_skill(msg_type[len(FALLBACK_PREFIX):-len(".response")])
-    elif msg_type == "question:action":
-        obs.add_skill(data.get("skill_id"))
-    elif msg_type == OCP_PLAY:
-        # OCP picked a result - its media carries the skill that serves it
-        media = data.get("media") or {}
-        skill = media.get("skill_id") if isinstance(media, dict) else None
-        if skill and skill != OCP_ID:
-            obs.provider, obs.provider_via = skill, "OCP"
-            obs.add_skill(skill)
-        obs.awaiting_provider = False
-    elif msg_type == READING_SEARCH:
-        obs.awaiting_provider = True
-    elif msg_type.startswith(READING_FETCH_PREFIX) and not msg_type.endswith(".response"):
-        # common-reading pipeline picked this provider skill's content
-        obs.provider = msg_type[len(READING_FETCH_PREFIX):]
-        obs.provider_via = "the reading pipeline"
-        obs.add_skill(obs.provider)
-        obs.awaiting_provider = False
-    elif msg_type in ("intent_failure", "complete_intent_failure"):
-        obs.failed = True
-    elif msg_type in ("speak", "ovos.utterance.speak"):
-        # both names: the classic one and the spec one newer cores use
-        # (see bus.SPEAK_TYPES). A dual-emitting core sends the same
-        # sentence under both, back to back - count it once.
-        utterance = data.get("utterance")
-        if utterance and not (obs.spoke and obs.spoke[-1] == utterance and obs.last_speak_type != msg_type):
-            obs.spoke.append(utterance)
-        obs.last_speak_type = msg_type
-
-
-_NON_INTENT_PREFIXES = ("mycroft.", "ovos.common_play", "recognizer_loop", "ovos.utterance")
-
-
-def _looks_like_component_id(prefix: str) -> bool:
-    """'<something>.<author>' ids that aren't installed skills but still
-    dispatch '<id>:<intent>' - pipeline plugins like
-    'ovos-common-reading-pipeline-plugin.andlo:read_content' (seen live)."""
-    return ("." in prefix and " " not in prefix and "/" not in prefix
-            and not prefix.startswith(_NON_INTENT_PREFIXES))
-
-
-def is_converse_capture(intent: str) -> bool:
-    return ":converse." in intent
+    obs.observe({"type": msg_type, "data": data or {}, "context": context or {}}, known_skills)
 
 
 def _norm_intent(name: str) -> str:
-    skill, _, label = (name or "").strip().partition(":")
-    skill = skill.lower()
-    # Older skill releases name their intents in CamelCase ('CancelAlert',
-    # ovos-skill-alerts 0.1.28 on the testing channel) where the golden
-    # file on the repo's default branch already says 'cancel_alert' -
-    # split CamelCase before comparing so both count as the same intent.
-    label = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", label).lower()
-    if label.endswith(".intent"):
-        label = label[:-len(".intent")]
-    # Golden rows name padacioso intents 'what_time_is_it'; the same
-    # intent dispatched via padatious is 'what.time.is.it.intent' (seen
-    # live on ovos-skill-date-time) - treat '.', '_', '-' and ' ' alike.
-    label = re.sub(r"[._\- ]+", "_", label)
-    return f"{skill}:{label}"
+    return normalize_intent(name)
+
 
 
 PASS, FAIL, TIMEOUT, SENT = "pass", "fail", "timeout", "sent"
@@ -642,54 +557,43 @@ PASS, FAIL, TIMEOUT, SENT = "pass", "fail", "timeout", "sent"
 class StepResult:
     status: str
     detail: str
+    kind: str = ""  # the judge's verdict (ovos-routing-judge): hit, wrong_intent, captured, other, unhandled, hang
 
 
 def describe(obs: StepObservation) -> str:
-    captures = [i for i in obs.intents if is_converse_capture(i)]
-    if captures:
-        skill = captures[0].split(":", 1)[0]
-        return f"{skill} (captured by its pending get_response/converse - the skill is waiting for an answer)"
-    if obs.intents:
-        text = ", ".join(obs.intents)
-        # the reading pipeline matched - say whose story it read
-        if obs.provider:
-            verb = "played by" if obs.provider_via == "OCP" else "read from"
-            return f"{text}, {verb} {obs.provider}"
-        return text
-    if obs.skills:
-        return ", ".join(obs.skills)
-    if obs.failed:
-        return "no skill matched"
-    return "nothing matched"
+    return judge_describe(obs)
 
 
 def evaluate(step: ScriptStep, obs: StepObservation, timed_out: bool = False) -> StepResult:
     """PASS when the expected intent (or, for rows without an
     intent_label, the expected skill) handled the utterance; FAIL when
     something else did; TIMEOUT when nothing at all happened in time;
-    SENT for plain steps with no expectation (just shows what matched)."""
+    SENT for plain steps with no expectation (just shows what matched).
+    The verdict itself is ovos-routing-judge's (#60)."""
     if not step.has_expectation:
         if timed_out and not (obs.intents or obs.skills or obs.failed):
             return StepResult(TIMEOUT, "no response")
         return StepResult(SENT, describe(obs))
 
     expected = step.expected_intent
-    # a pass names the skill too, like a failure does ("expected <skill>:<intent>")
-    if expected and any(_norm_intent(i) == _norm_intent(expected) for i in obs.intents):
-        return StepResult(PASS, expected)
-
-    if step.skill_id in obs.skills:
-        own = [i for i in obs.intents if i.split(":", 1)[0] == step.skill_id]
-        if any(is_converse_capture(i) for i in own):
-            return StepResult(FAIL, f"got {describe(obs)}")
-        if expected and own:
-            return StepResult(FAIL, f"expected {step.intent_label}, got {', '.join(i.split(':', 1)[1] for i in own)}")
+    v = judge(obs, [step.skill_id], expected=expected, intent_type=step.intent_type,
+              hung=timed_out, known_ids=set(obs.known) | {step.skill_id}, strict_known=False)
+    if v.kind == HIT:
+        # a pass names the skill too, like a failure does ("expected <skill>:<intent>")
         passed = expected or step.skill_id
-        return StepResult(PASS, f"{passed}, via {obs.provider_via or 'the reading pipeline'}" if obs.provider else passed)
+        if v.via in ("provider", "ocp") and obs.provider:
+            return StepResult(PASS, f"{passed}, via {obs.provider_via}", v.kind)
+        return StepResult(PASS, passed, v.kind)
+    if v.kind == WRONG_INTENT:
+        own = [i.split(":", 1)[1] for i in v.fired if ":" in i]
+        got = ", ".join(own) or describe(obs)
+        return StepResult(FAIL, f"expected {step.intent_label}, got {got}", v.kind)
+    if v.kind == CAPTURED:
+        return StepResult(FAIL, f"got {describe(obs)}", v.kind)
+    if v.kind == HANG and not (obs.intents or obs.skills or obs.failed):
+        return StepResult(TIMEOUT, "no response", v.kind)
+    return StepResult(FAIL, f"expected {expected or step.skill_id}, got {describe(obs)}", v.kind)
 
-    if timed_out and not (obs.intents or obs.skills or obs.failed):
-        return StepResult(TIMEOUT, "no response")
-    return StepResult(FAIL, f"expected {expected or step.skill_id}, got {describe(obs)}")
 
 
 # --------------------------------------------------------------------
@@ -877,11 +781,13 @@ class ScriptRunner:
     def _run_step(self, index: int, step: ScriptStep):
         total = len(self.steps)
         with self._lock:
-            self._obs = StepObservation()
             # Each step gets its own OVOS session (the sender puts it in
             # the utterance's context - see app._script_send), so leftover
             # converse/get_response state can't capture it.
             self.session_id = f"ovos-tui-test-{uuid.uuid4().hex[:12]}"
+            # judged on this session only: a sessionless message from some
+            # other skill's background activity is no claim (ovos-routing-judge)
+            self._obs = StepObservation(session_id=self.session_id)
             self.session_ids.append(self.session_id)
             self._expected_skill = step.skill_id
             self._known = set(self._known_skills() or ())
