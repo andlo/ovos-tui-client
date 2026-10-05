@@ -276,6 +276,25 @@ def known_causes(step, diag: Diagnosis, obs, ctx: Context, log: List[str]) -> Op
     return None
 
 
+# --- how a passing step matched (#49) -------------------------------------------
+
+def padatious_conf(step, obs, request: Request) -> Optional[float]:
+    """padatious' score for the intent that won, when padatious is what
+    matched (ovos-core 3.x names the stage; on 2.x it's tried for any
+    intent): the one score OVOS can give afterwards, for comparing two
+    installs. None otherwise."""
+    winners = [i for i in (getattr(obs, "intents", None) or []) if ":" in i]
+    stage = getattr(obs, "stage", None)
+    if not winners or (stage and "padatious" not in stage):
+        return None
+    r = request("intent.service.padatious.get", {"utterance": step.utterance, "lang": step.lang},
+                "intent.service.padatious.reply", 3.0)
+    pad = (r or {}).get("intent") if r else None
+    if isinstance(pad, dict) and same_intent(pad.get("name"), winners[0]):
+        return float(pad.get("conf") or 0)
+    return None
+
+
 # --- reading the machine (local only) -------------------------------------------
 
 def find_intent_lines(skill_id: str, intent: str, lang: str) -> Optional[List[str]]:

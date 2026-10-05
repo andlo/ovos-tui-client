@@ -277,7 +277,7 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
 
     # #48: why a step failed. On the OVOS machine its logs, versions and
     # intent files can be read too; over a remote bus only the bus probes.
-    from ovos_tui_client.diagnose import diagnose, local_context, remote_context
+    from ovos_tui_client.diagnose import diagnose, local_context, padatious_conf, remote_context
     from ovos_tui_client.logs import find_log_dir
     from ovos_tui_client.manifest import LOCAL_HOSTS
     local = (args.host or "").strip().lower() in LOCAL_HOSTS
@@ -296,6 +296,7 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
         on_step_done=_step_done,
         diagnose=lambda step, result, obs, since: diagnose(
             step, result, obs, bus.request, ctx, since).as_dict(),
+        match_conf=lambda step, obs: padatious_conf(step, obs, bus.request),
         known_skills=lambda: list(installed),
         stop_session=bus.stop_session,
         on_busy=lambda i, n, step, wait: log(

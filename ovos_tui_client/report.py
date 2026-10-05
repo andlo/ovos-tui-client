@@ -57,6 +57,11 @@ def build_report(summary: RunSummary, manifest: Dict, include_replies: bool = Fa
             "handled_by": summary.handled_by.get(i) or None,
             "answered": bool(replies),
         }
+        match = summary.matches.get(i)
+        if match and (match.get("stage") or match.get("slots") or match.get("conf") is not None):
+            # #49: the pipeline plugin, the slots and padatious' score, for
+            # comparing two installs (slot values come from the utterance)
+            row["match"] = {k: v for k, v in match.items() if v not in (None, {}, "")}
         if result.status in (FAIL, TIMEOUT):
             row["detail"] = result.detail
             if getattr(result, "diagnosis", None):

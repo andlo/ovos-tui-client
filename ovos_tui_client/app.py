@@ -1585,7 +1585,7 @@ class OVOSTUIApp(App):
     def _run_steps(self, title: str, steps: list) -> None:
         """Worker thread: builds and runs a ScriptRunner, with every UI
         touch marshalled through call_from_thread()."""
-        from ovos_tui_client.diagnose import diagnose, local_context, remote_context
+        from ovos_tui_client.diagnose import diagnose, local_context, padatious_conf, remote_context
         installed = dict(self.installed_skills or {})
         ctx = local_context(installed, self.log_dir) if self.is_local else remote_context(installed)
         runner = ScriptRunner(
@@ -1602,6 +1602,8 @@ class OVOSTUIApp(App):
             # #48: why a step failed, asked before the next step starts
             diagnose=lambda step, result, obs, since: diagnose(
                 step, result, obs, self.bus.request, ctx, since).as_dict(),
+            # #49: padatious' score for a padatious match, for comparing installs
+            match_conf=lambda step, obs: padatious_conf(step, obs, self.bus.request),
         )
         self.script_runner = runner
         self.call_from_thread(self._script_started, title, len(steps))
@@ -2504,6 +2506,11 @@ def build_arg_parser():
     headless.add_argument("--no-share", action="store_true",
                           help="don't serve the report on a link, only save it")
 
+    parser.add_argument("--compare", nargs=2, metavar=("A", "B"), default=None,
+                        help="compare two saved results (.report.json) step by step, e.g. a testing and an "
+                             "alpha install; saves .md + .comparison.json (to --output, or the results "
+                             "folder). Exit code 1 if anything regressed")
+
     setch = parser.add_argument_group(
         "release channel setup",
         "Make this install exactly an OVOS release channel, the way the channel's own tests "
@@ -2547,6 +2554,9 @@ def run():
     if args.set_channel:
         from ovos_tui_client.setchannel import cli as set_channel_cli
         sys.exit(set_channel_cli(args))
+    if args.compare:
+        from ovos_tui_client.compare import cli as compare_cli
+        sys.exit(compare_cli(args.compare[0], args.compare[1], output=args.output))
     if args.run:
         from ovos_tui_client.headless import run_headless
         sys.exit(run_headless(args, tool_version=_ovos_tui_version()))
