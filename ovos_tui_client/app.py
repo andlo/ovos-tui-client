@@ -1717,9 +1717,41 @@ class OVOSTUIApp(App):
                 self._write_status(line)
                 self._channel_startup_step_done()
             self._refresh_sub_title()
-            if then is not None:
-                then()
         self.call_from_thread(_done)
+        # #64: how clean the install is on that channel. Worked out after the
+        # channel line is out, so pip check never holds back it or 'OK ready.'
+        h = self._install_health(result)
+        self.call_from_thread(self._apply_install_health, result, h, announce, then)
+
+    def _install_health(self, result):
+        """Install health on the detected channel (#64): packages behind the
+        channel, pre-releases nothing asks for, pip check. No pip resolve,
+        so seconds, not minutes. Runs in a worker thread; None if unknown."""
+        res = result or {}
+        ch = res.get("channel") or res.get("declared")
+        text = (res.get("constraints") or {}).get(ch) if ch else None
+        if not (self.is_local and ch and text):
+            return None
+        try:
+            from ovos_tui_client.setchannel import Pip, health, installed_dists
+            return health(text, installed_dists(), Pip().check())
+        except Exception:  # noqa: BLE001 - informational only
+            return None
+
+    def _apply_install_health(self, result, h, announce: bool = False, then=None) -> None:
+        """Adds ' · 3 conflicts' etc to the header, and at startup says so."""
+        if h is not None and result is not None and self.channel_result is result:
+            from ovos_tui_client.setchannel import health_counts
+            ch = result.get("channel") or result.get("declared")
+            result["health"] = h
+            counts = health_counts(h)
+            self._channel_short = self._channel_short.split(" · ")[0] + "".join(f" · {c}" for c in counts)
+            self._refresh_sub_title()
+            if announce and counts:
+                self._write_status(f"OVOS: not quite {ch}: {', '.join(counts)}. Ctrl+P → 'OVOS: Release "
+                                   f"channel' shows what, and 'Set channel: {ch}…' fixes what it can.")
+        if then is not None:
+            then()
 
     def _channel_startup_step_done(self) -> None:
         """The channel's part of startup is over: its line is written, or

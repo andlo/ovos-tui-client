@@ -160,9 +160,12 @@ def build_manifest(host: str, lang: str, tested_skill_ids: Iterable[str],
                    installed_skills: Optional[Dict[str, Optional[bool]]] = None,
                    channel: Optional[str] = None, mycroft_conf_override: Optional[str] = None,
                    tool_version: str = "unknown", now: Optional[float] = None,
-                   fetch=None, channel_result: Optional[tuple] = None) -> Dict:
+                   fetch=None, channel_result: Optional[tuple] = None,
+                   channel_health: Optional[Dict] = None) -> Dict:
     """channel_result: (channel, source, note) already settled by the
-    caller (the TUI's report window), so nothing is checked again."""
+    caller (the TUI's report window), so nothing is checked again.
+    channel_health: #64's health on that channel, if the caller has it
+    (else it is worked out here for a local install on a known channel)."""
     local = (host or "").strip().lower() in LOCAL_HOSTS
     tested = sorted(set(tested_skill_ids))
     stack = local_stack() if local else {}
@@ -211,7 +214,28 @@ def build_manifest(host: str, lang: str, tested_skill_ids: Iterable[str],
         manifest["installed"] = installed_list(installed_skills, manifest["skills"], local)
     if local:
         manifest["pipeline_plugins"] = pipeline_plugins()
+        if detected in channel_mod.CHANNELS:
+            ch_health = channel_health if channel_health is not None else health_on(detected, fetch)
+            if ch_health is not None:
+                manifest["channel_health"] = ch_health
     return manifest
+
+
+def health_on(channel: str, fetch=None) -> Optional[Dict]:
+    """#64 for a report: how clean this install is on `channel` - so a
+    store can tell a failure on a clean channel from one on a drifted
+    install. None when the constraints can't be fetched."""
+    try:
+        from ovos_tui_client.setchannel import Pip, health, installed_dists
+        text = (fetch or channel_mod.fetch_text)(channel_mod.CONSTRAINTS_URL.format(channel=channel))
+        if not text:
+            return None
+        h = health(text, installed_dists(), Pip().check())
+        return {"behind": {n: {"installed": v, "channel": s} for n, (v, s) in sorted(h["behind"].items())},
+                "prereleases": dict(sorted(h["prereleases"].items())),
+                "conflicts": h["conflicts"]}
+    except Exception:  # noqa: BLE001 - a manifest must never break a run
+        return None
 
 
 def installed_list(installed_skills: Dict[str, Optional[bool]], known: Dict, local: bool) -> list:

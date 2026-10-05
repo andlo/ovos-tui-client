@@ -206,7 +206,7 @@ def detect(stack: Dict[str, str], declared: Tuple = (None, None, None),
     d_channel, d_source, d_note = declared
     result = {"declared": d_channel, "declared_source": d_source, "declared_note": d_note,
               "checked": [], "unreachable": [], "problems": {}, "matches": [],
-              "channel": None, "source": None}
+              "channel": None, "source": None, "constraints": {}}
     if stack.get("ovos-core"):
         for ch in CHANNELS:
             text = fetch(CONSTRAINTS_URL.format(channel=ch))
@@ -214,6 +214,7 @@ def detect(stack: Dict[str, str], declared: Tuple = (None, None, None),
                 result["unreachable"].append(ch)
                 continue
             result["checked"].append(ch)
+            result["constraints"][ch] = text  # the install health (#64) reads it too
             problems = channel_problems(stack, ch, text, _newest)
             result["problems"][ch] = problems
             if not problems:
@@ -241,9 +242,11 @@ Each channel is one constraints file in OpenVoiceOS/OpenVoiceOS, and the
 versions in it move over time. That is why the channel is worked out
 against the files as they are today.
 
-Only the core is compared here. An install can have the channel's core
-and still not be the channel: other packages below its versions,
-third-party betas, plugins that conflict with the core.
+The channel is worked out from the core. An install can have the
+channel's core and still not be the channel: other packages below its
+versions, third-party betas, plugins that conflict with the core. *How
+clean this install is* (above, and in the header: `OVOS alpha · 3
+conflicts`) checks that.
 
 ## A clean install on a channel
 
@@ -390,4 +393,7 @@ def channel_markdown(result: Dict, stack: Dict[str, str], remote: bool = False) 
             lines += ["| Package | Installed |", "|---|---|"]
             lines += [f"| {pkg} | {v} |" for pkg, v in sorted(stack.items())]
             lines += [""]
+        if result.get("health") is not None:  # #64, filled in by the app
+            from ovos_tui_client.setchannel import health_markdown
+            lines += [health_markdown(result["health"], result.get("channel") or result.get("declared")), ""]
     return "\n".join(lines) + "\n" + CHANNELS_TEXT + "\n" + SWITCH_TEXT
