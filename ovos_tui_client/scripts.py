@@ -954,6 +954,7 @@ class ScriptRunner:
             if not asking:
                 late, busy_gave_up = self._wait_until_core_is_done(index, total, step)
 
+        second_stop_worked = False   # #74: silenced only by the stop for everything
         if not self._cancel.is_set():
             # the reading pipeline fetches from its provider after the
             # handler is done - wait for that before judging the step
@@ -1003,6 +1004,10 @@ class ScriptRunner:
                 if self._kept_talking_after_stop():
                     with self._lock:
                         self.halted_by = stuck_now
+                else:
+                    with self._lock:
+                        self._stuck = None   # the second stop worked: later steps aren't affected
+                    second_stop_worked = True
             else:
                 stuck_now = None
             if self.settle:
@@ -1024,6 +1029,9 @@ class ScriptRunner:
         # #74: warnings, whatever the verdict
         if affected:
             result.notes.append(f"possibly affected: {affected} was still speaking when this step started")
+        elif stuck_now and second_stop_worked:
+            result.notes.append(f"did not stop: {stuck_now} was still speaking {self.stop_wait:g} s after stop; "
+                                "a stop for everything ended it")
         elif stuck_now:
             result.notes.append(f"did not stop: {stuck_now} was still speaking {self.stop_wait:g} s after stop")
         return result, obs

@@ -549,8 +549,11 @@ def test_speech_still_going_after_the_speech_timeout_is_stopped():
 
     runner, done = _runner([_step()], reply, stop_session=stopped.append,
                            speech_timeout=0.2, stop_wait=0.1)
-    runner.run()
-    assert stopped == runner.session_ids
+    summary = runner.run()
+    # stopped in its own session - and, as it never goes quiet, asked a
+    # second time before the run gives up on it (#74)
+    assert stopped and set(stopped) == set(runner.session_ids)
+    assert summary.halted_by
 
 
 def test_a_slow_announcement_before_the_fetch_does_not_fail_the_step():

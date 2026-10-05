@@ -1596,7 +1596,7 @@ class OVOSTUIApp(App):
             on_step_done=lambda i, n, step, result, obs: self.call_from_thread(self._script_step_done, i, n, step, result),
             known_skills=lambda: list(self.installed_skills),
             stop_session=self.bus.stop_session,
-            stop_all=self.bus.stop_all,
+            stop_all=getattr(self.bus, "stop_all", None),
             on_busy=lambda i, n, step, wait: self.call_from_thread(
                 self._write_status,
                 f"[{i}/{n}] no response yet: waiting up to {wait / 60:.0f} min for OVOS to finish it before "

@@ -304,7 +304,7 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
             "'possibly affected' (Ctrl+C stops after the current step)"),
         known_skills=lambda: list(installed),
         stop_session=bus.stop_session,
-        stop_all=bus.stop_all,
+        stop_all=getattr(bus, "stop_all", None),
         on_busy=lambda i, n, step, wait: log(
             f"[{i}/{n}] ⏳ no response yet; waiting up to {wait / 60:.0f} min for OVOS to finish it "
             "before the next step (OVOS handles one sentence at a time)"),
@@ -571,7 +571,7 @@ def _route_profiles(args, bus, installed, profiles, log):
         send=lambda i, n, step: bus.send_utterance(step.utterance, session_id=runner.session_id, lang=step.lang,
                                                    script={"title": "Profile report", "i": i, "n": n}),
         on_step_done=lambda i, n, step, result, obs: (i % 25 == 0 or i == n) and log(f"  {i}/{n} done"),
-        known_skills=lambda: list(installed), stop_session=bus.stop_session, stop_all=bus.stop_all,
+        known_skills=lambda: list(installed), stop_session=bus.stop_session, stop_all=getattr(bus, "stop_all", None),
         answer=lambda session, text, lang: bus.send_utterance(text, lang=lang, session_id=session),
     )
     bus.on_message(runner.feed)
