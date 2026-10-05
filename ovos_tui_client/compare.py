@@ -84,8 +84,14 @@ def manifest_differences(a: Dict, b: Dict) -> List[Dict]:
     ca, cb = ma.get("config") or {}, mb.get("config") or {}
     add("secondary langs", ", ".join(ca.get("secondary_langs") or []) or None,
         ", ".join(cb.get("secondary_langs") or []) or None)
-    add("pipeline", " → ".join(ca.get("pipeline") or []) or None,
-        " → ".join(cb.get("pipeline") or []) or None)
+    pa, pb = list(ca.get("pipeline") or []), list(cb.get("pipeline") or [])
+    if pa != pb:
+        added = [p for p in pb if p not in pa]
+        dropped = [p for p in pa if p not in pb]
+        moved = not added and not dropped
+        out.append({"what": "pipeline", "a": "the same stages in another order" if moved else
+                    ("; ".join(f"- {p}" for p in dropped) or "-"),
+                    "b": "" if moved else ("; ".join(f"+ {p}" for p in added) or "-")})
     add("install health", _health_counts(ma), _health_counts(mb))
     return out
 
@@ -156,7 +162,10 @@ def step_changes(ra: Dict, rb: Dict) -> List[Dict]:
     ma, mb = _match(ra), _match(rb)
     if ma.get("stage") and mb.get("stage"):   # 2.x doesn't name the stage
         add("stage", ma.get("stage"), mb.get("stage"))
-    add("slots", ma.get("slots") or {}, mb.get("slots") or {})
+    # cleaned again: a report saved before the cleaning has utterance_id
+    # (new every run) and such among its slots
+    from ovos_tui_client.scripts import clean_slots
+    add("slots", clean_slots(ma.get("slots") or {}), clean_slots(mb.get("slots") or {}))
     ca, cb = ma.get("conf"), mb.get("conf")
     if ca is not None and cb is not None and abs(float(ca) - float(cb)) >= CONF_STEP:
         add("padatious score", round(float(ca), 2), round(float(cb), 2))

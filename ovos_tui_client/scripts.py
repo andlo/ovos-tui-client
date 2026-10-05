@@ -510,16 +510,17 @@ def list_user_scripts(scripts_dir: Path = SCRIPTS_DIR) -> List[Path]:
 DISPATCH_KEYS = frozenset({
     "utterances", "utterance", "lang", "typed_slots", "__tags__", "intent_type", "target",
     "confidence", "conf", "skill_id", "intent_name", "utterance_remainder", "sentence",
-    "session", "context",
+    "session", "context", "utterance_id", "pipeline_id", "match_type",
 })
 
 
 def clean_slots(slots: dict) -> Dict[str, str]:
     """Slot name -> value, without the '<skill>:<slot>' duplicates
-    ovos-core 3.x adds next to each plain one."""
+    ovos-core 3.x adds next to each plain one, and without what isn't a
+    slot (a new utterance_id every run, the score m2v puts there ...)."""
     out = {}
     for k, v in (slots or {}).items():
-        if ":" in str(k) or isinstance(v, (dict, list)) or v is None:
+        if ":" in str(k) or str(k) in DISPATCH_KEYS or isinstance(v, (dict, list)) or v is None:
             continue
         out[str(k)] = str(v)
     return dict(sorted(out.items()))
