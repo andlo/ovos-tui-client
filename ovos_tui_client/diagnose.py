@@ -185,6 +185,9 @@ def stage1(step, result, obs, facts: Dict, ctx: Context) -> Diagnosis:
         who = would.get("skill_id") or "fallback"
         what = short(name) if ":" in name else name
         lines.append(f"{who} wins it: {what} via {stage}")
+        if want and short(want) in (ev.get("registered") or []):
+            where = f" for {lang}" if facts.get("registered") is not None else ""
+            lines.append(f"{want} is registered{where}; this sentence just scores higher for {what}")
         if isinstance(pad, dict) and pad.get("name") and not same_intent(pad.get("name"), want):
             lines.append(f"padatious' best guess: {pad['name']} ({float(pad.get('conf') or 0):.2f})")
         return Diagnosis(OTHER_WON, lines, evidence=ev)
