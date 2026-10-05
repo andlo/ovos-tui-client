@@ -1,7 +1,13 @@
-"""Discovers and restarts OVOS's systemd --user services. Deliberately
-scoped to user-level systemd (matching this project's assumption that
-OVOS runs under a per-user venv install, see logs.py's module
-docstring for the same reasoning) - not sudo/system-level services.
+"""Discovers and restarts OVOS's systemd services.
+
+Most installs run OVOS as systemd --user units, but not all: the OVOS
+installer can also set it up as system units running as the OVOS user
+(`User=pi` on a Mark II), and then `systemctl --user` finds nothing
+(#63). So user units are looked for first, and only when there are no
+OVOS units there, system units. Each unit remembers which scope it was
+found in; actions on a system unit go through `sudo -n` (never a
+password prompt inside the UI) unless this already runs as root, and say
+which command to run by hand when sudo wants a password.
 
 Like logs.py, this doesn't hardcode a fixed service-name list: service
 names vary by install (we found 'ovos-core' handles skills, not
@@ -9,34 +15,21 @@ names vary by install (we found 'ovos-core' handles skills, not
 are discovered by querying systemd directly for anything matching
 'ovos-*', rather than guessed at.
 """
+import os
 import subprocess
 
-
-def discover_services():
-    """Returns a sorted list of unit names (e.g. 'ovos-core.service')
-    for every loaded systemd --user unit matching 'ovos-*'. Returns []
-    on any failure (systemctl not found, no user session, etc) rather
-    than raising - callers should treat that as 'nothing to show'.
-
-    Kept as-is (name-only) for backward compatibility with existing
-    callers/tests - see discover_services_with_state() below for the
-    richer version that also reports whether each unit is running."""
-    return [name for name, _ in discover_services_with_state()]
+USER, SYSTEM = "user", "system"
+# unit name -> the scope it was last found in; unknown units are user units
+_UNIT_SCOPE = {}
 
 
-def discover_services_with_state():
-    """Like discover_services(), but returns (unit_name, is_active)
-    tuples - `systemctl --user list-units` already reports this in its
-    3rd column (ACTIVE: active/inactive/failed/etc), which
-    discover_services() was previously discarding. Added so the
-    Command Palette can offer only the actions that make sense for a
-    unit's current state (no point offering 'Start' on something
-    already running, or 'Stop'/'Restart' on something that isn't)."""
+def _list_units(scope):
+    """[(unit, is_active)] for 'ovos-*' services in one scope; [] on any
+    failure (systemctl missing, no user session ...)."""
+    cmd = ["systemctl"] + (["--user"] if scope == USER else []) + \
+        ["list-units", "ovos-*", "--plain", "--no-legend"]
     try:
-        result = subprocess.run(
-            ["systemctl", "--user", "list-units", "ovos-*", "--plain", "--no-legend"],
-            capture_output=True, text=True, timeout=10,
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     except (subprocess.SubprocessError, FileNotFoundError, OSError):
         return []
     if result.returncode != 0:
@@ -58,17 +51,67 @@ def discover_services_with_state():
     return sorted(services)
 
 
+def service_scope():
+    """USER or SYSTEM for the services last discovered, None if none."""
+    scopes = set(_UNIT_SCOPE.values())
+    return scopes.pop() if len(scopes) == 1 else (USER if USER in scopes else None)
+
+
+def discover_services():
+    """Returns a sorted list of unit names (e.g. 'ovos-core.service')
+    for every loaded systemd --user unit matching 'ovos-*'. Returns []
+    on any failure (systemctl not found, no user session, etc) rather
+    than raising - callers should treat that as 'nothing to show'.
+
+    Kept as-is (name-only) for backward compatibility with existing
+    callers/tests - see discover_services_with_state() below for the
+    richer version that also reports whether each unit is running."""
+    return [name for name, _ in discover_services_with_state()]
+
+
+def discover_services_with_state():
+    """Like discover_services(), but returns (unit_name, is_active)
+    tuples - `systemctl --user list-units` already reports this in its
+    3rd column (ACTIVE: active/inactive/failed/etc), which
+    discover_services() was previously discarding. Added so the
+    Command Palette can offer only the actions that make sense for a
+    unit's current state (no point offering 'Start' on something
+    already running, or 'Stop'/'Restart' on something that isn't).
+
+    User units first; system units only when there are no OVOS user
+    units (#63)."""
+    services, scope = _list_units(USER), USER
+    if not services:
+        services, scope = _list_units(SYSTEM), SYSTEM
+    _UNIT_SCOPE.clear()
+    _UNIT_SCOPE.update({name: scope for name, _ in services})
+    return services
+
+
+def _is_root():
+    try:
+        return os.geteuid() == 0
+    except AttributeError:  # not POSIX
+        return False
+
+
 def _systemctl_action(action: str, unit_name: str, timeout: int = 30):
     """Shared implementation for restart/stop/start - all three are the
-    same shape (run systemctl --user <action> <unit>, never raise,
-    return (success, message)), so this avoids repeating the
+    same shape (run systemctl <action> <unit> in the unit's scope, never
+    raise, return (success, message)), so this avoids repeating the
     try/except three times. `action` is a systemctl verb: 'restart',
-    'stop', or 'start'."""
+    'stop', or 'start'. A system unit goes through `sudo -n` (unless this
+    runs as root): no password prompt can appear inside the UI, and when
+    sudo needs one the message says what to run instead."""
+    system = _UNIT_SCOPE.get(unit_name) == SYSTEM
+    if not system:
+        cmd = ["systemctl", "--user", action, unit_name]
+    elif _is_root():
+        cmd = ["systemctl", action, unit_name]
+    else:
+        cmd = ["sudo", "-n", "systemctl", action, unit_name]
     try:
-        result = subprocess.run(
-            ["systemctl", "--user", action, unit_name],
-            capture_output=True, text=True, timeout=timeout,
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return False, f"{unit_name}: {action} timed out after {timeout}s"
     except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
@@ -76,7 +119,11 @@ def _systemctl_action(action: str, unit_name: str, timeout: int = 30):
     if result.returncode == 0:
         past_tense = {"restart": "restarted", "stop": "stopped", "start": "started"}[action]
         return True, f"{unit_name}: {past_tense}"
-    return False, f"{unit_name}: {result.stderr.strip() or (action + ' failed')}"
+    err = result.stderr.strip()
+    if system and cmd[0] == "sudo" and ("password" in err.lower() or "sudo:" in err):
+        return False, (f"{unit_name} is a system service and sudo wants a password: "
+                       f"run `sudo systemctl {action} {unit_name}` yourself")
+    return False, f"{unit_name}: {err or (action + ' failed')}"
 
 
 def restart_service(unit_name):
