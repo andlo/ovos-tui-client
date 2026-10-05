@@ -92,6 +92,7 @@ def build_report(summary: RunSummary, manifest: Dict, include_replies: bool = Fa
             "sent_without_check": summary.count(SENT),
             "answered": sum(1 for s in steps if s["answered"]),
             "cancelled": summary.cancelled,
+            **({"halted_by": summary.halted_by} if getattr(summary, "halted_by", None) else {}),
             "duration_s": round(summary.duration, 1),
         },
         "steps": steps,

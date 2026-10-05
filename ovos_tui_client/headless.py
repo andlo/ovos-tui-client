@@ -304,6 +304,7 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
             "'possibly affected' (Ctrl+C stops after the current step)"),
         known_skills=lambda: list(installed),
         stop_session=bus.stop_session,
+        stop_all=bus.stop_all,
         on_busy=lambda i, n, step, wait: log(
             f"[{i}/{n}] ⏳ no response yet; waiting up to {wait / 60:.0f} min for OVOS to finish it "
             "before the next step (OVOS handles one sentence at a time)"),
@@ -325,6 +326,9 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
     finally:
         signal.signal(signal.SIGINT, previous)
     log(f"{title}: {' · '.join(summary_parts(summary))}")
+    if summary.halted_by:
+        log(f"Stopped early: {summary.halted_by} kept talking after a stop to its session and a stop for "
+            "everything. If it still talks, restart ovos-core.")
     if runner.released_responses:
         log(f"Answered \"cancel\" to {runner.released_responses} question(s) a skill was left waiting on "
             "(get_response), so its handler thread was freed.")
@@ -567,7 +571,7 @@ def _route_profiles(args, bus, installed, profiles, log):
         send=lambda i, n, step: bus.send_utterance(step.utterance, session_id=runner.session_id, lang=step.lang,
                                                    script={"title": "Profile report", "i": i, "n": n}),
         on_step_done=lambda i, n, step, result, obs: (i % 25 == 0 or i == n) and log(f"  {i}/{n} done"),
-        known_skills=lambda: list(installed), stop_session=bus.stop_session,
+        known_skills=lambda: list(installed), stop_session=bus.stop_session, stop_all=bus.stop_all,
         answer=lambda session, text, lang: bus.send_utterance(text, lang=lang, session_id=session),
     )
     bus.on_message(runner.feed)
@@ -582,4 +586,10 @@ def _route_profiles(args, bus, installed, profiles, log):
         summary = runner.run()
     finally:
         signal.signal(signal.SIGINT, previous)
-    return routing_from(summary)
+    if summary.halted_by:
+        log(f"Routes stopped early, after {len(summary.results)}/{len(steps)} steps: {summary.halted_by} kept "
+            "talking after stop. Level 3 is from the steps run so far. If it still talks, restart ovos-core.")
+    routing, talking = routing_from(summary)
+    if summary.halted_by:
+        talking.add(summary.halted_by)
+    return routing, talking

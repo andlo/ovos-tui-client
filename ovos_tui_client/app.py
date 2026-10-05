@@ -1596,6 +1596,7 @@ class OVOSTUIApp(App):
             on_step_done=lambda i, n, step, result, obs: self.call_from_thread(self._script_step_done, i, n, step, result),
             known_skills=lambda: list(self.installed_skills),
             stop_session=self.bus.stop_session,
+            stop_all=self.bus.stop_all,
             on_busy=lambda i, n, step, wait: self.call_from_thread(
                 self._write_status,
                 f"[{i}/{n}] no response yet: waiting up to {wait / 60:.0f} min for OVOS to finish it before "
@@ -1694,6 +1695,11 @@ class OVOSTUIApp(App):
             self.bus.stop_session(session_id)
         if summary.session_ids:
             self._write_status(f"Sent stop to the {len(summary.session_ids)} test session(s) - nothing the script started keeps running.")
+        if getattr(summary, "halted_by", None):
+            self._write_status(f"The run stopped at step {len(summary.results)}/{summary.total}: {summary.halted_by} "
+                               "kept talking after a stop to its session and a stop for everything, so what came "
+                               "after couldn't be trusted. If it still talks, restart ovos-core "
+                               "(Ctrl+P → 'Service: Restart ovos-core').", ok=False)
         failed, timeouts = summary.count(FAIL), summary.count(TIMEOUT)
         parts = summary_parts(summary)
         state = "stopped" if summary.cancelled else "finished"

@@ -41,7 +41,9 @@ def summary_parts(summary: RunSummary) -> list:
                    if any(n.startswith("possibly affected") for n in getattr(r, "notes", None) or []))
     if affected:   # #74
         parts.append(f"{affected} possibly affected by a skill that didn't stop")
-    if summary.cancelled:
+    if getattr(summary, "halted_by", None):
+        parts.append(f"stopped after {done}/{summary.total}: {summary.halted_by} kept talking after stop")
+    elif summary.cancelled:
         parts.append(f"stopped after {done}/{summary.total}")
     parts.append(f"{summary.duration:.0f}s")
     return parts
