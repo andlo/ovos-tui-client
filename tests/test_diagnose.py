@@ -65,8 +65,20 @@ def test_other_intent_won_says_who_and_padatious_best_guess():
         would=FALLBACK, pad={"name": "ovos-skill-alerts.openvoiceos:timer_status", "conf": 0.94},
         registered=REG_EN), ctx())
     assert d.category == dg.OTHER_WON
-    assert d.lines[0].startswith("ovos-skill-ddg.openvoiceos wins it")
-    assert "padatious' best guess: ovos-skill-alerts.openvoiceos:timer_status (0.94)" in d.lines[1]
+    assert d.lines[0] == "ovos-skill-ddg.openvoiceos's fallback takes it (ovos-fallback-pipeline-plugin-medium)"
+    assert "what_time_is_it is registered for en-US, but no intent stage took the sentence" in d.lines
+    assert "padatious' best guess: ovos-skill-alerts.openvoiceos:timer_status (0.94)" in d.lines
+
+
+def test_another_intent_of_the_same_skill_wins():
+    """'what time is it' for a what_year_is_it row: registered, but loses."""
+    d = run(step(intent="what_year_is_it"), answers(
+        would={"skill_id": DT, "intent_name": f"{DT}:what_time_is_it",
+               "intent_service": "ovos-padatious-pipeline-plugin-high"},
+        registered=REG_EN + [{"skill_id": DT, "intent_name": "what_year_is_it", "lang": "en-US"}]), ctx())
+    assert d.category == dg.OTHER_WON
+    assert d.lines[0] == f"{DT} wins it: what_time_is_it via ovos-padatious-pipeline-plugin-high"
+    assert d.lines[1] == "what_year_is_it is registered for en-US; this sentence just scores higher for what_time_is_it"
 
 
 def test_not_registered_for_this_language_points_to_secondary_langs():
