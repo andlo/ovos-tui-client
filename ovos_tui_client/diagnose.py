@@ -194,7 +194,8 @@ def stage1(step, result, obs, facts: Dict, ctx: Context) -> Diagnosis:
                 lines.append(f"{want} is registered{where}, but no intent stage took the sentence")
             else:
                 lines.append(f"{want} is registered{where}; this sentence just scores higher for {what}")
-        if isinstance(pad, dict) and pad.get("name") and not same_intent(pad.get("name"), want):
+        if isinstance(pad, dict) and pad.get("name") and not same_intent(pad.get("name"), want) \
+                and not (":" in name and same_intent(pad.get("name"), name)):  # not just the winner again
             lines.append(f"padatious' best guess: {pad['name']} ({float(pad.get('conf') or 0):.2f})")
         return Diagnosis(OTHER_WON, lines, evidence=ev)
     if would is None:
