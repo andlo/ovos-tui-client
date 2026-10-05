@@ -2380,6 +2380,19 @@ def build_arg_parser():
                                "not run from a terminal; from a terminal this happens by itself")
     headless.add_argument("--no-share", action="store_true",
                           help="don't serve the report on a link, only save it")
+
+    setch = parser.add_argument_group(
+        "release channel setup",
+        "Make this install exactly an OVOS release channel, the way the channel's own tests "
+        "install it. Changes the Python environment ovos-tui runs in. See docs/channels.md.")
+    setch.add_argument("--set-channel", metavar="CHANNEL", choices=("stable", "testing", "alpha"), default=None,
+                       help="move every package the channel names onto it, lock the core, and move "
+                            "pre-releases nothing asks for to final releases; never downgrades the core")
+    setch.add_argument("--dry-run", action="store_true",
+                       help="with --set-channel: only show what would change (exit code 1 if anything would)")
+    setch.add_argument("--constraints", metavar="FILE|URL", default=None,
+                       help="with --set-channel: use this constraints file instead of the channel's own, "
+                            "e.g. a pending change to OpenVoiceOS/OpenVoiceOS")
     return parser
 
 
@@ -2404,7 +2417,13 @@ def _detect_outbound_ip():
 
 
 def run():
-    args = build_arg_parser().parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    if (args.dry_run or args.constraints) and not args.set_channel:
+        parser.error("--dry-run and --constraints go with --set-channel")
+    if args.set_channel:
+        from ovos_tui_client.setchannel import cli as set_channel_cli
+        sys.exit(set_channel_cli(args))
     if args.run:
         from ovos_tui_client.headless import run_headless
         sys.exit(run_headless(args, tool_version=_ovos_tui_version()))

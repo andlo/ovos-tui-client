@@ -10,8 +10,9 @@ is found in two ways, and both are shown:
   /opt/ovos/tag;
 * from the versions: which channel's constraints file, as it is TODAY,
   allows the installed core packages. The files move over time, so they
-  are always fetched live from OpenVoiceOS/ovos-releases (the source the
-  installer, raspOVOS and ovos-docker all use), never kept in this code.
+  are always fetched live from OpenVoiceOS/OpenVoiceOS (formerly
+  ovos-releases; the source the installer, raspOVOS and ovos-docker all
+  use), never kept in this code.
 
 alpha's constraints are floors only (ovos-core>=...), so any newer install
 matches them. For a floor, the installed major version must also be the
@@ -27,7 +28,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 CHANNELS = ("stable", "testing", "alpha")
-CONSTRAINTS_URL = "https://raw.githubusercontent.com/OpenVoiceOS/ovos-releases/main/constraints-{channel}.txt"
+CONSTRAINTS_URL = "https://raw.githubusercontent.com/OpenVoiceOS/OpenVoiceOS/main/constraints-{channel}.txt"
 PYPI_URL = "https://pypi.org/pypi/{package}/json"
 RASPOVOS_TAG_FILE = Path("/opt/ovos/tag")
 
@@ -187,12 +188,42 @@ CHANNELS_TEXT = """\
 | Channel | What it is |
 |---|---|
 | **testing** | What the OVOS installer installs by default: versions picked for testing, with upper bounds. What most users run. |
-| **alpha** | The newest releases, pre-releases included. raspOVOS images, ovos-docker's default tag and Mark II/DevKit and macOS installs use it. |
+| **alpha** | The newest OVOS releases: minimum versions for OVOS's own packages, usually pre-releases. Everything else stays on final releases unless an OVOS package asks for more. raspOVOS images, ovos-docker's default tag and Mark II/DevKit and macOS installs use it. |
 | **stable** | The last stable release. Changes rarely. The installer doesn't offer it. |
 
-Each channel is one constraints file in OpenVoiceOS/ovos-releases, and the
+Each channel is one constraints file in OpenVoiceOS/OpenVoiceOS, and the
 versions in it move over time. That is why the channel is worked out
 against the files as they are today.
+
+Only the core is compared here. An install can have the channel's core
+and still not be the channel: other packages below its versions,
+third-party betas, plugins that conflict with the core.
+
+## A clean install on a channel
+
+The OVOS installer resolves in separate batches, and on alpha it allows
+pre-releases for everything, so an install can drift from its channel
+(httpx 1.0.dev6 once kept the intent pipeline from loading:
+OpenVoiceOS/ovos-installer#635). A clean channel follows the rules the
+channel's own tests use (ovos-test-harness's channel install):
+
+1. Every OVOS package the channel names, installed **by name** under the
+   channel's constraints, fetched live.
+2. **No `--pre`.** A constraint line that names a pre-release already lets
+   pip take it; `--pre` takes pre-releases of everything.
+3. **The core decides.** ovos-core, ovos-workshop, ovos-bus-client,
+   ovos-plugin-manager, ovos-config and ovos-utils stay at the channel's
+   versions; a plugin that needs them moved is left out, not forced in.
+
+`device_setup.sh` does this for an installed device (in its OVOS venv, as
+the user that owns it), reports what it changed and what can't follow the
+channel, and never downgrades the core:
+
+    curl -fsSLO https://raw.githubusercontent.com/andlo/ovos-klondike-mercantile/main/scripts/compat/device_setup.sh
+    bash device_setup.sh testing        # or alpha, stable
+
+Restart OVOS afterwards. Running it again keeps the device on the channel
+as the channel moves.
 """
 
 SWITCH_TEXT = """\
@@ -208,7 +239,8 @@ and pick the channel in the installer (testing or alpha):
     sudo sh -c "$(curl -fsSL https://raw.githubusercontent.com/OpenVoiceOS/ovos-installer/main/installer.sh)" installer.sh --uninstall
 
 Uninstalling removes configuration too. Unattended installs set
-`channel:` in `~/.config/ovos-installer/scenario.yaml`.
+`channel:` in `~/.config/ovos-installer/scenario.yaml`. Afterwards, make
+it a clean install (above).
 
 **raspOVOS.** The channel is in `/opt/ovos/tag`, and `ovos-update`
 updates from it:
@@ -222,11 +254,14 @@ updates from it:
 The image tag is the channel: set `VERSION=testing` (or `alpha`, `stable`)
 in the compose `.env`, then `docker compose pull && docker compose up -d`.
 
-**Your own venv.** Upgrade the installed OVOS packages against the
-channel's constraints file (add `--pre` for alpha):
+**Your own venv.** Install what you want under the channel's constraints,
+without `--pre`:
 
-    pip install -U -c https://raw.githubusercontent.com/OpenVoiceOS/ovos-releases/main/constraints-testing.txt \\
-        $(pip list --format=freeze | grep -E '^ovos-' | cut -d= -f1)
+    pip install -c https://raw.githubusercontent.com/OpenVoiceOS/OpenVoiceOS/main/constraints-testing.txt ovos-core ...
+
+then run `device_setup.sh <channel>` (above). Don't `pip install -U`
+every `ovos-*` package at once: a plugin with an old upper bound can pull
+ovos-core back a major version.
 """
 
 
