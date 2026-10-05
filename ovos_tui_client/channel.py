@@ -16,7 +16,9 @@ is found in two ways, and both are shown:
 
 alpha's constraints are floors only (ovos-core>=...), so any newer install
 matches them. For a floor, the installed major version must also be the
-newest one on PyPI, which is what alpha installs.
+newest one alpha can install: the newest on PyPI that the installed core
+packages themselves allow (ovos-core 3.7 asks for ovos-plugin-manager<3.0.0,
+so ovos-plugin-manager 3.0.0a1 on PyPI does not make a 2.x install stale).
 
 A store that receives a report checks the channel again on its side; this
 is for the person at the keyboard.
@@ -91,14 +93,23 @@ def fetch_text(url: str, timeout: float = TIMEOUT) -> Optional[str]:
         return None
 
 
-def newest_version(package: str, fetch: Callable = fetch_text) -> Optional[str]:
-    """The newest release on PyPI, pre-releases included (what alpha installs)."""
+def newest_version(package: str, fetch: Callable = fetch_text,
+                   allowed: Optional[str] = None) -> Optional[str]:
+    """The newest release on PyPI, pre-releases included (what alpha
+    installs) - limited to `allowed` (a specifier like "<3.0.0,>=2.12.0a1")
+    when given: a release the channel's own core can't install isn't what
+    the channel installs."""
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
     from packaging.version import InvalidVersion, Version
     text = fetch(PYPI_URL.format(package=package))
     try:
         releases = json.loads(text or "{}").get("releases") or {}
     except ValueError:
         return None
+    try:
+        spec = SpecifierSet(allowed or "", prereleases=True)
+    except InvalidSpecifier:
+        spec = SpecifierSet("", prereleases=True)
     best = None
     for v, files in releases.items():
         if files and all(f.get("yanked") for f in files):
@@ -107,9 +118,43 @@ def newest_version(package: str, fetch: Callable = fetch_text) -> Optional[str]:
             parsed = Version(v)
         except InvalidVersion:
             continue
+        if parsed not in spec:
+            continue
         if best is None or parsed > best:
             best = parsed
     return str(best) if best else None
+
+
+# The packages whose own requirements say what of the core a channel can
+# install: ovos-core 3.7 asks for ovos-plugin-manager<3.0.0, so a 3.0.0a1 on
+# PyPI is not what alpha installs yet. Only these, not every installed
+# package: an old plugin's cap must not make a stale install look current.
+STACK_REQUIRERS = CORE_PACKAGES + ("ovos-config", "ovos-utils")
+
+
+def stack_asks(package: str) -> str:
+    """The specifiers the installed core packages put on `package`, joined
+    ("<3.0.0,>=2.12.0a1"); "" when none of them asks anything."""
+    from importlib.metadata import PackageNotFoundError, requires
+    from packaging.requirements import InvalidRequirement, Requirement
+    want = normalize(package)
+    specs = []
+    for requirer in STACK_REQUIRERS:
+        if normalize(requirer) == want:
+            continue
+        try:
+            reqs = requires(requirer) or []
+        except PackageNotFoundError:
+            continue
+        for r in reqs:
+            try:
+                req = Requirement(r)
+            except InvalidRequirement:
+                continue
+            if normalize(req.name) != want or (req.marker and "extra" in str(req.marker)):
+                continue
+            specs.extend(str(s) for s in req.specifier)
+    return ",".join(sorted(set(specs)))
 
 
 def channel_problems(stack: Dict[str, str], channel: str, constraints_text: str,
@@ -149,7 +194,8 @@ def detect(stack: Dict[str, str], declared: Tuple = (None, None, None),
     not be checked), else the one channel the versions match, else None.
     """
     stack = {normalize(k): v for k, v in (stack or {}).items()}
-    newest = newest or (lambda pkg: newest_version(pkg, fetch))
+    # what alpha installs: the newest release the installed core itself allows
+    newest = newest or (lambda pkg: newest_version(pkg, fetch, allowed=stack_asks(pkg)))
     cache: Dict[str, Optional[str]] = {}
 
     def _newest(pkg):

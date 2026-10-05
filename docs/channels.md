@@ -31,7 +31,10 @@ ovos-tui-client works the channel out in two ways:
   ovos-bus-client and ovos-plugin-manager. The files change over time, so
   they are fetched live, never kept in ovos-tui-client. alpha only sets
   lower bounds, so for alpha the installed major version must also be the
-  newest one on PyPI.
+  newest one alpha can install: the newest on PyPI that the installed core
+  packages themselves allow (ovos-core asking for
+  `ovos-plugin-manager<3.0.0` means a 3.0.0 alpha on PyPI isn't on alpha
+  yet).
 
 A declared channel must agree with the versions; if it doesn't, the window
 shows both instead of guessing. Without network, a declared channel is

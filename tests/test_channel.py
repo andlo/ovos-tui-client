@@ -77,7 +77,7 @@ def test_manifest_uses_the_versions_when_nothing_is_declared(monkeypatch, tmp_pa
     monkeypatch.setattr(manifest_mod, "INSTALLER_STATE_FILE", tmp_path / "none.json")
     monkeypatch.setattr(ch, "RASPOVOS_TAG_FILE", tmp_path / "no-tag")
     monkeypatch.setattr(manifest_mod, "local_stack", lambda: {"ovos-core": "2.1.0", "ovos-workshop": "7.4.1"})
-    monkeypatch.setattr(ch, "newest_version", lambda pkg, fetch=None: NEWEST.get(pkg))
+    monkeypatch.setattr(ch, "newest_version", lambda pkg, fetch=None, allowed=None: NEWEST.get(pkg))
     m = manifest_mod.build_manifest("127.0.0.1", "en-us", [], fetch=fetch_from())
     assert m["channel"] == "testing" and m["channel_source"] == "installed versions"
 
@@ -100,3 +100,51 @@ def test_summary_lines():
     short, line = ch.summary(detect({"ovos-core": "3.7.1"}, constraints={}), {"ovos-core": "3.7.1"})
     assert short == "OVOS: channel unknown" and "no network" in line
     assert ch.summary(None, {}, remote=True)[0] == "OVOS: channel unknown"
+
+
+# --- alpha: the newest the installed core allows, not just the newest on PyPI ---
+
+OPM_RELEASES = json.dumps({"releases": {"2.12.5a1": [{"yanked": False}], "3.0.0a1": [{"yanked": False}]}})
+
+
+def test_newest_version_within_what_the_core_allows():
+    assert ch.newest_version("ovos-plugin-manager", fetch=lambda url: OPM_RELEASES) == "3.0.0a1"
+    assert ch.newest_version("ovos-plugin-manager", fetch=lambda url: OPM_RELEASES,
+                             allowed="<3.0.0,>=2.12.0a1") == "2.12.5a1"
+
+
+def test_stack_asks_only_the_core_packages(monkeypatch):
+    reqs = {
+        "ovos-core": ["ovos-plugin-manager<3.0.0,>=2.12.0a1", "ovos-workshop>=9.0.0a1",
+                      'pytest; extra == "test"'],
+        "ovos-workshop": ["ovos-plugin-manager>=2.11.0"],
+        "some-old-plugin": ["ovos-plugin-manager<1.0"],    # not a core package: ignored
+    }
+    import importlib.metadata as md
+
+    def fake_requires(name):
+        if name not in reqs:
+            raise md.PackageNotFoundError(name)
+        return reqs[name]
+    monkeypatch.setattr(md, "requires", fake_requires)
+    assert ch.stack_asks("ovos-plugin-manager") == "<3.0.0,>=2.11.0,>=2.12.0a1"
+    assert ch.stack_asks("pytest") == ""
+    assert ch.stack_asks("ovos-core") == ""
+
+
+def test_alpha_install_held_below_a_new_major_by_its_own_core_is_alpha(monkeypatch):
+    """ovos-plugin-manager 3.0.0a1 is on PyPI, but ovos-core 3.7 asks for <3:
+    a 2.12.5a1 install is what alpha installs (a Mark II, October 2026)."""
+    alpha = "ovos-core>=2.2.4a1\novos-plugin-manager>=2.12.5a1\n"
+    monkeypatch.setattr(ch, "stack_asks",
+                        lambda pkg: "<3.0.0,>=2.12.0a1" if pkg == "ovos-plugin-manager" else "")
+    pypi = {"ovos-core": json.dumps({"releases": {"3.7.2a2": [{}]}}), "ovos-plugin-manager": OPM_RELEASES}
+
+    def fetch(url):
+        if "constraints-alpha" in url:
+            return alpha
+        if "constraints-" in url:
+            return "ovos-core>=2.1.1,<3.0.0\n"
+        return next((body for pkg, body in pypi.items() if f"/{pkg}/" in url), None)
+    res = ch.detect({"ovos-core": "3.7.2a2", "ovos-plugin-manager": "2.12.5a1"}, fetch=fetch)
+    assert res["problems"]["alpha"] == [] and res["matches"] == ["alpha"] and res["channel"] == "alpha"
