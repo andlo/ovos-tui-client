@@ -156,3 +156,70 @@ def test_cli_saves_and_exits_1_on_regressions(tmp_path, capsys):
     assert json.loads(saved[0].read_text())["schema"] == "ovos-test-comparison/1"
     (tmp_path / "bad.json").write_text("{}")
     assert cmp.cli(str(pa), str(tmp_path / "bad.json"), output=str(tmp_path)) == 2
+
+
+# --- the TUI: 'Test: Compare results' ---------------------------------------------
+
+import pytest  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
+
+
+def _app(tmp_path):
+    from ovos_tui_client.app import OVOSTUIApp
+    (tmp_path / "skills.log").write_text("")
+    app = OVOSTUIApp(log_dir_override=str(tmp_path))
+    app.bus = MagicMock()
+    app.results_dir = tmp_path / "results"
+    app.results_dir.mkdir()
+    return app
+
+
+def test_result_row_reads_a_saved_report(tmp_path):
+    from ovos_tui_client.compare_screen import result_row
+    p = tmp_path / "x.report.json"
+    r = report([row("u")])
+    r["summary"] = {"passed": 4, "checked": 8}
+    p.write_text(json.dumps(r))
+    assert result_row(p) == "2026-10-05 19:00 · Test: date-time · testing · ovos-core 2.1.1 · 4/8 passed"
+
+
+@pytest.mark.asyncio
+async def test_compare_needs_two_saved_results(tmp_path):
+    from textual.widgets import RichLog
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        app.compare_results()
+        await pilot.pause()
+        text = "\n".join(str(l) for l in app.query_one("#conversation", RichLog).lines)
+        assert "Comparing needs two saved results" in text
+
+
+@pytest.mark.asyncio
+async def test_pick_compare_reclassify_and_save(tmp_path):
+    app = _app(tmp_path)
+    (app.results_dir / "2026-10-05_1900_a.report.json").write_text(json.dumps(report([row("u", "fail")])))
+    (app.results_dir / "2026-10-05_1901_b.report.json").write_text(
+        json.dumps(report([row("u")], channel="alpha", core="3.7.2a2")))
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        app.compare_results()
+        await pilot.pause()
+        assert type(app.screen).__name__ == "ResultPickerScreen"
+        await pilot.press("down", "enter")       # A: the older one (testing)
+        await pilot.pause()
+        await pilot.press("enter")               # B: the one left
+        await pilot.pause()
+        screen = app.screen
+        assert type(screen).__name__ == "ComparisonScreen"
+        c = screen.comparison
+        assert c["a"]["channel"] == "testing" and c["differences"][0]["class"] == cmp.FIX
+        await pilot.press("u")
+        await pilot.pause()
+        assert c["differences"][0]["class"] == cmp.UNCLEAR
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+    saved = list(app.results_dir.glob("*.comparison.json"))
+    assert len(saved) == 1
+    data = json.loads(saved[0].read_text())
+    assert data["differences"][0]["class"] == "unclear" and data["differences"][0]["suggested"] == "fix"

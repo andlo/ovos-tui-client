@@ -1789,6 +1789,43 @@ class OVOSTUIApp(App):
         self._write_status("Checking the release channel against today's constraints…")
         self._channel_worker(then=_show)
 
+    # 'Test: Compare results' (#49): pick A, pick B, compare, classes, save
+    def compare_results(self) -> None:
+        from ovos_tui_client import compare as cmp
+        from ovos_tui_client.compare_screen import ComparisonScreen, ResultPickerScreen, saved_results
+        files = saved_results(self.results_dir)
+        if len(files) < 2:
+            self._write_status(f"Comparing needs two saved results ('Test: Save result…') in {self.results_dir}; "
+                               f"there {'is' if len(files) == 1 else 'are'} {len(files)}. A result from another "
+                               "machine: copy its .report.json there.", ok=False)
+            return
+
+        def _saved(choice, c):
+            if choice != "save":
+                return
+            md, js = cmp.save_comparison(c, self.results_dir)
+            s = c["summary"]
+            self._write_status(f"Comparison saved: {md} and {js.name} - {s['fix']} fix, "
+                               f"{s['regression']} regression, {s['unclear']} unclear.")
+
+        def _picked_b(b_path, a_path):
+            if b_path is None:
+                return
+            try:
+                c = cmp.compare(cmp.load_report(a_path), cmp.load_report(b_path), str(a_path), str(b_path))
+            except cmp.NotAReport as e:
+                self._write_status(f"Can't compare: {e}", ok=False)
+                return
+            self.push_screen(ComparisonScreen(c), lambda choice: _saved(choice, c))
+
+        def _picked_a(a_path):
+            if a_path is None:
+                return
+            rest = [p for p in files if p != a_path]
+            self.push_screen(ResultPickerScreen("Compare with B (e.g. alpha)", rest, self.results_dir),
+                             lambda b: _picked_b(b, a_path))
+        self.push_screen(ResultPickerScreen("Compare: pick A (e.g. testing)", files, self.results_dir), _picked_a)
+
     # --set-channel from the palette (#65): dry run, confirm, apply, restart
     def set_channel(self, channel: str) -> None:
         """'OVOS: Set channel: <channel>…' (= --set-channel): a dry run first."""
@@ -2242,6 +2279,10 @@ class OVOSTUIApp(App):
             yield SystemCommand(f"Test: Share last result - link / file ({self.last_report['title']})",
                                 "A short link to open it in your own browser, and a command to fetch the file",
                                 self.share_last_report)
+        # #49: e.g. the same test set on a testing and an alpha install
+        yield SystemCommand("Test: Compare results…",
+                            "Two saved results step by step: what got fixed, what regressed, and why",
+                            self.compare_results)
         channel = (self._channel_short.replace("OVOS: ", "").replace("OVOS ", "")
                    if self._channel_checked else "checking…")
         yield SystemCommand(f"OVOS: Release channel ({channel})", "", self.show_channel)
