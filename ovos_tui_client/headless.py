@@ -275,12 +275,27 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
         _close(bus)
         return EXIT_CANNOT_RUN
 
+    # #48: why a step failed. On the OVOS machine its logs, versions and
+    # intent files can be read too; over a remote bus only the bus probes.
+    from ovos_tui_client.diagnose import diagnose, local_context, remote_context
+    from ovos_tui_client.logs import find_log_dir
+    from ovos_tui_client.manifest import LOCAL_HOSTS
+    local = (args.host or "").strip().lower() in LOCAL_HOSTS
+    ctx = (local_context(installed, find_log_dir(is_local=True)) if local
+           else remote_context(installed))
+
+    def _step_done(i, n, step, result, obs):
+        log(f"[{i}/{n}] {_MARK.get(result.status, '?')} \"{step.utterance}\"  {result.detail}")
+        for line in (result.diagnosis or {}).get("lines") or []:
+            log(f"      ↳ {line}")
+
     runner = ScriptRunner(
         steps, title,
         send=lambda i, n, step: bus.send_utterance(
             step.utterance, session_id=runner.session_id, script={"title": title, "i": i, "n": n}),
-        on_step_done=lambda i, n, step, result, obs: log(
-            f"[{i}/{n}] {_MARK.get(result.status, '?')} \"{step.utterance}\"  {result.detail}"),
+        on_step_done=_step_done,
+        diagnose=lambda step, result, obs, since: diagnose(
+            step, result, obs, bus.request, ctx, since).as_dict(),
         known_skills=lambda: list(installed),
         stop_session=bus.stop_session,
         on_busy=lambda i, n, step, wait: log(

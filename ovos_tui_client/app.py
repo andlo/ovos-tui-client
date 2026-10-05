@@ -1585,6 +1585,9 @@ class OVOSTUIApp(App):
     def _run_steps(self, title: str, steps: list) -> None:
         """Worker thread: builds and runs a ScriptRunner, with every UI
         touch marshalled through call_from_thread()."""
+        from ovos_tui_client.diagnose import diagnose, local_context, remote_context
+        installed = dict(self.installed_skills or {})
+        ctx = local_context(installed, self.log_dir) if self.is_local else remote_context(installed)
         runner = ScriptRunner(
             steps, title,
             send=lambda i, n, step: self.call_from_thread(self._script_send, i, n, step),
@@ -1596,6 +1599,9 @@ class OVOSTUIApp(App):
                 f"[{i}/{n}] no response yet: waiting up to {wait / 60:.0f} min for OVOS to finish it before "
                 "the next step (OVOS handles one sentence at a time). 'Script: Stop running script' ends the run."),
             answer=lambda session, text, lang: self.bus.send_utterance(text, lang=lang, session_id=session),
+            # #48: why a step failed, asked before the next step starts
+            diagnose=lambda step, result, obs, since: diagnose(
+                step, result, obs, self.bus.request, ctx, since).as_dict(),
         )
         self.script_runner = runner
         self.call_from_thread(self._script_started, title, len(steps))
@@ -1657,6 +1663,8 @@ class OVOSTUIApp(App):
 
     def _script_step_done(self, i: int, n: int, step, result) -> None:
         self._write_conversation(self._result_markup(result.status, result.detail))
+        for line in (getattr(result, "diagnosis", None) or {}).get("lines") or []:
+            self._write_conversation(f"[dim]      ↳ {escape(str(line))}[/dim]")
         runner = self.script_runner
         self.bus.emit_tui_event("script.step", {
             "title": runner.title if runner else "Script", "i": i, "n": n,

@@ -513,6 +513,9 @@ class StepObservation(Claim):
     Kept under this name for the runner and the UI; `skills` is the
     judge's `handlers`, `known` the last skill ids it was given."""
     known: set = field(default_factory=set)
+    # mycroft.skill.handler.error in this step's session: what went wrong
+    # in a handler that matched (#48's "matched, but the handler failed")
+    errors: List[str] = field(default_factory=list)
 
     @property
     def skills(self) -> List[str]:
@@ -531,6 +534,11 @@ class StepObservation(Claim):
         known = set(known_ids)
         self.known |= known
         super().observe(msg, known)
+        if msg.get("type") == "mycroft.skill.handler.error":
+            data = msg.get("data") or {}
+            err = str(data.get("exception") or data.get("error") or "error")
+            handler = data.get("name") or data.get("handler") or ""
+            self.errors.append(f"{handler}: {err}" if handler else err)
         # "nobody matched" ends a step like an intent failure does
         if self.unmatched:
             self.failed = True
@@ -558,6 +566,7 @@ class StepResult:
     status: str
     detail: str
     kind: str = ""  # the judge's verdict (ovos-routing-judge): hit, wrong_intent, captured, other, unhandled, hang
+    diagnosis: Optional[dict] = None  # why it failed (#48, diagnose.Diagnosis.as_dict())
 
 
 def describe(obs: StepObservation) -> str:
@@ -654,9 +663,15 @@ class ScriptRunner:
                  on_busy: Callable[[int, int, ScriptStep, float], None] = None,
                  answer: Callable[[str, str, Optional[str]], None] = None,
                  response_release_wait: float = None,
+                 diagnose: Callable[[ScriptStep, "StepResult", "StepObservation", float], Optional[dict]] = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.steps = list(steps)
         self.title = title
+        # diagnose(step, result, obs, sent_at) -> a diagnosis dict, called
+        # after a failed step and before the next one starts (#48), so
+        # what OVOS says about it still describes that step
+        self._diagnose = diagnose
+        self._sent_at = 0.0  # time.time() the current step was sent
         self._send = send
         self._on_step_done = on_step_done or (lambda *a: None)
         self._known_skills = known_skills
@@ -805,6 +820,7 @@ class ScriptRunner:
         self._speech_started.clear()
         self._provider_seen.set()
 
+        self._sent_at = time.time()
         self._send(index, total, step)
 
         deadline = self._clock() + self.step_timeout
@@ -964,6 +980,11 @@ class ScriptRunner:
             result, obs = self._run_step(i, step)
             if self._cancel.is_set():
                 break
+            if self._diagnose and result.status in (FAIL, TIMEOUT) and step.has_expectation:
+                try:
+                    result.diagnosis = self._diagnose(step, result, obs, self._sent_at)
+                except Exception:  # noqa: BLE001 - a diagnosis must never break a run
+                    result.diagnosis = None
             summary.results.append((i, step, result))
             if obs is not None:
                 summary.handled_by[i] = describe(obs)
