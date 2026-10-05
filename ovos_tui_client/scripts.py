@@ -950,8 +950,10 @@ class ScriptRunner:
                 silent = not (self._obs and (self._obs.intents or self._obs.skills or self._obs.failed))
                 asking = bool(self._pending_response)
             # a skill waiting for an answer isn't "core still busy": it
-            # would wait out BUSY_WAIT for nothing - the cancel below ends it
-            if not asking:
+            # would wait out BUSY_WAIT for nothing - the cancel below ends it.
+            # Nor is a skill that matched and is still talking (#74: counting
+            # to 500): it is stopped below instead of waited on for minutes.
+            if silent and not asking:
                 late, busy_gave_up = self._wait_until_core_is_done(index, total, step)
 
         second_stop_worked = False   # #74: silenced only by the stop for everything
@@ -980,8 +982,10 @@ class ScriptRunner:
                 self._end_step_session(step)
                 with self._lock:
                     # audio actually playing at the stop: a short reply that
-                    # just ended mustn't cost every step an extra wait
-                    talking = self._audio_busy
+                    # just ended mustn't cost every step an extra wait. A step
+                    # that talked until it timed out (counting to 500) is caught
+                    # between two numbers too.
+                    talking = self._audio_busy or (timed_out and self._talking_now())
             # #74: did it stop? A skill that ignores stop keeps talking, and
             # every later step waits on its speech.
             if talking and self._kept_talking_after_stop() and not self._cancel.is_set():
