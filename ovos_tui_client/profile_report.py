@@ -210,11 +210,13 @@ def summary(rows: List[Dict]) -> Dict:
 
 def profile_members(default_lines: List[str], extra_lines: List[str], custom_lines: Optional[List[str]],
                     pipeline: Iterable[str],
-                    extra_of: Callable[[str, str], List[str]] = installed_extra_of,
-                    ids_of: Callable[[str], List[Tuple[str, str]]] = runtime_ids) -> List[Dict]:
+                    extra_of: Optional[Callable[[str, str], List[str]]] = None,
+                    ids_of: Optional[Callable[[str], List[Tuple[str, str]]]] = None) -> List[Dict]:
     """[{id, name, builds_on, packages, members: [(runtime_id, kind, package)]}]; a
     runtime id is in the first profile that has it. A package that isn't
     installed has no known runtime id, so it stands in with its own name."""
+    extra_of = extra_of or installed_extra_of
+    ids_of = ids_of or runtime_ids
     specs = [("default", "Default", None, default_lines), ("extra", "Extra", "default", extra_lines)]
     if custom_lines is not None:
         specs.append(("custom", "Custom", "extra", custom_lines))

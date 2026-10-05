@@ -53,6 +53,7 @@ import json
 import importlib.metadata
 import sys
 import tempfile
+import time
 from collections import deque
 from pathlib import Path
 from functools import partial
@@ -665,10 +666,11 @@ class OVOSTUIApp(App):
     COMMANDS = App.COMMANDS | {ServiceCommandProvider, SkillCommandProvider, SkillFilterCommandProvider, PipelineCommandProvider, ExampleCommandProvider, SkillTestCommandProvider, ScriptCommandProvider, AboutCommandProvider}
 
     def __init__(self, host="127.0.0.1", port=8181, lang="en-us", log_dir_override=None, mycroft_conf_override=None,
-                 golden_dirs=None, scripts_dir=None):
+                 golden_dirs=None, scripts_dir=None, profile=None):
         super().__init__()
         # Scripted test runs (#30) - see scripts.py.
         self.golden_dirs = list(golden_dirs or [])
+        self.profile = profile  # #62: a requirements file, the profile report's third profile
         self.scripts_dir = Path(scripts_dir).expanduser() if scripts_dir else SCRIPTS_DIR
         self.golden_counts = {}  # skill_id -> number of golden rows for this lang (0 = none found)
         self.script_runner = None
@@ -1582,7 +1584,7 @@ class OVOSTUIApp(App):
             return
         self._run_steps(f"Script: {path.stem}", steps)
 
-    def _run_steps(self, title: str, steps: list) -> None:
+    def _run_steps(self, title: str, steps: list, then=None) -> None:
         """Worker thread: builds and runs a ScriptRunner, with every UI
         touch marshalled through call_from_thread()."""
         from ovos_tui_client.diagnose import diagnose, local_context, padatious_conf, remote_context
@@ -1618,6 +1620,8 @@ class OVOSTUIApp(App):
         finally:
             self.script_runner = None
         self.call_from_thread(self._script_finished, summary)
+        if then is not None:   # still in the worker thread
+            then(summary)
 
     def _set_script_ui(self, running: bool, progress: str = "") -> None:
         try:
@@ -1796,6 +1800,67 @@ class OVOSTUIApp(App):
                              lambda ch: ch and self.set_channel(ch))
         self._write_status("Checking the release channel against today's constraints…")
         self._channel_worker(then=_show)
+
+    # 'Test: Profile report' (#62)
+    def profile_report(self, routes: bool) -> None:
+        res = self.channel_result or {}
+        channel = res.get("channel") or res.get("declared")
+        if channel not in ("stable", "testing", "alpha"):
+            self._write_status("A profile report is per release channel, and this install's channel isn't "
+                               "known yet (Ctrl+P → 'OVOS: Release channel').", ok=False)
+            return
+        self._write_status(f"Profile report for {channel}" + (" with routes: every loaded skill's golden "
+                           "utterances run first, which takes a while…" if routes else "…"))
+        self._profile_report_worker(channel, routes)
+
+    @work(thread=True, exclusive=True, group="profile-report")
+    def _profile_report_worker(self, channel: str, routes: bool) -> None:
+        from ovos_tui_client import profile_report as pr
+        from ovos_tui_client.channel import CONSTRAINTS_URL
+        from ovos_tui_client.diagnose import local_context
+        from ovos_tui_client.headless import _log_lines, profile_inputs, resolve_steps, routing_from
+        installed = dict(self.installed_skills or {})
+        ctx = local_context(installed, self.log_dir)
+        default, extra, custom, sources = profile_inputs(
+            self.profile, log=lambda line: self.call_from_thread(self._write_status, line, ok=False))
+        profiles = pr.profile_members(default, extra, custom, ctx.pipeline)
+
+        def _finish(routing=None, talking=()):
+            manifest = build_manifest(self.host, self.bus.lang, [], installed_skills=installed,
+                                      channel=channel, tool_version=_ovos_tui_version())
+            report = pr.build_report(
+                channel, profiles, loaded=installed, pipeline=ctx.pipeline,
+                left_out=pr.left_out_stages(_log_lines(self.log_dir)), routing=routing, keeps_talking=talking,
+                constraints_url=CONSTRAINTS_URL.format(channel=channel), sources=sources, manifest=manifest,
+                tool=f"ovos-tui-client {_ovos_tui_version()}")
+            md = pr.report_markdown(report)
+            base = Path(self.results_dir) / f"{time.strftime('%Y-%m-%d_%H%M%S')}_profile-report_{channel}"
+            try:
+                Path(self.results_dir).mkdir(parents=True, exist_ok=True)
+                base.with_suffix(".md").write_text(md, encoding="utf-8")
+                Path(str(base) + ".profile-report.json").write_text(
+                    json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                saved = f"Saved {base}.md and {base.name}.profile-report.json."
+            except OSError as e:
+                saved = f"Could not save it in {self.results_dir}: {e}"
+            self.call_from_thread(self._write_status, f"Profile report ready. {saved}")
+            self.call_from_thread(self.push_screen, TextAboutScreen(md))
+
+        if not routes:
+            _finish()
+            return
+        skills = [rid for p in profiles for rid, kind, _ in p["members"]
+                  if kind == "skill" and installed.get(rid) is not False and rid in installed]
+        steps = []
+        for skill_id in skills:
+            _, s, _ = resolve_steps(skill_id, installed, pr.LEVEL3_LANG, self.golden_dirs, log=lambda *a: None)
+            steps += [x for x in s if x.has_expectation]
+        if not steps:
+            self.call_from_thread(self._write_status, "No golden utterances found for the profiles' skills - "
+                                  "level 3 not measured.", ok=False)
+            _finish()
+            return
+        self._run_steps("Profile report: routes", steps, then=lambda summary: _finish(*routing_from(summary)))
 
     # 'Test: Compare results' (#49): pick A, pick B, compare, classes, save
     def compare_results(self) -> None:
@@ -2287,6 +2352,14 @@ class OVOSTUIApp(App):
             yield SystemCommand(f"Test: Share last result - link / file ({self.last_report['title']})",
                                 "A short link to open it in your own browser, and a command to fetch the file",
                                 self.share_last_report)
+        if self.is_local:
+            # #62: what passes here, per profile, like a skill store reports it
+            yield SystemCommand("Test: Profile report",
+                                "What passes on this install per profile: installed and loads - takes seconds",
+                                partial(self.profile_report, False))
+            yield SystemCommand("Test: Profile report with routes (long)",
+                                "Also runs every loaded skill's golden utterances (en-US) for level 3",
+                                partial(self.profile_report, True))
         # #49: e.g. the same test set on a testing and an alpha install
         yield SystemCommand("Test: Compare results…",
                             "Two saved results step by step: what got fixed, what regressed, and why",
@@ -2563,8 +2636,8 @@ def build_arg_parser():
     prof.add_argument("--profile-report", action="store_true",
                       help="write the profile report (levels 1 installed and 2 loads; add --routes for 3)")
     prof.add_argument("--profile", metavar="FILE|URL", default=None,
-                      help="with --profile-report: a requirements file as a third profile on top of the "
-                           "installer's, e.g. a store's curated list")
+                      help="a requirements file as a third profile on top of the installer's, e.g. a store's "
+                           "curated list - for --profile-report, and for 'Test: Profile report' in the TUI")
     prof.add_argument("--routes", action="store_true",
                       help="with --profile-report: also run every loaded skill's golden utterances (en-US) "
                            "for level 3 - takes a while")
@@ -2620,8 +2693,8 @@ def run():
     if args.compare:
         from ovos_tui_client.compare import cli as compare_cli
         sys.exit(compare_cli(args.compare[0], args.compare[1], output=args.output))
-    if (args.profile or args.routes) and not args.profile_report:
-        parser.error("--profile and --routes go with --profile-report")
+    if args.routes and not args.profile_report:
+        parser.error("--routes goes with --profile-report")
     if args.profile_report:
         from ovos_tui_client.headless import run_profile_report
         sys.exit(run_profile_report(args, tool_version=_ovos_tui_version()))
@@ -2664,7 +2737,7 @@ def run():
         ).serve()
         return
     app = OVOSTUIApp(host=args.host, port=args.port, lang=args.lang, log_dir_override=args.log_dir, mycroft_conf_override=args.mycroft_conf,
-                     golden_dirs=args.golden_dir, scripts_dir=args.scripts_dir)
+                     golden_dirs=args.golden_dir, scripts_dir=args.scripts_dir, profile=args.profile)
     app.run()
 
 
