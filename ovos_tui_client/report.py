@@ -69,6 +69,10 @@ def build_report(summary: RunSummary, manifest: Dict, include_replies: bool = Fa
                 # cause, and the probes' answers (intent names and scores
                 # only - nothing OVOS said)
                 row["diagnosis"] = result.diagnosis
+        if getattr(result, "notes", None):
+            # #74: e.g. a skill still speaking after stop, and the steps
+            # that ran while it did
+            row["notes"] = list(result.notes)
         if include_replies:
             row["replies"] = replies
         steps.append(row)

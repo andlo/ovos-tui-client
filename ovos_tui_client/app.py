@@ -1604,6 +1604,12 @@ class OVOSTUIApp(App):
                 step, result, obs, self.bus.request, ctx, since).as_dict(),
             # #49: padatious' score for a padatious match, for comparing installs
             match_conf=lambda step, obs: padatious_conf(step, obs, self.bus.request),
+            # #74: a skill that keeps talking after stop - said once
+            on_stuck=lambda i, n, step, skill: self.call_from_thread(
+                self._write_status,
+                f"[{i}/{n}] {skill} is still speaking after stop. Steps run while it talks are marked "
+                "'possibly affected'; 'Script: Stop running script' ends the run, and stopping "
+                f"{skill} (say 'stop', or restart ovos-audio) frees the audio.", ok=False),
         )
         self.script_runner = runner
         self.call_from_thread(self._script_started, title, len(steps))
@@ -1667,6 +1673,8 @@ class OVOSTUIApp(App):
         self._write_conversation(self._result_markup(result.status, result.detail))
         for line in (getattr(result, "diagnosis", None) or {}).get("lines") or []:
             self._write_conversation(f"[dim]      ↳ {escape(str(line))}[/dim]")
+        for note in getattr(result, "notes", None) or []:
+            self._write_conversation(f"[yellow]      ⚠ {escape(str(note))}[/yellow]")
         runner = self.script_runner
         self.bus.emit_tui_event("script.step", {
             "title": runner.title if runner else "Script", "i": i, "n": n,

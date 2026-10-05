@@ -37,6 +37,10 @@ def summary_parts(summary: RunSummary) -> list:
         parts.append(f"{timeouts} timed out")
     if sent:
         parts.append(f"{sent} sent without a check")
+    affected = sum(1 for _, _, r in summary.results
+                   if any(n.startswith("possibly affected") for n in getattr(r, "notes", None) or []))
+    if affected:   # #74
+        parts.append(f"{affected} possibly affected by a skill that didn't stop")
     if summary.cancelled:
         parts.append(f"stopped after {done}/{summary.total}")
     parts.append(f"{summary.duration:.0f}s")
@@ -76,6 +80,15 @@ def report_markdown(summary: RunSummary, meta: Dict[str, str],
             lines.append(f"- {_MARK[result.status]} [{i}] \"{step.utterance}\" → {result.detail}")
             for d in (getattr(result, "diagnosis", None) or {}).get("lines") or []:
                 lines.append(f"  - ↳ {d}")
+        lines.append("")
+
+    noted = [(i, step, result) for i, step, result in summary.results if getattr(result, "notes", None)]
+    if noted:
+        # #74: a skill still speaking after stop, and the steps it may have affected
+        lines += ["## Warnings", ""]
+        for i, step, result in noted:
+            for note in result.notes:
+                lines.append(f"- ⚠ [{i}] \"{step.utterance}\": {note}")
         lines.append("")
 
     lines += ["## All steps", "",
