@@ -141,9 +141,9 @@ async def test_palette_offers_each_channel_current_one_first(tmp_path):
     app = _app(tmp_path)
     async with app.run_test():
         app.channel_result = {"channel": "alpha"}
-        titles = [c.title for c in app.get_system_commands(app.screen) if "Make this install" in c.title]
-        assert titles == ["OVOS: Make this install alpha…", "OVOS: Make this install testing…",
-                          "OVOS: Make this install stable…"]
+        titles = [c.title for c in app.get_system_commands(app.screen) if "Set channel:" in c.title]
+        assert titles == ["OVOS: Set channel: alpha…", "OVOS: Set channel: testing…",
+                          "OVOS: Set channel: stable…"]
 
 
 @pytest.mark.asyncio
@@ -188,8 +188,8 @@ async def test_release_channel_window_offers_making_it_each_channel(tmp_path):
             await pilot.pause()
             assert type(app.screen).__name__ == "ChoiceAboutScreen"
             labels = [str(b.label) for b in app.screen.query("Button")]
-            assert labels[:3] == ["Make this install alpha…", "Make this install testing…",
-                                  "Make this install stable…"]
+            assert labels[:3] == ["Set channel: alpha…", "Set channel: testing…",
+                                  "Set channel: stable…"]
             await pilot.click("#choice-testing")
             await pilot.pause()
             set_channel.assert_called_once_with("testing")
