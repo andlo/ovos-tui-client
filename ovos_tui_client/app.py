@@ -1843,8 +1843,12 @@ class OVOSTUIApp(App):
                 saved = f"Saved {base}.md and {base.name}.profile-report.json."
             except OSError as e:
                 saved = f"Could not save it in {self.results_dir}: {e}"
-            self.call_from_thread(self._write_status, f"Profile report ready. {saved}")
-            self.call_from_thread(self.push_screen, TextAboutScreen(md))
+            def _show():
+                # the screen is made on the UI thread: on Python 3.9 its
+                # asyncio parts need that thread's event loop
+                self._write_status(f"Profile report ready. {saved}")
+                self.push_screen(TextAboutScreen(md))
+            self.call_from_thread(_show)
 
         if not routes:
             _finish()
