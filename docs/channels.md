@@ -43,10 +43,25 @@ used as it is.
 The window lists the core versions, and for each other channel why the
 install isn't on it.
 
-Only the core is compared. An install can have the channel's core and
-still not be the channel: other packages below the channel's versions,
-betas of third-party libraries, plugins that conflict with the core. See
-the next section.
+The channel is worked out from the core. An install can have the
+channel's core and still not be the channel: other packages below the
+channel's versions, betas of third-party libraries, plugins that conflict
+with the core. So right after the channel, ovos-tui checks how clean the
+install is on it, without changing anything and in seconds:
+
+- **behind:** packages the channel names whose installed version it
+  doesn't allow
+- **pre-releases:** pre-releases the channel doesn't name that nothing
+  asks for
+- **conflicts:** what `pip check` reports
+
+The header then says e.g. `OVOS alpha · 3 conflicts` (just `OVOS alpha`
+when it's clean), the startup lines say what's not quite right, and the
+'OVOS: Release channel' window lists each package. A saved test report
+carries the same (`channel_health` in its manifest), so whoever reads it
+can tell a failure on a clean channel from one on a drifted install. The
+next section is how to fix it; conflicts that come from a plugin's own
+upper bound can't be fixed from the device.
 
 ## A clean install on a channel
 

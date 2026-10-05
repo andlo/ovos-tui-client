@@ -201,3 +201,73 @@ def test_dry_run_with_nothing_to_do_says_so_first():
            "prereleases_kept": {}, "pip_check": [], "error": None}
     md = sc.render(res)
     assert md.index("Nothing to do: this install already follows alpha") < md.index("Constraints:")
+
+
+# --- install health (#64) -------------------------------------------------------
+
+ALPHA = """ovos-core>=2.2.4a1
+ovos-m2v-pipeline>=0.30.0a1
+ovos-skill-date-time>=1.11.0a1
+"""
+DISTS = [
+    ("ovos-core", "3.7.2a2", []),
+    ("ovos_m2v_pipeline", "0.29.5a1", ["huggingface_hub"]),          # below alpha's floor
+    ("ovos-skill-date-time", "1.11.6a1", []),
+    ("huggingface_hub", "1.33.0", ["httpx<1,>=0.23.0"]),
+    ("httpx", "1.0.dev6", []),                                        # a beta nothing asks for
+    ("requests", "2.32.3", []),
+]
+
+
+def test_health_finds_behind_prereleases_and_conflicts():
+    h = sc.health(ALPHA, DISTS, ["ovos-skill-homescreen 3.0.4a2 has requirement ovos-workshop<9.0.0"])
+    assert h["behind"] == {"ovos-m2v-pipeline": ("0.29.5a1", ">=0.30.0a1")}
+    assert h["prereleases"] == {"httpx": "1.0.dev6"}
+    assert len(h["conflicts"]) == 1
+    assert sc.health_counts(h) == ["1 behind", "1 pre-release", "1 conflict"]
+
+
+def test_clean_install_has_no_counts_and_says_clean():
+    clean = [d for d in DISTS if d[0] not in ("ovos_m2v_pipeline", "httpx")]
+    h = sc.health(ALPHA, clean, [])
+    assert sc.health_counts(h) == []
+    assert "Clean:" in sc.health_markdown(h, "alpha")
+
+
+def test_health_markdown_lists_what_and_points_to_set_channel():
+    md = sc.health_markdown(sc.health(ALPHA, DISTS, []), "alpha")
+    assert "ovos-m2v-pipeline 0.29.5a1 (the channel says >=0.30.0a1)" in md
+    assert "httpx 1.0.dev6" in md and "Set channel: alpha…" in md
+
+
+@pytest.mark.asyncio
+async def test_header_gets_the_health_after_the_channel(tmp_path):
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()   # the app's own startup check first
+        res = {"channel": "alpha", "constraints": {"alpha": ALPHA}}
+        app.channel_result = res
+        app._channel_short = "OVOS alpha"
+        with patch("ovos_tui_client.setchannel.installed_dists", return_value=DISTS), \
+                patch("ovos_tui_client.setchannel.Pip.check", return_value=[]):
+            h = app._install_health(res)
+        app._apply_install_health(res, h, announce=True)
+        await pilot.pause()
+        assert app._channel_short == "OVOS alpha · 1 behind · 1 pre-release"
+        assert res["health"]["behind"]
+        from textual.widgets import RichLog
+        text = "\n".join(str(l) for l in app.query_one("#conversation", RichLog).lines).lower()
+        assert "not quite alpha: 1 behind, 1 pre-release" in text
+
+
+def test_report_manifest_carries_the_health(monkeypatch):
+    from ovos_tui_client import manifest as m
+    monkeypatch.setattr(m, "local_stack", lambda: {"ovos-core": "3.7.2a2"})
+    monkeypatch.setattr(m, "pipeline_plugins", lambda: [])
+    monkeypatch.setattr(m, "routing_config", lambda override=None: {})
+    monkeypatch.setattr("ovos_tui_client.setchannel.installed_dists", lambda: DISTS)
+    monkeypatch.setattr("ovos_tui_client.setchannel.Pip.check", lambda self: [])
+    man = m.build_manifest("127.0.0.1", "en-us", [], channel="alpha", fetch=lambda url: ALPHA)
+    assert man["channel_health"]["behind"] == {"ovos-m2v-pipeline": {"installed": "0.29.5a1",
+                                                                     "channel": ">=0.30.0a1"}}
+    assert man["channel_health"]["prereleases"] == {"httpx": "1.0.dev6"}

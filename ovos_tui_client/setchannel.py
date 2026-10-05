@@ -202,6 +202,72 @@ def report_changes(report: Dict) -> Dict[str, str]:
     return out
 
 
+def health(constraints_text: str, dists: Iterable[Tuple[str, str, List[str]]],
+           pip_check_lines: Iterable[str] = ()) -> Dict:
+    """How clean an install is on a channel (#64), cheaply: no pip resolve.
+
+    behind:      {package: (installed, channel's specifier)} for packages the
+                 channel names whose installed version it doesn't allow
+    prereleases: {package: version} pre-releases outside the channel that
+                 nothing asks for (what --set-channel would move)
+    conflicts:   pip check's lines (a package's requirements not met)"""
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    from packaging.version import InvalidVersion, Version
+    pins = channel_mod.parse_constraints(constraints_text or "")
+    dists = list(dists)
+    behind = {}
+    for name, ver, _req in dists:
+        n = normalize(name)
+        spec = pins.get(n)
+        if not spec or spec.startswith("@"):  # unpinned or a git/url line
+            continue
+        try:
+            if Version(ver) not in SpecifierSet(spec, prereleases=True):
+                behind[n] = (ver, spec)
+        except (InvalidVersion, InvalidSpecifier):
+            continue
+    pre = {n: v for n, v, request in prerelease_moves(dists, pins.keys()) if request}
+    return {"behind": behind, "prereleases": pre, "conflicts": [l for l in pip_check_lines if l.strip()]}
+
+
+def health_counts(h: Optional[Dict]) -> List[str]:
+    """['3 behind', '6 pre-releases', '3 conflicts'] - only the non-zero ones."""
+    if not h:
+        return []
+    out = []
+    for key, one, many in (("behind", "behind", "behind"), ("prereleases", "pre-release", "pre-releases"),
+                           ("conflicts", "conflict", "conflicts")):
+        n = len(h.get(key) or [])
+        if n:
+            out.append(f"{n} {one if n == 1 else many}")
+    return out
+
+
+def health_markdown(h: Optional[Dict], channel: str) -> str:
+    """The 'How clean is this install' part of the Release channel window."""
+    if h is None:
+        return ""
+    lines = ["## How clean this install is", ""]
+    counts = health_counts(h)
+    if not counts:
+        lines += [f"Clean: every package {channel} names is at a version {channel} allows, there are "
+                  "no pre-releases outside the channel that nothing asks for, and pip finds no "
+                  "conflicts.", ""]
+        return "\n".join(lines)
+    lines += [f"Not quite {channel}: {', '.join(counts)}. **Set channel: {channel}…** below shows "
+              "what it would change (a dry run first); conflicts that come from a plugin's own "
+              "upper bound can't be fixed from here.", ""]
+    if h["behind"]:
+        lines += ["**Not at the channel's versions:**", ""]
+        lines += [f"- {n} {v} (the channel says {spec})" for n, (v, spec) in sorted(h["behind"].items())] + [""]
+    if h["prereleases"]:
+        lines += ["**Pre-releases outside the channel that nothing asks for:**", ""]
+        lines += [f"- {n} {v}" for n, v in sorted(h["prereleases"].items())] + [""]
+    if h["conflicts"]:
+        lines += ["**pip check:**", ""] + [f"- {l}" for l in h["conflicts"]] + [""]
+    return "\n".join(lines)
+
+
 # --- the device -------------------------------------------------------------
 
 def installed_dists() -> List[Tuple[str, str, List[str]]]:
