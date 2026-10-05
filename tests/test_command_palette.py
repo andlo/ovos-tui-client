@@ -751,12 +751,53 @@ async def test_startup_ends_with_ok_ready(tmp_path):
         with ui_lock:
             return fn(*a, **kw)
     app.call_from_thread = MagicMock(side_effect=_serialized)
-    with patch("ovos_tui_client.app.discover_services_with_state", return_value=[]):
+    # The channel check is real work (the constraints are fetched live), and
+    # when it takes longer than CHANNEL_STARTUP_WAIT 'OK ready.' rightly comes
+    # first and the channel line after it. That happened on a busy CI runner
+    # (0.3.0a6). This test is about the normal order, so the check answers at
+    # once and the wait can't run out first.
+    with patch("ovos_tui_client.app.discover_services_with_state", return_value=[]), \
+            patch("ovos_tui_client.app.local_stack", return_value={}), \
+            patch("ovos_tui_client.app.channel_check", return_value=None), \
+            patch("ovos_tui_client.app.CHANNEL_STARTUP_WAIT", 60.0):
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()
             view = app.query_one("#conversation", RichLog)
             last_line = str(view.lines[-1])
             assert "ok ready" in last_line.lower()
+
+
+@pytest.mark.asyncio
+async def test_slow_channel_check_does_not_hold_back_ok_ready(tmp_path):
+    """The other order, on purpose: a channel check slower than
+    CHANNEL_STARTUP_WAIT doesn't keep 'OK ready.' waiting; its line comes
+    after."""
+    app = _app_with_fake_bus(tmp_path)
+    app.bus.list_skills = MagicMock(side_effect=lambda cb: cb({"ovos-skill-grimm-tales.andlo": True}))
+    ui_lock = threading.RLock()
+
+    def _serialized(fn, *a, **kw):
+        with ui_lock:
+            return fn(*a, **kw)
+    app.call_from_thread = MagicMock(side_effect=_serialized)
+    release = threading.Event()
+
+    def _slow_check(stack):
+        release.wait(5)
+        return None
+    with patch("ovos_tui_client.app.discover_services_with_state", return_value=[]), \
+            patch("ovos_tui_client.app.local_stack", return_value={}), \
+            patch("ovos_tui_client.app.channel_check", side_effect=_slow_check), \
+            patch("ovos_tui_client.app.CHANNEL_STARTUP_WAIT", 0.2):
+        async with app.run_test() as pilot:
+            await pilot.pause(0.6)
+            lines = [str(l).lower() for l in app.query_one("#conversation", RichLog).lines]
+            assert any("ok ready" in l for l in lines)
+            assert not any("channel" in l for l in lines)   # still checking
+            release.set()
+            await app.workers.wait_for_complete()
+            lines = [str(l).lower() for l in app.query_one("#conversation", RichLog).lines]
+            assert "ok ready" not in lines[-1]                # the channel line came after
 
 
 # --- Log: Select all / Deselect all skills ---
