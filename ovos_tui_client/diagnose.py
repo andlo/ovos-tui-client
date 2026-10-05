@@ -76,9 +76,11 @@ class Context:
 
 
 def short(intent: str) -> str:
-    """'skill.id:name.intent' -> 'name'; the label the steps use."""
-    name = intent.split(":", 1)[1] if ":" in intent else intent
-    return normalize_intent(name)
+    """'skill.id:what.time.is.it.intent' -> 'what_time_is_it'; the label
+    the steps use. (normalize_intent gives 'skill:name', or ':name' for a
+    bare name.)"""
+    n = normalize_intent(intent or "")
+    return n.split(":", 1)[1] if ":" in n else n
 
 
 def same_intent(a: Optional[str], b: Optional[str]) -> bool:
@@ -101,13 +103,13 @@ def probe(step, request: Request) -> Dict:
     out["would_match"] = (r or {}).get("intent") if r is not None else "no reply"
     r = request("intent.service.padatious.get", data, "intent.service.padatious.reply", 3.0)
     out["padatious"] = (r or {}).get("intent") if r is not None else "no reply"
-    r = request("ovos.intent.list", {}, "ovos.intent.list.response", 3.0)
+    r = request("ovos.intent.list", {}, "ovos.intent.list.response", 6.0)
     if r is not None and r.get("ok", True):
         out["registered"] = [i for i in r.get("intents") or []
                              if i.get("skill_id") == step.skill_id]
     else:  # ovos-core 2.x: no per-language list
         r = request("intent.service.padatious.manifest.get", {"lang": step.lang},
-                    "intent.service.padatious.manifest", 3.0)
+                    "intent.service.padatious.manifest", 6.0)
         if r is not None:
             out["padatious_manifest"] = [i for i in r.get("intents") or []
                                          if str(i).startswith(f"{step.skill_id}:")]
