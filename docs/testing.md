@@ -210,10 +210,18 @@ step has its verdict the TUI lets the story start and then stops it.
 **A skill that doesn't stop.** If audio is still playing 5 seconds after
 the stop, or a new sentence starts after it, the step gets
 `⚠ did not stop: <skill> was still speaking 5 s after stop`, whatever
-its verdict, and the TUI says so once. Every step that starts while
-that skill still talks gets `⚠ possibly affected: <skill> was still
-speaking when this step started`: OVOS waits for the speech to end,
-so those steps are slowed down and their results less reliable. The
+its verdict, and the TUI says so once. It then sends stop again, to the
+step's session and to every session (what saying "stop" does). If that
+silences it, the run goes on (`… a stop for everything ended it`). If
+the skill **still** talks, the run ends there: OVOS handles one
+sentence at a time, so every later step would wait on it (seen live: a
+`count to 500` going on for ovos-core's whole 300-second handler
+timeout, then the next one). What was measured so far is kept and
+saved, the summary says which skill ended the run, and the report has
+`halted_by`. If it still talks after that, restart ovos-core.
+
+A step that starts while such a skill still talks gets `⚠ possibly
+affected: <skill> was still speaking when this step started`. The
 summary counts them, and the saved result lists them under *Warnings*
 (`notes` on the step in the report). Seen live with a skill that
 implements `stop` without `can_stop`, which ovos-workshop 9 rejects;
