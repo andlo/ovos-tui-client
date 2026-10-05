@@ -365,6 +365,10 @@ def render(res: Dict) -> str:
     lines = [title, ""]
     if res.get("error"):
         return "\n".join(lines + [f"**Stopped:** {res['error']}", ""])
+    if res.get("dry_run") and not (res["changed"] or res["prereleases_moved"]):
+        lines += [f"**Nothing to do: this install already follows {ch}**, as far as its "
+                  "packages can (what can't follow is listed below, with why). There is "
+                  "nothing to apply; run it again when the channel moves.", ""]
     lines += [f"Constraints: {res.get('constraints')}", ""]
     verb = "would change" if res.get("dry_run") else "changed"
     lines += [f"## {len(res['changed'])} packages {verb}", ""]

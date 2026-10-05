@@ -174,3 +174,30 @@ async def test_dry_run_with_changes_asks_before_applying(tmp_path):
             await pilot.click("#choice-apply")
             await pilot.pause()
             worker.assert_called_once_with("alpha", False)
+
+
+@pytest.mark.asyncio
+async def test_release_channel_window_offers_making_it_each_channel(tmp_path):
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.channel_result = {"channel": "alpha"}
+        with patch.object(app, "_channel_worker", side_effect=lambda then: then()), \
+                patch("ovos_tui_client.app.local_stack", return_value={}), \
+                patch.object(app, "set_channel") as set_channel:
+            app.show_channel()
+            await pilot.pause()
+            assert type(app.screen).__name__ == "ChoiceAboutScreen"
+            labels = [str(b.label) for b in app.screen.query("Button")]
+            assert labels[:3] == ["Make this install alpha…", "Make this install testing…",
+                                  "Make this install stable…"]
+            await pilot.click("#choice-testing")
+            await pilot.pause()
+            set_channel.assert_called_once_with("testing")
+
+
+def test_dry_run_with_nothing_to_do_says_so_first():
+    res = {"channel": "alpha", "dry_run": True, "constraints": "u", "work_dir": "/w", "changed": {},
+           "added": [], "skipped": [], "cannot_follow": {"x": "y"}, "prereleases_moved": {},
+           "prereleases_kept": {}, "pip_check": [], "error": None}
+    md = sc.render(res)
+    assert md.index("Nothing to do: this install already follows alpha") < md.index("Constraints:")

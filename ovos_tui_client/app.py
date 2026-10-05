@@ -1732,8 +1732,18 @@ class OVOSTUIApp(App):
         """'OVOS: Release channel': what this install runs, and how to change."""
         def _show():
             stack = local_stack() if self.is_local else {}
-            self.push_screen(TextAboutScreen(
-                channel_markdown(self.channel_result or {}, stack, remote=not self.is_local)))
+            md = channel_markdown(self.channel_result or {}, stack, remote=not self.is_local)
+            if not self.is_local:  # setting the channel needs this machine's venv
+                self.push_screen(TextAboutScreen(md))
+                return
+            # the window offers the action too, not only the palette (#65):
+            # the channel this install runs first
+            res = self.channel_result or {}
+            current = res.get("channel") or res.get("declared")
+            order = sorted(("testing", "alpha", "stable"), key=lambda c: c != current)
+            choices = [(ch, f"Make this install {ch}…") for ch in order]
+            self.push_screen(ChoiceAboutScreen(md, choices),
+                             lambda ch: ch and self.set_channel(ch))
         self._write_status("Checking the release channel against today's constraints…")
         self._channel_worker(then=_show)
 
