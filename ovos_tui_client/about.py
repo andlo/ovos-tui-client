@@ -217,6 +217,31 @@ class TextAboutScreen(AboutBase):
         self.dismiss(None)
 
 
+class ChoiceAboutScreen(AboutBase):
+    """Markdown plus a row of buttons; dismisses with the chosen button's
+    id (None on Esc). Used where the reader decides what happens next,
+    e.g. --set-channel's dry run -> apply it (#65)."""
+    __test__ = False
+
+    def __init__(self, markdown: str, choices):
+        super().__init__()
+        self._markdown = markdown
+        self._choices = list(choices)  # [(id, label)], the first is the default action
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="about-box"):
+            with VerticalScroll(classes="about-scroll"):
+                yield Markdown(self._markdown, id="about-md")
+            with Horizontal(classes="about-buttons"):
+                for i, (cid, label) in enumerate(self._choices):
+                    yield Button(label, id=f"choice-{cid}", variant="primary" if i == 0 else "default")
+                yield Button("Close (Esc)", id="about-close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        self.dismiss(bid[len("choice-"):] if bid.startswith("choice-") else None)
+
+
 def skill_rows(installed: dict, display_name, version_of=lambda skill_id: None, needle: str = ""):
     """[(skill_id, label, active)] sorted by display name, filtered by
     needle (matches name or skill_id). #15: one skill per line."""
