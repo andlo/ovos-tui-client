@@ -422,3 +422,164 @@ def _close(bus) -> None:
             client.close()
     except Exception:  # noqa: BLE001
         pass
+
+
+# --------------------------------------------------------------------
+# The profile report (#62)
+# --------------------------------------------------------------------
+
+def profile_inputs(profile_path: Optional[str], fetch=None, log: Callable[[str], None] = print):
+    """(default lines, extra lines, custom lines or None, sources) - the
+    installer's templates live, and the --profile file."""
+    from ovos_tui_client import profile_report as pr
+    from ovos_tui_client.channel import fetch_text
+    fetch = fetch or fetch_text
+    lines, sources = {}, {}
+    for pid, name in (("default", pr.DEFAULT_TEMPLATE), ("extra", pr.EXTRA_TEMPLATE)):
+        url = pr.INSTALLER_TEMPLATES.format(name=name)
+        text = fetch(url)
+        if text is None:
+            log(f"Could not fetch the OVOS installer's {name} - the {pid} profile is empty (no network?).")
+        lines[pid] = pr.template_lines(text or "")
+        sources[pid] = f"OpenVoiceOS/ovos-installer@main ({name})"
+    custom = None
+    if profile_path:
+        from ovos_tui_client.setchannel import read_source
+        text = read_source(profile_path, fetch)
+        if text is None:
+            log(f"Could not read the profile {profile_path}.")
+        else:
+            custom = pr.requirement_file_lines(text)
+            sources["custom"] = f"{profile_path}"
+    sources["default"] += " and this install's intent pipeline"
+    return lines["default"], lines["extra"], custom, sources
+
+
+def routing_from(summary) -> tuple:
+    """({skill_id: (hit, counted)}, {skills that kept talking after stop})
+    from a run of golden utterances (#62's level 3, #74's 'doesn't stop')."""
+    routing, talking = {}, set()
+    for _, step, result in summary.results:
+        if not step.skill_id or not step.has_expectation:
+            continue
+        hit, counted = routing.get(step.skill_id, (0, 0))
+        routing[step.skill_id] = (hit + (result.status == PASS), counted + 1)
+        for note in getattr(result, "notes", None) or []:
+            if note.startswith("did not stop: "):
+                talking.add(note[len("did not stop: "):].split(" ", 1)[0])
+    return routing, talking
+
+
+def run_profile_report(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.stderr,
+                       tool_version: str = "unknown", fetch=None) -> int:
+    """`ovos-tui --profile-report [--profile FILE] [--routes]`."""
+    from ovos_tui_client import profile_report as pr
+    from ovos_tui_client.channel import CONSTRAINTS_URL
+    from ovos_tui_client.diagnose import local_context
+    from ovos_tui_client.logs import find_log_dir
+    from ovos_tui_client.manifest import LOCAL_HOSTS
+
+    def log(line: str) -> None:
+        print(line, file=err, flush=True)
+
+    if (args.host or "").strip().lower() not in LOCAL_HOSTS:
+        log("The profile report reads this machine's packages: run it on the device itself.")
+        return EXIT_CANNOT_RUN
+    _quiet_ovos_logs()
+    bus = bus_factory(host=args.host, port=args.port, lang=args.lang)
+    try:
+        bus.connect()
+    except Exception as e:  # noqa: BLE001
+        log(f"Could not connect to the OVOS messagebus at {args.host}:{args.port}: {e}")
+        return EXIT_CANNOT_RUN
+    installed = wait_for_skills(bus, log=log)
+    if installed is None:
+        log("OVOS never answered the skill list - is ovos-core running? Nothing reported.")
+        _close(bus)
+        return EXIT_CANNOT_RUN
+
+    manifest = build_manifest(args.host, bus.lang, [], installed_skills=installed, channel=args.channel,
+                              mycroft_conf_override=args.mycroft_conf, tool_version=tool_version)
+    channel = manifest.get("channel")
+    if channel not in ("stable", "testing", "alpha"):
+        log(f"The release channel is unknown ({manifest.get('channel_note')}); add --channel testing "
+            "(or alpha, stable). A profile report is per channel.")
+        _close(bus)
+        return EXIT_CANNOT_RUN
+
+    log_dir = find_log_dir(is_local=True)
+    ctx = local_context(installed, log_dir)
+    left_out = pr.left_out_stages(_log_lines(log_dir))
+    default, extra, custom, sources = profile_inputs(args.profile, fetch, log)
+    profiles = pr.profile_members(default, extra, custom, ctx.pipeline)
+
+    routing, talking = None, set()
+    if args.routes:
+        routing, talking = _route_profiles(args, bus, installed, profiles, log)
+
+    report = pr.build_report(channel, profiles, loaded=installed, pipeline=ctx.pipeline, left_out=left_out,
+                             routing=routing, keeps_talking=talking,
+                             constraints_url=CONSTRAINTS_URL.format(channel=channel), sources=sources,
+                             manifest=manifest, tool=f"ovos-tui-client {tool_version}")
+    _close(bus)
+    md = pr.report_markdown(report)
+    print(md, file=out)
+    output_dir = Path(args.output).expanduser() if args.output else RESULTS_DIR
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        base = output_dir / f"{time.strftime('%Y-%m-%d_%H%M%S')}_profile-report_{channel}"
+        base.with_suffix(".md").write_text(md, encoding="utf-8")
+        js = Path(str(base) + ".profile-report.json")
+        js.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        log(f"Saved {base}.md and {js.name}")
+    except OSError as e:
+        log(f"Could not save the report in {output_dir}: {e}")
+    fails = sum(p["summary"]["fails"] for p in report["channels"][channel]["profiles"])
+    return EXIT_FAILED if fails else EXIT_OK
+
+
+def _log_lines(log_dir) -> List[str]:
+    if not log_dir:
+        return []
+    try:
+        return (Path(log_dir) / "skills.log").read_text(errors="replace").splitlines()[-20000:]
+    except OSError:
+        return []
+
+
+def _route_profiles(args, bus, installed, profiles, log):
+    """Level 3: every loaded skill's golden utterances, in LEVEL3_LANG."""
+    from ovos_tui_client import profile_report as pr
+    skills = [rid for p in profiles for rid, kind, _ in p["members"]
+              if kind == "skill" and installed.get(rid) is not False and rid in installed]
+    steps, sources = [], {}
+    for skill_id in skills:
+        _, s, _ = resolve_steps(skill_id, installed, pr.LEVEL3_LANG, args.golden_dir, log=lambda *a: None,
+                                sources=sources)
+        steps += [x for x in s if x.has_expectation]
+    if not steps:
+        log("No golden utterances found for the profiles' skills - level 3 not measured.")
+        return {}, set()
+    log(f"Routes: {len(steps)} golden utterances for {len(skills)} skills - this takes a while "
+        "(Ctrl+C stops after the current step).")
+    runner = ScriptRunner(
+        steps, "Profile report: routes",
+        send=lambda i, n, step: bus.send_utterance(step.utterance, session_id=runner.session_id, lang=step.lang,
+                                                   script={"title": "Profile report", "i": i, "n": n}),
+        on_step_done=lambda i, n, step, result, obs: (i % 25 == 0 or i == n) and log(f"  {i}/{n} done"),
+        known_skills=lambda: list(installed), stop_session=bus.stop_session,
+        answer=lambda session, text, lang: bus.send_utterance(text, lang=lang, session_id=session),
+    )
+    bus.on_message(runner.feed)
+    previous = signal.getsignal(signal.SIGINT)
+
+    def _interrupt(signum, frame):
+        log("Stopping after the current step...")
+        runner.stop()
+        signal.signal(signal.SIGINT, previous)
+    signal.signal(signal.SIGINT, _interrupt)
+    try:
+        summary = runner.run()
+    finally:
+        signal.signal(signal.SIGINT, previous)
+    return routing_from(summary)

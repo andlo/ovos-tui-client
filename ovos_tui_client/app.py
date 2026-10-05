@@ -2555,6 +2555,20 @@ def build_arg_parser():
     headless.add_argument("--no-share", action="store_true",
                           help="don't serve the report on a link, only save it")
 
+    prof = parser.add_argument_group(
+        "profile report",
+        "What passes on this install, per profile: the OVOS installer's default and extra skills, "
+        "and a requirements file of your own. Same format and rules as a skill store's profile report "
+        "(ovos-profile-report/1). Run it on the device itself.")
+    prof.add_argument("--profile-report", action="store_true",
+                      help="write the profile report (levels 1 installed and 2 loads; add --routes for 3)")
+    prof.add_argument("--profile", metavar="FILE|URL", default=None,
+                      help="with --profile-report: a requirements file as a third profile on top of the "
+                           "installer's, e.g. a store's curated list")
+    prof.add_argument("--routes", action="store_true",
+                      help="with --profile-report: also run every loaded skill's golden utterances (en-US) "
+                           "for level 3 - takes a while")
+
     parser.add_argument("--compare", nargs=2, metavar=("A", "B"), default=None,
                         help="compare two saved results (.report.json) step by step, e.g. a testing and an "
                              "alpha install; saves .md + .comparison.json (to --output, or the results "
@@ -2606,6 +2620,11 @@ def run():
     if args.compare:
         from ovos_tui_client.compare import cli as compare_cli
         sys.exit(compare_cli(args.compare[0], args.compare[1], output=args.output))
+    if (args.profile or args.routes) and not args.profile_report:
+        parser.error("--profile and --routes go with --profile-report")
+    if args.profile_report:
+        from ovos_tui_client.headless import run_profile_report
+        sys.exit(run_profile_report(args, tool_version=_ovos_tui_version()))
     if args.run:
         from ovos_tui_client.headless import run_headless
         sys.exit(run_headless(args, tool_version=_ovos_tui_version()))
