@@ -279,11 +279,12 @@ def comparison_json(c: Dict) -> str:
     return json.dumps(c, ensure_ascii=False, indent=2) + "\n"
 
 
-def cli(a_path: str, b_path: str, output: Optional[str] = None, out=sys.stdout, err=sys.stderr) -> int:
+def cli(a_path: str, b_path: str, output: Optional[str] = None, out=None, err=None) -> int:
     """`ovos-tui --compare A.report.json B.report.json [--output DIR]`.
     Prints the comparison (Markdown) and saves .md + .comparison.json.
     Exit code 1 when there are regressions, 2 when a file can't be read."""
     from ovos_tui_client.results import RESULTS_DIR
+    out, err = out or sys.stdout, err or sys.stderr
     try:
         a, b = load_report(a_path), load_report(b_path)
     except NotAReport as e:
