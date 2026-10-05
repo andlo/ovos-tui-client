@@ -288,6 +288,8 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
         log(f"[{i}/{n}] {_MARK.get(result.status, '?')} \"{step.utterance}\"  {result.detail}")
         for line in (result.diagnosis or {}).get("lines") or []:
             log(f"      ↳ {line}")
+        for note in result.notes or []:
+            log(f"      ⚠ {note}")
 
     runner = ScriptRunner(
         steps, title,
@@ -297,6 +299,9 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
         diagnose=lambda step, result, obs, since: diagnose(
             step, result, obs, bus.request, ctx, since).as_dict(),
         match_conf=lambda step, obs: padatious_conf(step, obs, bus.request),
+        on_stuck=lambda i, n, step, skill: log(
+            f"[{i}/{n}] ⚠ {skill} is still speaking after stop; the steps run while it talks are marked "
+            "'possibly affected' (Ctrl+C stops after the current step)"),
         known_skills=lambda: list(installed),
         stop_session=bus.stop_session,
         on_busy=lambda i, n, step, wait: log(

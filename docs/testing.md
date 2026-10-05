@@ -207,6 +207,19 @@ nothing a step started (a story, "count forever", a metronome) goes on
 under the next step. A story can take minutes to read, so once the
 step has its verdict the TUI lets the story start and then stops it.
 
+**A skill that doesn't stop.** If audio is still playing 5 seconds after
+the stop, or a new sentence starts after it, the step gets
+`⚠ did not stop: <skill> was still speaking 5 s after stop`, whatever
+its verdict, and the TUI says so once. Every step that starts while
+that skill still talks gets `⚠ possibly affected: <skill> was still
+speaking when this step started`: OVOS waits for the speech to end,
+so those steps are slowed down and their results less reliable. The
+summary counts them, and the saved result lists them under *Warnings*
+(`notes` on the step in the report). Seen live with a skill that
+implements `stop` without `can_stop`, which ovos-workshop 9 rejects;
+when the TUI runs on the OVOS machine, a failed step's diagnosis names
+that cause too.
+
 A skill stuck waiting in `get_response()` captures every sentence.
 That is reported as such, instead of as a plain mismatch.
 

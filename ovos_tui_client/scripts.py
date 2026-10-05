@@ -611,6 +611,9 @@ class StepResult:
     detail: str
     kind: str = ""  # the judge's verdict (ovos-routing-judge): hit, wrong_intent, captured, other, unhandled, hang
     diagnosis: Optional[dict] = None  # why it failed (#48, diagnose.Diagnosis.as_dict())
+    # warnings about the step, whatever its verdict (#74): a skill that kept
+    # talking after stop, or that was still talking when the step started
+    notes: List[str] = field(default_factory=list)
 
 
 def describe(obs: StepObservation) -> str:
@@ -712,9 +715,20 @@ class ScriptRunner:
                  response_release_wait: float = None,
                  diagnose: Callable[[ScriptStep, "StepResult", "StepObservation", float], Optional[dict]] = None,
                  match_conf: Callable[[ScriptStep, "StepObservation"], Optional[float]] = None,
+                 on_stuck: Callable[[int, int, ScriptStep, str], None] = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.steps = list(steps)
         self.title = title
+        # #74: a skill still talking STOP_WAIT after its step was stopped
+        # (seen live: a skill implementing stop without can_stop, which
+        # ovos-workshop 9 rejects). Every later step then waits on its
+        # speech, so they are flagged until it goes quiet.
+        self._on_stuck = on_stuck or (lambda *a: None)
+        self._last_speaker = None   # the skill behind the last speak, any session
+        self._stuck = None          # the skill that didn't stop, while it still talks
+        self._audio_busy = False    # audio playing now; unlike _speaking never reset per step
+        self._last_speech_start = float("-inf")  # clock() of the last speech start
+        self._stop_sent_at = float("inf")        # clock() of this step's stop
         # match_conf(step, obs) -> the winning intent's score, where OVOS can
         # tell it (padatious); for comparing two installs (#49)
         self._match_conf = match_conf
@@ -789,6 +803,16 @@ class ScriptRunner:
     def feed(self, msg_type: str, data: dict = None, context: dict = None) -> None:
         context = context or {}
         with self._lock:
+            # #74: who talks and whether audio plays, also between steps
+            # (a skill that ignored stop goes on talking then)
+            if msg_type in ("speak", "ovos.utterance.speak"):
+                meta = (data or {}).get("meta") or {}
+                self._last_speaker = meta.get("skill") or context.get("skill_id") or self._last_speaker
+            if msg_type in ("mycroft.audio.speech.start", "recognizer_loop:audio_output_start"):
+                self._audio_busy = True
+                self._last_speech_start = self._clock()
+            elif msg_type in ("mycroft.audio.speech.stop", "recognizer_loop:audio_output_end"):
+                self._audio_busy = False
             if self._obs is None:
                 return
             known = self._known | ({self._expected_skill} if self._expected_skill else set())
@@ -857,6 +881,12 @@ class ScriptRunner:
             self.session_ids.append(self.session_id)
             self._expected_skill = step.skill_id
             self._known = set(self._known_skills() or ())
+            # #74: a skill that didn't stop and is still talking now. A story
+            # is read sentence by sentence, so "talking" is audio playing or
+            # a sentence started in the last few seconds.
+            if self._stuck and not self._talking_now():
+                self._stuck = None   # it went quiet
+            affected = self._stuck
             self._speaking = False
             self._last_msg = self._clock()
             self._speech_seen = False
@@ -929,7 +959,8 @@ class ScriptRunner:
                 # story that can last minutes; see STORY_START_WAIT
                 self._speech_started.wait(self.story_start_wait)
                 self._end_step_session(step)
-                self._speech_done.wait(self.stop_wait)
+                with self._lock:
+                    talking = self._talking_now()
             else:
                 with self._lock:
                     speaking = self._speaking
@@ -941,11 +972,24 @@ class ScriptRunner:
                 # step's own session is touched.
                 self._end_step_session(step)
                 with self._lock:
-                    speaking = self._speaking
-                if speaking:
-                    self._speech_done.wait(self.stop_wait)
+                    # audio actually playing at the stop: a short reply that
+                    # just ended mustn't cost every step an extra wait
+                    talking = self._audio_busy
+            # #74: did it stop? A skill that ignores stop keeps talking, and
+            # every later step waits on its speech.
+            if talking and self._kept_talking_after_stop() and not self._cancel.is_set():
+                with self._lock:
+                    first = self._stuck is None
+                    self._stuck = self._last_speaker or self._stuck or "a skill"
+                    stuck_now = self._stuck
+                if first:
+                    self._on_stuck(index, total, step, stuck_now)
+            else:
+                stuck_now = None
             if self.settle:
                 self._sleep(self.settle)
+        else:
+            stuck_now = None
 
         with self._lock:
             obs, self._obs = self._obs, None
@@ -958,6 +1002,11 @@ class ScriptRunner:
         elif silent and busy_gave_up:
             result = StepResult(TIMEOUT, f"no response; OVOS was still busy with it after "
                                          f"{self.step_timeout + self.busy_wait:.0f} s")
+        # #74: warnings, whatever the verdict
+        if affected:
+            result.notes.append(f"possibly affected: {affected} was still speaking when this step started")
+        elif stuck_now:
+            result.notes.append(f"did not stop: {stuck_now} was still speaking {self.stop_wait:g} s after stop")
         return result, obs
 
     def _wait_until_core_is_done(self, index: int, total: int, step: ScriptStep):
@@ -1012,7 +1061,29 @@ class ScriptRunner:
         with self._lock:
             self._releasing = False
 
+    # gap between a story's sentences that still counts as talking (#74)
+    TALK_GAP = 3.0
+
+    def _talking_now(self) -> bool:
+        """Audio playing, or a sentence started a moment ago (a story is read
+        sentence by sentence). Call with the lock held."""
+        return self._audio_busy or (self._clock() - self._last_speech_start) < self.TALK_GAP
+
+    def _kept_talking_after_stop(self) -> bool:
+        """After the step's stop: still talking STOP_WAIT later, or a new
+        sentence started after the stop was sent (#74)."""
+        deadline = self._clock() + self.stop_wait
+        self._speech_done.wait(self.stop_wait)
+        remaining = deadline - self._clock()
+        if remaining > 0:
+            # between two sentences of a story: give the next one a moment
+            self._sleep(min(remaining, 1.5))
+        with self._lock:
+            return self._audio_busy or self._last_speech_start > self._stop_sent_at
+
     def _stop_step_session(self) -> None:
+        with self._lock:
+            self._stop_sent_at = self._clock()
         if self._stop_session and self.session_id and not self._cancel.is_set():
             with self._lock:
                 session = self._step_session
