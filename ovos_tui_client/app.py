@@ -1585,7 +1585,7 @@ class OVOSTUIApp(App):
     def _run_steps(self, title: str, steps: list) -> None:
         """Worker thread: builds and runs a ScriptRunner, with every UI
         touch marshalled through call_from_thread()."""
-        from ovos_tui_client.diagnose import diagnose, local_context, remote_context
+        from ovos_tui_client.diagnose import diagnose, local_context, padatious_conf, remote_context
         installed = dict(self.installed_skills or {})
         ctx = local_context(installed, self.log_dir) if self.is_local else remote_context(installed)
         runner = ScriptRunner(
@@ -1602,6 +1602,8 @@ class OVOSTUIApp(App):
             # #48: why a step failed, asked before the next step starts
             diagnose=lambda step, result, obs, since: diagnose(
                 step, result, obs, self.bus.request, ctx, since).as_dict(),
+            # #49: padatious' score for a padatious match, for comparing installs
+            match_conf=lambda step, obs: padatious_conf(step, obs, self.bus.request),
         )
         self.script_runner = runner
         self.call_from_thread(self._script_started, title, len(steps))
@@ -1786,6 +1788,43 @@ class OVOSTUIApp(App):
                              lambda ch: ch and self.set_channel(ch))
         self._write_status("Checking the release channel against today's constraints…")
         self._channel_worker(then=_show)
+
+    # 'Test: Compare results' (#49): pick A, pick B, compare, classes, save
+    def compare_results(self) -> None:
+        from ovos_tui_client import compare as cmp
+        from ovos_tui_client.compare_screen import ComparisonScreen, ResultPickerScreen, saved_results
+        files = saved_results(self.results_dir)
+        if len(files) < 2:
+            self._write_status(f"Comparing needs two saved results ('Test: Save result…') in {self.results_dir}; "
+                               f"there {'is' if len(files) == 1 else 'are'} {len(files)}. A result from another "
+                               "machine: copy its .report.json there.", ok=False)
+            return
+
+        def _saved(choice, c):
+            if choice != "save":
+                return
+            md, js = cmp.save_comparison(c, self.results_dir)
+            s = c["summary"]
+            self._write_status(f"Comparison saved: {md} and {js.name} - {s['fix']} fix, "
+                               f"{s['regression']} regression, {s['unclear']} unclear.")
+
+        def _picked_b(b_path, a_path):
+            if b_path is None:
+                return
+            try:
+                c = cmp.compare(cmp.load_report(a_path), cmp.load_report(b_path), str(a_path), str(b_path))
+            except cmp.NotAReport as e:
+                self._write_status(f"Can't compare: {e}", ok=False)
+                return
+            self.push_screen(ComparisonScreen(c), lambda choice: _saved(choice, c))
+
+        def _picked_a(a_path):
+            if a_path is None:
+                return
+            rest = [p for p in files if p != a_path]
+            self.push_screen(ResultPickerScreen("Compare with B (e.g. alpha)", rest, self.results_dir),
+                             lambda b: _picked_b(b, a_path))
+        self.push_screen(ResultPickerScreen("Compare: pick A (e.g. testing)", files, self.results_dir), _picked_a)
 
     # --set-channel from the palette (#65): dry run, confirm, apply, restart
     def set_channel(self, channel: str) -> None:
@@ -2240,6 +2279,10 @@ class OVOSTUIApp(App):
             yield SystemCommand(f"Test: Share last result - link / file ({self.last_report['title']})",
                                 "A short link to open it in your own browser, and a command to fetch the file",
                                 self.share_last_report)
+        # #49: e.g. the same test set on a testing and an alpha install
+        yield SystemCommand("Test: Compare results…",
+                            "Two saved results step by step: what got fixed, what regressed, and why",
+                            self.compare_results)
         channel = (self._channel_short.replace("OVOS: ", "").replace("OVOS ", "")
                    if self._channel_checked else "checking…")
         yield SystemCommand(f"OVOS: Release channel ({channel})", "", self.show_channel)
@@ -2504,6 +2547,11 @@ def build_arg_parser():
     headless.add_argument("--no-share", action="store_true",
                           help="don't serve the report on a link, only save it")
 
+    parser.add_argument("--compare", nargs=2, metavar=("A", "B"), default=None,
+                        help="compare two saved results (.report.json) step by step, e.g. a testing and an "
+                             "alpha install; saves .md + .comparison.json (to --output, or the results "
+                             "folder). Exit code 1 if anything regressed")
+
     setch = parser.add_argument_group(
         "release channel setup",
         "Make this install exactly an OVOS release channel, the way the channel's own tests "
@@ -2547,6 +2595,9 @@ def run():
     if args.set_channel:
         from ovos_tui_client.setchannel import cli as set_channel_cli
         sys.exit(set_channel_cli(args))
+    if args.compare:
+        from ovos_tui_client.compare import cli as compare_cli
+        sys.exit(compare_cli(args.compare[0], args.compare[1], output=args.output))
     if args.run:
         from ovos_tui_client.headless import run_headless
         sys.exit(run_headless(args, tool_version=_ovos_tui_version()))

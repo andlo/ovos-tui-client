@@ -255,6 +255,38 @@ The saved result has the same: under each failure in the `.md`, and as
 a `diagnosis` (category, the lines, any known cause, and the intent
 names and scores it was based on) on that step in the `.report.json`.
 
+## Compare two installs
+
+Run the same tests on two installs, typically a testing and an alpha
+one, save both results, and compare them step by step. It's the evidence
+for moving alpha on: these steps behave the same, these changed, and why.
+
+Put both `.report.json` files in the results folder (copy the one from
+the other machine there), then `Ctrl+P` → **`Test: Compare results…`**:
+pick A, pick B. Or from a shell:
+
+    ovos-tui --compare testing.report.json alpha.report.json
+
+Each step is paired by what was said, in which language and what was
+expected, and compared on: the result, what handled it, the pipeline
+plugin that matched (ovos-core 3.x says; 2.x doesn't), the slots,
+padatious' score (when padatious matched) and why it failed. The two
+ovos-core versions name intents differently
+(`what.time.is.it.intent` / `what_time_is_it`); that isn't counted as a
+difference. Unchanged steps are counted, not listed.
+
+Each difference gets a class: **fix** (failed on A, passes on B),
+**regression** (passed on A, fails on B) or **unclear** (anything else
+that changed: another plugin, other slots …). In the window, change a
+class with **f**, **r** or **u** on the highlighted difference; the
+suggested class is kept next to yours.
+
+The top says what was compared: channel, the versions of the core and
+every pipeline plugin, secondary languages, what the pipeline adds or
+drops, and install health. **Save** (`Ctrl+S`) writes a `.md` and a
+`.comparison.json` (`ovos-test-comparison/1`) next to the results. From
+a shell the exit code is 1 when anything regressed.
+
 ## Where the test utterances come from
 
 The `test/` folder is not part of an installed skill package, so the

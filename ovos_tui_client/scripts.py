@@ -38,7 +38,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 from ovos_routing_judge import Claim, judge, normalize_intent
 from ovos_routing_judge.claim import INTENT as INTENT_TIER, SKILL as SKILL_TIER
@@ -506,6 +506,26 @@ def list_user_scripts(scripts_dir: Path = SCRIPTS_DIR) -> List[Path]:
 # Observing and judging one step
 # --------------------------------------------------------------------
 
+# What a dispatched '<skill>:<intent>' message carries besides its slots
+DISPATCH_KEYS = frozenset({
+    "utterances", "utterance", "lang", "typed_slots", "__tags__", "intent_type", "target",
+    "confidence", "conf", "skill_id", "intent_name", "utterance_remainder", "sentence",
+    "session", "context", "utterance_id", "pipeline_id", "match_type",
+})
+
+
+def clean_slots(slots: dict) -> Dict[str, str]:
+    """Slot name -> value, without the '<skill>:<slot>' duplicates
+    ovos-core 3.x adds next to each plain one, and without what isn't a
+    slot (a new utterance_id every run, the score m2v puts there ...)."""
+    out = {}
+    for k, v in (slots or {}).items():
+        if ":" in str(k) or str(k) in DISPATCH_KEYS or isinstance(v, (dict, list)) or v is None:
+            continue
+        out[str(k)] = str(v)
+    return dict(sorted(out.items()))
+
+
 @dataclass
 class StepObservation(Claim):
     """What one step's session showed - an ovos-routing-judge Claim (#60),
@@ -516,10 +536,22 @@ class StepObservation(Claim):
     # mycroft.skill.handler.error in this step's session: what went wrong
     # in a handler that matched (#48's "matched, but the handler failed")
     errors: List[str] = field(default_factory=list)
+    # How it matched (#49, comparing two installs): the pipeline plugin
+    # (ovos-core 3.x says so in ovos.intent.matched; 2.x doesn't) and the
+    # slots it extracted.
+    stage: Optional[str] = None
+    slots: Dict[str, str] = field(default_factory=dict)
 
     @property
     def skills(self) -> List[str]:
         return self.handlers
+
+    def _in_session(self, msg) -> bool:
+        """The runner already drops other sessions' messages; this guards
+        the Claim when it's fed directly."""
+        sess = (msg.get("context") or {}).get("session")
+        sid = sess.get("session_id") if isinstance(sess, dict) else None
+        return not (self.session_id and sid and sid != self.session_id)
 
     def add_intent(self, name: str) -> None:
         """A dispatched '<skill_id>:<intent>' (tests, and callers that
@@ -534,11 +566,23 @@ class StepObservation(Claim):
         known = set(known_ids)
         self.known |= known
         super().observe(msg, known)
-        if msg.get("type") == "mycroft.skill.handler.error":
-            data = msg.get("data") or {}
+        mtype = msg.get("type") or ""
+        data = msg.get("data") or {}
+        if mtype == "mycroft.skill.handler.error":
             err = str(data.get("exception") or data.get("error") or "error")
             handler = data.get("name") or data.get("handler") or ""
             self.errors.append(f"{handler}: {err}" if handler else err)
+        elif mtype == "ovos.intent.matched" and self._in_session(msg):
+            # ovos-core 3.x: the first match of the step is the one that counts
+            if self.stage is None:
+                self.stage = data.get("pipeline_id") or (msg.get("context") or {}).get("pipeline_id")
+                self.slots = clean_slots(data.get("slots") or {})
+        elif ":" in mtype and mtype.split(":", 1)[0] in known and not self.slots and self._in_session(msg):
+            # ovos-core 2.x: the dispatched '<skill>:<intent>' carries the slots
+            self.slots = clean_slots({k: v for k, v in data.items() if k not in DISPATCH_KEYS})
+            ctx_stage = (msg.get("context") or {}).get("pipeline_id")
+            if ctx_stage and self.stage is None:
+                self.stage = ctx_stage
         # "nobody matched" ends a step like an intent failure does
         if self.unmatched:
             self.failed = True
@@ -626,6 +670,9 @@ class RunSummary:
     # result (results.py), since StepResult.detail alone is terse on a pass
     handled_by: dict = field(default_factory=dict)
     replies: dict = field(default_factory=dict)
+    # per step index: how it matched - {"stage", "slots", "conf"} - so two
+    # runs on two installs can be compared step by step (#49)
+    matches: dict = field(default_factory=dict)
 
     def count(self, status: str) -> int:
         return sum(1 for _, _, r in self.results if r.status == status)
@@ -664,9 +711,13 @@ class ScriptRunner:
                  answer: Callable[[str, str, Optional[str]], None] = None,
                  response_release_wait: float = None,
                  diagnose: Callable[[ScriptStep, "StepResult", "StepObservation", float], Optional[dict]] = None,
+                 match_conf: Callable[[ScriptStep, "StepObservation"], Optional[float]] = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.steps = list(steps)
         self.title = title
+        # match_conf(step, obs) -> the winning intent's score, where OVOS can
+        # tell it (padatious); for comparing two installs (#49)
+        self._match_conf = match_conf
         # diagnose(step, result, obs, sent_at) -> a diagnosis dict, called
         # after a failed step and before the next one starts (#48), so
         # what OVOS says about it still describes that step
@@ -989,6 +1040,14 @@ class ScriptRunner:
             if obs is not None:
                 summary.handled_by[i] = describe(obs)
                 summary.replies[i] = list(obs.spoke)
+                conf = None
+                if self._match_conf and (obs.intents or obs.skills):
+                    try:
+                        conf = self._match_conf(step, obs)
+                    except Exception:  # noqa: BLE001 - extra detail, never a failure
+                        conf = None
+                summary.matches[i] = {"stage": obs.stage, "slots": dict(obs.slots),
+                                      "conf": round(conf, 3) if conf is not None else None}
             self._on_step_done(i, len(self.steps), step, result, obs)
         summary.cancelled = self._cancel.is_set()
         summary.duration = self._clock() - start
