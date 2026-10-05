@@ -215,15 +215,16 @@ channel's own tests use (ovos-test-harness's channel install):
    ovos-plugin-manager, ovos-config and ovos-utils stay at the channel's
    versions; a plugin that needs them moved is left out, not forced in.
 
-`device_setup.sh` does this for an installed device (in its OVOS venv, as
-the user that owns it), reports what it changed and what can't follow the
-channel, and never downgrades the core:
+ovos-tui does this for the install it runs in: `Ctrl+P` →
+**OVOS: Make this install <channel>…** shows a dry run, asks, then offers
+to restart OVOS. From a shell:
 
-    curl -fsSLO https://raw.githubusercontent.com/andlo/ovos-klondike-mercantile/main/scripts/compat/device_setup.sh
-    bash device_setup.sh testing        # or alpha, stable
+    ovos-tui --set-channel testing --dry-run    # what it would change
+    ovos-tui --set-channel testing              # do it; or alpha, stable
 
-Restart OVOS afterwards. Running it again keeps the device on the channel
-as the channel moves.
+It reports what changed and what can't follow the channel, and never
+downgrades the core. Running it again keeps the install on the channel as
+the channel moves.
 """
 
 SWITCH_TEXT = """\
@@ -259,7 +260,7 @@ without `--pre`:
 
     pip install -c https://raw.githubusercontent.com/OpenVoiceOS/OpenVoiceOS/main/constraints-testing.txt ovos-core ...
 
-then run `device_setup.sh <channel>` (above). Don't `pip install -U`
+then run `ovos-tui --set-channel <channel>` (above). Don't `pip install -U`
 every `ovos-*` package at once: a plugin with an old upper bound can pull
 ovos-core back a major version.
 """

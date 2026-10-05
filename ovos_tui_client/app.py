@@ -81,7 +81,7 @@ from ovos_tui_client.scripts import (
     find_repo_url, list_user_scripts, load_golden, parse_script,
 )
 from ovos_tui_client.about import (
-    SkillAboutScreen, SkillsScreen, TextAboutScreen,
+    SkillAboutScreen, SkillsScreen, TextAboutScreen, ChoiceAboutScreen,
     skill_about_markdown, tui_about_markdown,
 )
 from rich.markup import escape
@@ -1736,6 +1736,71 @@ class OVOSTUIApp(App):
         self._write_status("Checking the release channel against today's constraints…")
         self._channel_worker(then=_show)
 
+    # --set-channel from the palette (#65): dry run, confirm, apply, restart
+    def set_channel(self, channel: str) -> None:
+        """'OVOS: Make this install <channel>…': a dry run first."""
+        if not self.is_local:
+            self._write_status("Setting the channel changes this machine's Python environment, and OVOS "
+                               "is on another machine: run ovos-tui there.", ok=False)
+            return
+        self._write_status(f"Dry run: what it takes to make this install {channel} "
+                           "(pip resolves every package, so this takes a few minutes)…")
+        self._set_channel_worker(channel, True)
+
+    @work(thread=True, exclusive=True, group="set-channel")
+    def _set_channel_worker(self, channel: str, dry_run: bool) -> None:
+        from ovos_tui_client.setchannel import run as set_channel_run
+        try:
+            res = set_channel_run(channel, dry_run=dry_run,
+                                  out=lambda line: self.call_from_thread(self._write_status, line))
+        except Exception as e:  # noqa: BLE001 - shown, never a crash
+            res = {"channel": channel, "dry_run": dry_run, "error": f"{e.__class__.__name__}: {e}"}
+        # systemctl is a blocking call: found here, off the main thread
+        res["_units"] = ([u for u, _active in discover_services_with_state()]
+                         if not dry_run and res.get("changed") else [])
+        self.call_from_thread(self._set_channel_done, res)
+
+    @work(thread=True, exclusive=True, group="set-channel")
+    def _restart_units_worker(self, units) -> None:
+        for unit in units:
+            ok, msg = restart_service(unit)
+            self.call_from_thread(self._write_status, msg, ok=ok)
+
+    def _set_channel_done(self, res: dict) -> None:
+        from ovos_tui_client.setchannel import render
+        md = render(res)
+        ch = res.get("channel")
+        if res.get("error"):
+            self._write_status(f"Could not make this install {ch}: {res['error']}", ok=False)
+            self.push_screen(TextAboutScreen(md))
+            return
+        if res.get("dry_run"):
+            if not (res.get("changed") or res.get("prereleases_moved")):
+                self._write_status(f"This install already follows {ch} as far as it can.")
+                self.push_screen(TextAboutScreen(md))
+                return
+
+            def _decided(choice):
+                if choice == "apply":
+                    self._write_status(f"Making this install {ch}…")
+                    self._set_channel_worker(ch, False)
+            self.push_screen(ChoiceAboutScreen(md, [("apply", f"Make it {ch}")]), _decided)
+            return
+        self._write_status(f"This install now follows {ch}: {len(res.get('changed') or {})} packages changed.")
+        units = res.get("_units") or []
+        if not units:
+            if res.get("changed"):
+                md += ("\nRestart OVOS yourself, e.g. `sudo systemctl restart 'ovos*'` for system "
+                       "services or `systemctl --user restart 'ovos*'`.\n")
+            self.push_screen(TextAboutScreen(md))
+            return
+
+        def _restart(choice):
+            if choice == "restart":
+                self._write_status("Restarting OVOS (this bus connection drops and comes back)…")
+                self._restart_units_worker(units)
+        self.push_screen(ChoiceAboutScreen(md, [("restart", "Restart OVOS services")]), _restart)
+
     def create_report(self) -> None:
         """'Test: Save result…': asks for the channel, a note and replies
         on/off, then saves the run as .md + .report.json (results.py)."""
@@ -2127,6 +2192,13 @@ class OVOSTUIApp(App):
         channel = (self._channel_short.replace("OVOS: ", "").replace("OVOS ", "")
                    if self._channel_checked else "checking…")
         yield SystemCommand(f"OVOS: Release channel ({channel})", "", self.show_channel)
+        if self.is_local:
+            # #65: the channel this install says it runs first
+            current = (self.channel_result or {}).get("channel") or (self.channel_result or {}).get("declared")
+            for ch in sorted(("testing", "alpha", "stable"), key=lambda c: c != current):
+                yield SystemCommand(f"OVOS: Make this install {ch}…",
+                                    "Dry run first: what it takes for every package the channel names, then confirm",
+                                    partial(self.set_channel, ch))
         yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
         yield SystemCommand("Focus: Logs", "", self.action_focus_logs)
         yield SystemCommand("Focus: Conversation", "", self.action_focus_conversation)

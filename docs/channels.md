@@ -69,22 +69,34 @@ channel install):
    ovos-plugin-manager, ovos-config and ovos-utils stay at the channel's
    versions. A plugin that only installs by moving them doesn't fit the
    channel; it is left out, not forced in.
+4. **Pre-releases only where asked for.** On an installed device,
+   pre-releases the channel doesn't name that came in as dependencies go
+   to the newest final release, unless something asks for the
+   pre-release.
 
-[`device_setup.sh`](https://github.com/andlo/ovos-klondike-mercantile/blob/main/scripts/compat/device_setup.sh)
-does this for an installed device, in its OVOS venv, as the user that
-owns it:
+ovos-tui-client does this for the install it runs in (the OVOS venv, as
+the user that owns it). On the device:
 
-    curl -fsSLO https://raw.githubusercontent.com/andlo/ovos-klondike-mercantile/main/scripts/compat/device_setup.sh
-    bash device_setup.sh testing        # or alpha, stable
+    ovos-tui --set-channel testing --dry-run    # what it would change (exit code 1 if anything)
+    ovos-tui --set-channel testing              # do it; or alpha, stable
 
-It reports what it changed, what can't follow the channel, and
-`pip check`, and never downgrades the core. Restart OVOS afterwards.
-Running it again keeps the device on the channel as the channel moves.
-To add a package later, install it under the same constraints and the
-core lock the script leaves:
+or `Ctrl+P` → **`OVOS: Make this install <channel>…`**, which shows the dry
+run first, asks, and then offers to restart the OVOS services.
 
-    cd ~/.cache/klondike-device/<channel>
-    ~/.venvs/ovos/bin/pip install -c constraints.txt -c lock.txt <package>
+It reports what changed, what can't follow the channel (with pip's
+reason), the pre-releases kept and `pip check`, and never downgrades the
+core. Restart OVOS afterwards. Running it again keeps the install on the
+channel as the channel moves. Logs, the constraints used, the core lock
+and a `pip freeze` from before and after are kept in
+`~/.cache/ovos-tui-client/set-channel/<channel>/<time>/`; to add a package
+later without moving the core, install it under the same two files:
+
+    cd ~/.cache/ovos-tui-client/set-channel/<channel>/<time>
+    pip install -c constraints.txt -c lock.txt <package>
+
+`--constraints FILE|URL` uses another constraints file than the channel's
+own, e.g. to try a pending change to OpenVoiceOS/OpenVoiceOS on a real
+device before it is merged.
 
 ## Changing channel
 
@@ -119,8 +131,8 @@ without `--pre`:
 
     pip install -c https://raw.githubusercontent.com/OpenVoiceOS/OpenVoiceOS/main/constraints-testing.txt ovos-core ...
 
-then run `device_setup.sh <channel>` as above: it moves everything the
-channel names onto the channel and locks the core. Don't upgrade with
+then run `ovos-tui --set-channel <channel>` as above: it moves
+everything the channel names onto the channel and locks the core. Don't upgrade with
 `pip install -U` of every `ovos-*` package at once: a plugin with an old
 upper bound can pull ovos-core back a major version, and the name filter
 misses packages like `padacioso` or `skill-*`.

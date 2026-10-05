@@ -119,3 +119,58 @@ def test_render_dry_run():
     md = sc.render(res)
     assert "Dry run" in md and "| httpx | 1.0.dev6 | 0.28.1 |" in md and "homescreen" in md
     assert "Restart OVOS" not in md
+
+
+# --- the palette (#65) -------------------------------------------------------
+
+import pytest  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+from ovos_tui_client.app import OVOSTUIApp  # noqa: E402
+
+
+def _app(tmp_path):
+    (tmp_path / "skills.log").write_text("")
+    app = OVOSTUIApp(log_dir_override=str(tmp_path))
+    app.bus = MagicMock()
+    return app
+
+
+@pytest.mark.asyncio
+async def test_palette_offers_each_channel_current_one_first(tmp_path):
+    app = _app(tmp_path)
+    async with app.run_test():
+        app.channel_result = {"channel": "alpha"}
+        titles = [c.title for c in app.get_system_commands(app.screen) if "Make this install" in c.title]
+        assert titles == ["OVOS: Make this install alpha…", "OVOS: Make this install testing…",
+                          "OVOS: Make this install stable…"]
+
+
+@pytest.mark.asyncio
+async def test_dry_run_with_nothing_to_do_just_shows_it(tmp_path):
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        res = {"channel": "alpha", "dry_run": True, "constraints": "u", "work_dir": "/w", "changed": {},
+               "added": [], "skipped": [], "cannot_follow": {}, "prereleases_moved": {},
+               "prereleases_kept": {}, "pip_check": [], "error": None}
+        app._set_channel_done(res)
+        await pilot.pause()
+        assert type(app.screen).__name__ == "TextAboutScreen"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_with_changes_asks_before_applying(tmp_path):
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        res = {"channel": "alpha", "dry_run": True, "constraints": "u", "work_dir": "/w",
+               "changed": {"httpx": ("1.0.dev6", "0.28.1")}, "added": [], "skipped": [],
+               "cannot_follow": {}, "prereleases_moved": {}, "prereleases_kept": {},
+               "pip_check": [], "error": None}
+        with patch.object(app, "_set_channel_worker") as worker:
+            app._set_channel_done(res)
+            await pilot.pause()
+            assert type(app.screen).__name__ == "ChoiceAboutScreen"
+            worker.assert_not_called()                      # nothing changes without a yes
+            await pilot.click("#choice-apply")
+            await pilot.pause()
+            worker.assert_called_once_with("alpha", False)

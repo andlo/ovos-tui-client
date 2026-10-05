@@ -372,7 +372,7 @@ def render(res: Dict) -> str:
         lines += ["| Package | Now | " + ("Would be" if res.get("dry_run") else "After") + " |", "|---|---|---|"]
         lines += [f"| {n} | {a or '-'} | {b} |" for n, (a, b) in res["changed"].items()]
     else:
-        lines += ["This install already is the channel." if not res["cannot_follow"] else "Nothing."]
+        lines += ["Everything the channel names that can follow it already does."]
     lines += [""]
     if res.get("added"):
         lines += [f"Added for the intent pipeline: {', '.join(res['added'])}.", ""]
