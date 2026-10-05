@@ -71,7 +71,7 @@ from ovos_tui_client.logs import (
     is_stdout_only_logging,
     extract_log_level, extract_skill_id, KNOWN_LOG_NAMES, KNOWN_LOG_LEVELS,
 )
-from ovos_tui_client.services import discover_services_with_state, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges
+from ovos_tui_client.services import discover_services_with_state, service_scope, restart_service, stop_service, start_service, detect_container_runtime, start_container_log_bridges, stop_container_log_bridges
 from ovos_tui_client.state import load_filter_state, save_filter_state, load_input_history, save_input_history
 from ovos_tui_client.skill_examples import (
     find_skill_distribution, find_skill_examples, find_skill_json, short_skill_name,
@@ -954,7 +954,8 @@ class OVOSTUIApp(App):
         docstring for why that's separate, larger, tracked work."""
         services = discover_services_with_state()
         if services:
-            lines = ["Services:"]
+            # #63: say so when they are system units (actions go via sudo)
+            lines = ["Services (system units, run via sudo):" if service_scope() == "system" else "Services:"]
             for name, is_active in services:
                 state = "Active" if is_active else "Inactive"
                 lines.append(f"    {name} {state}")

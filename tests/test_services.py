@@ -304,3 +304,76 @@ def test_stop_container_log_bridges_force_kills_after_timeout():
     proc.wait.side_effect = subprocess_module.TimeoutExpired(cmd="x", timeout=3)
     stop_container_log_bridges([proc])
     proc.kill.assert_called_once()
+
+
+# --- #63: system units when there are no user units ---------------------------
+
+import pytest  # noqa: E402
+
+from ovos_tui_client import services as services_mod  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _forget_unit_scopes():
+    services_mod._UNIT_SCOPE.clear()
+    yield
+    services_mod._UNIT_SCOPE.clear()
+
+
+def _fake_systemctl(user_out="", system_out="", action_rc=0, action_err=""):
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        if "list-units" in cmd:
+            out = user_out if "--user" in cmd else system_out
+            return MagicMock(returncode=0, stdout=out, stderr="")
+        return MagicMock(returncode=action_rc, stdout="", stderr=action_err)
+    return run, calls
+
+
+SYSTEM_UNITS = ("ovos-core.service loaded active running Open Voice OS - Core\n"
+                "ovos-audio.service loaded active running Open Voice OS - Audio\n")
+
+
+def test_falls_back_to_system_units_when_there_are_no_user_units():
+    run, calls = _fake_systemctl(system_out=SYSTEM_UNITS)
+    with patch("subprocess.run", side_effect=run):
+        got = services_mod.discover_services_with_state()
+    assert got == [("ovos-audio.service", True), ("ovos-core.service", True)]
+    assert services_mod.service_scope() == "system"
+    assert ["systemctl", "list-units", "ovos-*", "--plain", "--no-legend"] in calls
+
+
+def test_user_units_win_and_system_is_not_asked():
+    run, calls = _fake_systemctl(user_out=SYSTEM_UNITS, system_out=SYSTEM_UNITS)
+    with patch("subprocess.run", side_effect=run):
+        services_mod.discover_services_with_state()
+    assert services_mod.service_scope() == "user"
+    assert all("--user" in c for c in calls)
+
+
+def test_system_unit_restarts_through_sudo_without_a_prompt():
+    run, calls = _fake_systemctl(system_out=SYSTEM_UNITS)
+    with patch("subprocess.run", side_effect=run), patch.object(services_mod, "_is_root", return_value=False):
+        services_mod.discover_services_with_state()
+        ok, msg = services_mod.restart_service("ovos-core.service")
+    assert ok and msg == "ovos-core.service: restarted"
+    assert calls[-1] == ["sudo", "-n", "systemctl", "restart", "ovos-core.service"]
+
+
+def test_system_unit_as_root_needs_no_sudo():
+    run, calls = _fake_systemctl(system_out=SYSTEM_UNITS)
+    with patch("subprocess.run", side_effect=run), patch.object(services_mod, "_is_root", return_value=True):
+        services_mod.discover_services_with_state()
+        services_mod.stop_service("ovos-core.service")
+    assert calls[-1] == ["systemctl", "stop", "ovos-core.service"]
+
+
+def test_sudo_wanting_a_password_says_what_to_run():
+    run, _calls = _fake_systemctl(system_out=SYSTEM_UNITS, action_rc=1,
+                                  action_err="sudo: a password is required")
+    with patch("subprocess.run", side_effect=run), patch.object(services_mod, "_is_root", return_value=False):
+        services_mod.discover_services_with_state()
+        ok, msg = services_mod.restart_service("ovos-core.service")
+    assert not ok and "sudo systemctl restart ovos-core.service" in msg

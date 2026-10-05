@@ -52,6 +52,19 @@ all.
 install, `skillmanager.list` only reports skills in the same container.
 See [Web and Docker](web-and-docker.md#dockerpodman-installs).
 
+## Services
+
+**`Services: none found`.** ovos-tui looks for `ovos-*` systemd user units
+first and, when there are none, system units. An install with neither runs
+OVOS some other way: in containers (then it says so), or by hand.
+
+**`… is a system service and sudo wants a password`.** OVOS runs as system
+units here (some OVOS installer setups, e.g. a Mark II), and starting,
+stopping or restarting those needs root. ovos-tui uses `sudo -n` so a
+password prompt can never appear inside it; run the command the message
+shows, or allow the OVOS user to run `systemctl` for the `ovos-*` units
+without a password.
+
 ## Reporting a problem
 
 Open an issue on
