@@ -163,6 +163,17 @@ class OVOSBusConnection:
         other TUIs on the same bus can show it - see #32."""
         self._client.emit(Message(TUI_EVENT_PREFIX + name, data, self._tui_context()))
 
+    def request(self, msg_type: str, data: dict, reply_type: str, timeout: float = 5.0):
+        """Asks OVOS and waits for the reply's data, or None (no reply, an
+        older core without that handler). For #48's diagnosis probes,
+        which never run a handler."""
+        try:
+            reply = self._client.wait_for_response(Message(msg_type, data or {}, self._tui_context()),
+                                                   reply_type=reply_type, timeout=timeout)
+        except Exception:  # noqa: BLE001 - a probe never breaks anything
+            return None
+        return reply.data if reply is not None else None
+
     def stop_session(self, session_id: str):
         """mycroft.stop scoped to one session - stops whatever a test step
         started there. A stop in the default session doesn't reach it."""

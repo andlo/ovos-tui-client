@@ -210,6 +210,51 @@ step has its verdict the TUI lets the story start and then stops it.
 A skill stuck waiting in `get_response()` captures every sentence.
 That is reported as such, instead of as a plain mismatch.
 
+## Why a step failed
+
+Right after a failed step, before the next one starts, the TUI asks OVOS
+about it and writes a diagnosis under the red line:
+
+```
+✗ "what time is it in the kitchen sink please" → ovos-skill-wolfie.openvoiceos
+  ↳ what_time_is_it is registered, but padatious scores it 0.92;
+    the pipeline has only ovos-padatious-pipeline-plugin-high (≥0.95)
+```
+
+It asks which stage and intent would match the sentence now (without
+running anything), padatious' best guess and its score, and which
+intents the skill registered (per language on ovos-core 3.x; 2.x can't
+say for which language). That puts the failure in one of these:
+
+| Category | Means |
+|---|---|
+| skill not loaded | the expected skill isn't in OVOS' skill list, or is deactivated |
+| handler failed | the right intent matched, its handler raised an error |
+| matched but silent | the right skill took it and said nothing |
+| intent not registered | not for this language (`secondary_langs`?), or not at all |
+| below the threshold | padatious scores the right intent, but lower than the padatious stages in the pipeline allow |
+| another intent won | who took it instead, and with which stage |
+| matches now | it matches correctly when asked again: timing, or an earlier step got in the way |
+| unknown | the answers it got are shown |
+
+A padatious score only means something next to the pipeline: padatious
+always answers with its best guess, and an intent with a catch-all slot
+can score 0.94 on nonsense.
+
+**Known causes.** When the TUI runs on the OVOS machine itself it also
+checks known causes, and says `Likely cause: …` when one fits: the OVOS
+translate servers being down, a skill implementing stop without
+`can_stop` (ovos-workshop 9), ovos-m2v-pipeline answering common query
+without speaking (ovos-m2v-pipeline#68), intent lines ending in a slot
+on ovos-padatious < 2 (ovos-padatious-pipeline-plugin#175), and two
+slots side by side on ovos-workshop 9. These read the skills.log,
+installed versions and the skill's `.intent` files. Over a remote bus
+it says the cause is unknown and shows what OVOS answered.
+
+The saved result has the same: under each failure in the `.md`, and as
+a `diagnosis` (category, the lines, any known cause, and the intent
+names and scores it was based on) on that step in the `.report.json`.
+
 ## Where the test utterances come from
 
 The `test/` folder is not part of an installed skill package, so the

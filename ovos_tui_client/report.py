@@ -59,6 +59,11 @@ def build_report(summary: RunSummary, manifest: Dict, include_replies: bool = Fa
         }
         if result.status in (FAIL, TIMEOUT):
             row["detail"] = result.detail
+            if getattr(result, "diagnosis", None):
+                # #48: category, the lines shown under the red line, a known
+                # cause, and the probes' answers (intent names and scores
+                # only - nothing OVOS said)
+                row["diagnosis"] = result.diagnosis
         if include_replies:
             row["replies"] = replies
         steps.append(row)

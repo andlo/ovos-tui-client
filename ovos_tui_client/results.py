@@ -74,6 +74,8 @@ def report_markdown(summary: RunSummary, meta: Dict[str, str],
         lines += ["## Failures", ""]
         for i, step, result in failures:
             lines.append(f"- {_MARK[result.status]} [{i}] \"{step.utterance}\" → {result.detail}")
+            for d in (getattr(result, "diagnosis", None) or {}).get("lines") or []:
+                lines.append(f"  - ↳ {d}")
         lines.append("")
 
     lines += ["## All steps", "",
