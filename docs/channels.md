@@ -84,8 +84,8 @@ the user that owns it). On the device:
     ovos-tui --set-channel testing              # do it; or alpha, stable
 
 or in the TUI: the **`OVOS: Release channel`** window has a button per
-channel (**Make this install testing…** etc.), and `Ctrl+P` →
-**`OVOS: Make this install <channel>…`** does the same. Either shows the dry
+channel (**Set channel: testing…** etc.), and `Ctrl+P` →
+**`OVOS: Set channel: <channel>…`** does the same. Either shows the dry
 run first; when something would change it asks before applying it, and
 then offers to restart the OVOS services. When nothing would change, it
 says so: the install already is the channel, and there is nothing to

@@ -261,9 +261,9 @@ channel's own tests use (ovos-test-harness's channel install):
    ovos-plugin-manager, ovos-config and ovos-utils stay at the channel's
    versions; a plugin that needs them moved is left out, not forced in.
 
-ovos-tui does this for the install it runs in: the **Make this install
-<channel>…** buttons below (or `Ctrl+P` → **OVOS: Make this install
-<channel>…**) show a dry run, ask before changing anything, then offer to
+ovos-tui does this for the install it runs in: the **Set channel:
+<channel>…** buttons below (or `Ctrl+P` → **OVOS: Set channel:
+<channel>…**, the same as `--set-channel`) show a dry run, ask before changing anything, then offer to
 restart OVOS. From a shell:
 
     ovos-tui --set-channel testing --dry-run    # what it would change

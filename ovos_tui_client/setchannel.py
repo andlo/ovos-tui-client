@@ -361,7 +361,7 @@ def run(channel: str, constraints: Optional[str] = None, dry_run: bool = False,
 def render(res: Dict) -> str:
     """The result as Markdown, for the terminal and the TUI window."""
     ch = res.get("channel")
-    title = f"# {'Dry run: ' if res.get('dry_run') else ''}make this install {ch}"
+    title = f"# {'Dry run: s' if res.get('dry_run') else 'S'}et channel {ch}"
     lines = [title, ""]
     if res.get("error"):
         return "\n".join(lines + [f"**Stopped:** {res['error']}", ""])

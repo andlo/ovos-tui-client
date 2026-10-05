@@ -90,7 +90,7 @@ Almost everything besides typing lives in the command palette. Press
 | `skill` | `Skill: Activate / deactivate…`, and one `Skill: <id> (Active/Inactive)` entry per skill that toggles it |
 | `example` | Example phrases from the installed skills. Selecting one sends it. |
 | `service` | Start, stop or restart OVOS services: its systemd user units, or system units (through `sudo -n`) when OVOS runs as system services |
-| `ovos` | `OVOS: Release channel`, and `OVOS: Make this install <channel>…` ([release channels](channels.md)) |
+| `ovos` | `OVOS: Release channel`, and `OVOS: Set channel: <channel>…` (the same as `--set-channel`) ([release channels](channels.md)) |
 | `pipeline` | The intent pipeline in the order OVOS evaluates it |
 | `log` | Log filters: sources, levels, skills |
 | `clear` | `Clear: Logs`, `Conversation`, `Activity`, `All` |

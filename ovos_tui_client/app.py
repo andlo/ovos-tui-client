@@ -1741,7 +1741,7 @@ class OVOSTUIApp(App):
             res = self.channel_result or {}
             current = res.get("channel") or res.get("declared")
             order = sorted(("testing", "alpha", "stable"), key=lambda c: c != current)
-            choices = [(ch, f"Make this install {ch}…") for ch in order]
+            choices = [(ch, f"Set channel: {ch}…") for ch in order]
             self.push_screen(ChoiceAboutScreen(md, choices),
                              lambda ch: ch and self.set_channel(ch))
         self._write_status("Checking the release channel against today's constraints…")
@@ -1749,12 +1749,12 @@ class OVOSTUIApp(App):
 
     # --set-channel from the palette (#65): dry run, confirm, apply, restart
     def set_channel(self, channel: str) -> None:
-        """'OVOS: Make this install <channel>…': a dry run first."""
+        """'OVOS: Set channel: <channel>…' (= --set-channel): a dry run first."""
         if not self.is_local:
             self._write_status("Setting the channel changes this machine's Python environment, and OVOS "
                                "is on another machine: run ovos-tui there.", ok=False)
             return
-        self._write_status(f"Dry run: what it takes to make this install {channel} "
+        self._write_status(f"Dry run of set channel {channel}: what would change "
                            "(pip resolves every package, so this takes a few minutes)…")
         self._set_channel_worker(channel, True)
 
@@ -1782,7 +1782,7 @@ class OVOSTUIApp(App):
         md = render(res)
         ch = res.get("channel")
         if res.get("error"):
-            self._write_status(f"Could not make this install {ch}: {res['error']}", ok=False)
+            self._write_status(f"Could not set channel {ch}: {res['error']}", ok=False)
             self.push_screen(TextAboutScreen(md))
             return
         if res.get("dry_run"):
@@ -1795,7 +1795,7 @@ class OVOSTUIApp(App):
                 if choice == "apply":
                     self._write_status(f"Making this install {ch}…")
                     self._set_channel_worker(ch, False)
-            self.push_screen(ChoiceAboutScreen(md, [("apply", f"Make it {ch}")]), _decided)
+            self.push_screen(ChoiceAboutScreen(md, [("apply", f"Set channel: {ch}")]), _decided)
             return
         self._write_status(f"This install now follows {ch}: {len(res.get('changed') or {})} packages changed.")
         units = res.get("_units") or []
@@ -2207,7 +2207,7 @@ class OVOSTUIApp(App):
             # #65: the channel this install says it runs first
             current = (self.channel_result or {}).get("channel") or (self.channel_result or {}).get("declared")
             for ch in sorted(("testing", "alpha", "stable"), key=lambda c: c != current):
-                yield SystemCommand(f"OVOS: Make this install {ch}…",
+                yield SystemCommand(f"OVOS: Set channel: {ch}…",
                                     "Dry run first: what it takes for every package the channel names, then confirm",
                                     partial(self.set_channel, ch))
         yield SystemCommand("Help: Toggle panel", "", self.action_toggle_help_panel)
