@@ -268,6 +268,44 @@ The saved result has the same: under each failure in the `.md`, and as
 a `diagnosis` (category, the lines, any known cause, and the intent
 names and scores it was based on) on that step in the `.report.json`.
 
+## Profile report: what passes on this install
+
+What a skill store reports for a channel, for this device: per profile,
+which skills and pipeline plugins are installed, load, and route.
+`Ctrl+P` → **`Test: Profile report`**, or from a shell on the device:
+
+    ovos-tui --profile-report                         # levels 1 and 2: seconds
+    ovos-tui --profile-report --routes                # + level 3: runs golden utterances, takes a while
+    ovos-tui --profile-report --profile my-list.txt   # + a profile of your own
+
+The profiles build on each other:
+
+- **Default:** the OVOS installer's default skills (read live from
+  ovos-installer) and the intent pipeline this install runs
+- **Extra:** + the installer's extra skills
+- **Custom:** + a pip requirements file given with `--profile`, e.g. a
+  store's curated list; ovos-tui-client knows no store
+
+Each skill or pipeline plugin gets a level, measured here:
+
+| Level | Means |
+|---|---|
+| 1 installed | its package is in this Python environment |
+| 2 loads | the skill is in OVOS' skill list; a pipeline plugin is in the pipeline and OVOS didn't leave it out |
+| 3 routes | its golden utterances (en-US) reach it, at least 80 % (only with routes) |
+
+The labels follow a store's rules: `✓ loads`, `✓ 177/184 golden`,
+`✓ loads · 7/10 golden` (below 80 %), `· doesn't stop` (a skill that
+kept talking after stop), `✗ doesn't load`, `not installed here`. The
+JSON is `ovos-profile-report/1`, the format a store's own profile report
+uses, keyed by skill id and plugin id, so this device's report compares
+row by row with a store's. The counts are this device's, with
+everything it has installed loaded, and the report says so.
+
+Saved next to the results as `.md` and `.profile-report.json`. A profile
+report is per release channel, so the channel must be known (see
+[release channels](channels.md)).
+
 ## Compare two installs
 
 Run the same tests on two installs, typically a testing and an alpha
