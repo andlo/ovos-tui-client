@@ -112,6 +112,12 @@ LOG_SOURCE_COLORS = {
 DEFAULT_LOG_COLOR = "white"
 
 
+# The panes keep their last lines only: a run of every golden utterance
+# (hours, thousands of lines) mustn't grow the TUI on a device with 2 GB of
+# RAM. The saved result has everything.
+MAX_PANE_LINES = 5000
+
+
 def _ovos_tui_version() -> str:
     """Reads the installed package version via importlib.metadata, not
     a direct import of version.py - that file lives at the repo root,
@@ -778,14 +784,14 @@ class OVOSTUIApp(App):
             log_filter = Input(placeholder="Filter logs (free text)...", id="log-filter")
             log_filter.HELP = APP_HELP
             yield log_filter
-            logs_view = RichLog(id="logs-view", wrap=False, markup=True, auto_scroll=True)
+            logs_view = RichLog(id="logs-view", wrap=False, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
             logs_view.HELP = APP_HELP
             yield logs_view
         with Horizontal(id="middle-row"):
-            conversation = RichLog(id="conversation", wrap=True, markup=True, auto_scroll=True)
+            conversation = RichLog(id="conversation", wrap=True, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
             conversation.HELP = APP_HELP
             yield conversation
-            activity = RichLog(id="activity", wrap=True, markup=True, auto_scroll=True)
+            activity = RichLog(id="activity", wrap=True, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
             activity.HELP = APP_HELP
             yield activity
         utterance_input = Input(placeholder="Type what you'd say to OVOS...", id="utterance-input", select_on_focus=False)
@@ -1587,13 +1593,43 @@ class OVOSTUIApp(App):
     def _run_steps(self, title: str, steps: list, then=None) -> None:
         """Worker thread: builds and runs a ScriptRunner, with every UI
         touch marshalled through call_from_thread()."""
+        from ovos_tui_client import partial as partial_run
         from ovos_tui_client.diagnose import diagnose, local_context, padatious_conf, remote_context
         installed = dict(self.installed_skills or {})
         ctx = local_context(installed, self.log_dir) if self.is_local else remote_context(installed)
+
+        # a run of these steps cut short before (TUI closed, device restarted):
+        # go on from where it stopped?
+        fp = partial_run.fingerprint(title, steps)
+        resume = None
+        found = partial_run.find(self.results_dir, fp)
+        if found:
+            when = str(found.get("updated_at") or "")[:16].replace("T", " ")
+            choice = self._ask_in_worker(
+                f"# {title}\n\nThis run was cut short at step **{found['done']}/{found['total']}** "
+                f"(saved {when} UTC). Go on from where it stopped, or start over?",
+                [("resume", f"Resume from step {found['done'] + 1}"), ("over", "Start over")])
+            if choice is None:
+                self.call_from_thread(self._write_status, "Not started.")
+                return
+            if choice == "resume":
+                resume = partial_run.load(found["path"], title, steps)
+                if resume is None:
+                    self.call_from_thread(self._write_status, "The saved part doesn't fit these steps any "
+                                          "more (they changed), so the run starts over.", ok=False)
+        manifest = self._partial_manifest()
+
+        def _step_done(i, n, step, result, obs):
+            self.call_from_thread(self._script_step_done, i, n, step, result)
+            so_far = runner.summary
+            # autosave: every SAVE_EVERY steps, and at once on a warning
+            if so_far is not None and (len(so_far.results) % partial_run.SAVE_EVERY == 0 or result.notes):
+                partial_run.save(so_far, manifest, self.results_dir, fp)
+
         runner = ScriptRunner(
             steps, title,
             send=lambda i, n, step: self.call_from_thread(self._script_send, i, n, step),
-            on_step_done=lambda i, n, step, result, obs: self.call_from_thread(self._script_step_done, i, n, step, result),
+            on_step_done=_step_done,
             known_skills=lambda: list(self.installed_skills),
             stop_session=self.bus.stop_session,
             stop_all=getattr(self.bus, "stop_all", None),
@@ -1616,13 +1652,48 @@ class OVOSTUIApp(App):
         )
         self.script_runner = runner
         self.call_from_thread(self._script_started, title, len(steps))
+        if resume is not None:
+            self.call_from_thread(self._write_status, f"Resuming: {len(resume.results)}/{len(steps)} steps "
+                                  f"from the saved run, going on from step {len(resume.results) + 1}.")
         try:
-            summary = runner.run()
+            summary = runner.run(resume=resume)
         finally:
             self.script_runner = None
+        if len(summary.results) < summary.total:
+            if partial_run.save(summary, manifest, self.results_dir, fp):
+                self.call_from_thread(self._write_status, f"Saved the run so far ({len(summary.results)}/"
+                                      f"{summary.total}) - start the same run again to go on from step "
+                                      f"{len(summary.results) + 1}.")
+        else:
+            partial_run.remove(self.results_dir, fp)
         self.call_from_thread(self._script_finished, summary)
         if then is not None:   # still in the worker thread
             then(summary)
+
+    def _ask_in_worker(self, markdown: str, choices):
+        """From a worker thread: show a choice and wait for it. The chosen
+        id, or None on Esc."""
+        import threading
+        answered, box = threading.Event(), {}
+
+        def _push():
+            def _done(choice):
+                box["choice"] = choice
+                answered.set()
+            self.push_screen(ChoiceAboutScreen(markdown, choices), _done)
+        self.call_from_thread(_push)
+        answered.wait()
+        return box.get("choice")
+
+    def _partial_manifest(self) -> dict:
+        """What a saved partial run was tested against; never fails."""
+        try:
+            res = self.channel_result or {}
+            return build_manifest(self.host, self.bus.lang, [], installed_skills=dict(self.installed_skills or {}),
+                                  channel_result=(res.get("channel"), res.get("source"), res.get("note")),
+                                  tool_version=_ovos_tui_version())
+        except Exception:  # noqa: BLE001
+            return {}
 
     def _set_script_ui(self, running: bool, progress: str = "") -> None:
         try:
@@ -2648,6 +2719,9 @@ def build_arg_parser():
     prof.add_argument("--profile", metavar="FILE|URL", default=None,
                       help="a requirements file as a third profile on top of the installer's, e.g. a store's "
                            "curated list - for --profile-report, and for 'Test: Profile report' in the TUI")
+    parser.add_argument("--resume", action="store_true",
+                        help="with --run or --profile-report --routes: go on from where the same run was cut "
+                             "short (it is saved as it runs)")
     prof.add_argument("--routes", action="store_true",
                       help="with --profile-report: also run every loaded skill's golden utterances (en-US) "
                            "for level 3 - takes a while")

@@ -679,6 +679,8 @@ class RunSummary:
     # the run ended early because this skill kept talking after stop (#74):
     # what came after couldn't be trusted
     halted_by: Optional[str] = None
+    # when a run cut short was taken up again (time.time() each)
+    resumed_at: list = field(default_factory=list)
 
     def count(self, status: str) -> int:
         return sum(1 for _, _, r in self.results if r.status == status)
@@ -792,6 +794,7 @@ class ScriptRunner:
         self._provider_seen = threading.Event()
         self._cancel = threading.Event()
         self.current = 0
+        self.summary: Optional[RunSummary] = None  # the run so far, while it runs (autosave)
         self.session_id = None  # fresh per step, see _run_step()
         self.session_ids = []   # every session this run used - see RunSummary.session_ids
 
@@ -1123,10 +1126,24 @@ class ScriptRunner:
             except Exception:
                 pass
 
-    def run(self) -> RunSummary:
-        summary = RunSummary(title=self.title, total=len(self.steps), started_at=time.time())
+    def run(self, resume: Optional[RunSummary] = None) -> RunSummary:
+        """Runs the steps. With `resume` (a saved run of the same steps,
+        cut short), the steps it has are kept and the run goes on from the
+        next one."""
+        if resume is not None:
+            summary = resume
+            summary.total = len(self.steps)
+            summary.cancelled, summary.halted_by = False, None
+            summary.resumed_at.append(time.time())
+        else:
+            summary = RunSummary(title=self.title, total=len(self.steps), started_at=time.time())
+        self.summary = summary   # live, for autosave
+        done = {i for i, _, _ in summary.results}
+        prior = summary.duration
         start = self._clock()
         for i, step in enumerate(self.steps, start=1):
+            if i in done:
+                continue
             if self._cancel.is_set():
                 break
             self.current = i
@@ -1154,7 +1171,8 @@ class ScriptRunner:
             if self.halted_by:
                 summary.halted_by = self.halted_by
                 break
+            summary.duration = prior + (self._clock() - start)
         summary.cancelled = self._cancel.is_set() or bool(self.halted_by)
-        summary.duration = self._clock() - start
-        summary.session_ids = list(self.session_ids)
+        summary.duration = prior + (self._clock() - start)
+        summary.session_ids = list(dict.fromkeys(list(summary.session_ids) + list(self.session_ids)))
         return summary

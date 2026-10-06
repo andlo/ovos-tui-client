@@ -284,7 +284,10 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
     ctx = (local_context(installed, find_log_dir(is_local=True)) if local
            else remote_context(installed))
 
+    saver = PartialRun(args, title, steps, installed, log)
+
     def _step_done(i, n, step, result, obs):
+        saver.step_done(runner, result)
         log(f"[{i}/{n}] {_MARK.get(result.status, '?')} \"{step.utterance}\"  {result.detail}")
         for line in (result.diagnosis or {}).get("lines") or []:
             log(f"      ↳ {line}")
@@ -322,9 +325,10 @@ def run_headless(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.st
     signal.signal(signal.SIGINT, _interrupt)
     log(f"{title}: {len(steps)} step(s)")
     try:
-        summary = runner.run()
+        summary = runner.run(resume=saver.resume)
     finally:
         signal.signal(signal.SIGINT, previous)
+    saver.finish(summary)
     log(f"{title}: {' · '.join(summary_parts(summary))}")
     if summary.halted_by:
         log(f"Stopped early: {summary.halted_by} kept talking after a stop to its session and a stop for "
@@ -566,11 +570,18 @@ def _route_profiles(args, bus, installed, profiles, log):
         return {}, set()
     log(f"Routes: {len(steps)} golden utterances for {len(skills)} skills - this takes a while "
         "(Ctrl+C stops after the current step).")
+    saver = PartialRun(args, "Profile report: routes", steps, installed, log)
+
+    def _step_done(i, n, step, result, obs):
+        saver.step_done(runner, result)
+        if i % 25 == 0 or i == n:
+            log(f"  {i}/{n} done")
+
     runner = ScriptRunner(
         steps, "Profile report: routes",
         send=lambda i, n, step: bus.send_utterance(step.utterance, session_id=runner.session_id, lang=step.lang,
                                                    script={"title": "Profile report", "i": i, "n": n}),
-        on_step_done=lambda i, n, step, result, obs: (i % 25 == 0 or i == n) and log(f"  {i}/{n} done"),
+        on_step_done=_step_done,
         known_skills=lambda: list(installed), stop_session=bus.stop_session, stop_all=getattr(bus, "stop_all", None),
         answer=lambda session, text, lang: bus.send_utterance(text, lang=lang, session_id=session),
     )
@@ -583,9 +594,10 @@ def _route_profiles(args, bus, installed, profiles, log):
         signal.signal(signal.SIGINT, previous)
     signal.signal(signal.SIGINT, _interrupt)
     try:
-        summary = runner.run()
+        summary = runner.run(resume=saver.resume)
     finally:
         signal.signal(signal.SIGINT, previous)
+    saver.finish(summary)
     if summary.halted_by:
         log(f"Routes stopped early, after {len(summary.results)}/{len(steps)} steps: {summary.halted_by} kept "
             "talking after stop. Level 3 is from the steps run so far. If it still talks, restart ovos-core.")
@@ -593,3 +605,46 @@ def _route_profiles(args, bus, installed, profiles, log):
     if summary.halted_by:
         talking.add(summary.halted_by)
     return routing, talking
+
+
+class PartialRun:
+    """Autosave for a headless run, and --resume (see partial.py)."""
+
+    def __init__(self, args, title: str, steps, installed: Dict, log: Callable[[str], None]):
+        from ovos_tui_client import partial
+        self._p = partial
+        self.log = log
+        self.dir = Path(args.output).expanduser() if args.output else RESULTS_DIR
+        self.fp = partial.fingerprint(title, steps)
+        self.manifest = {}
+        try:
+            self.manifest = build_manifest(args.host, args.lang, [], installed_skills=installed,
+                                           channel=args.channel)
+        except Exception:  # noqa: BLE001 - only what the partial file says it ran against
+            pass
+        self.resume = None
+        found = partial.find(self.dir, self.fp)
+        if found and getattr(args, "resume", False):
+            self.resume = partial.load(found["path"], title, steps)
+            if self.resume is None:
+                log("The saved part of this run doesn't fit its steps any more; starting over.")
+            else:
+                log(f"Resuming: {found['done']}/{found['total']} steps from the saved run "
+                    f"({found['path'].name}), going on from step {found['done'] + 1}.")
+        elif found:
+            log(f"A run of these steps was cut short at {found['done']}/{found['total']} "
+                f"({found['path'].name}); add --resume to go on from step {found['done'] + 1}. "
+                "Starting over.")
+
+    def step_done(self, runner, result) -> None:
+        so_far = runner.summary
+        if so_far is not None and (len(so_far.results) % self._p.SAVE_EVERY == 0 or result.notes):
+            self._p.save(so_far, self.manifest, self.dir, self.fp)
+
+    def finish(self, summary) -> None:
+        if len(summary.results) < summary.total:
+            if self._p.save(summary, self.manifest, self.dir, self.fp):
+                self.log(f"Saved the run so far ({len(summary.results)}/{summary.total}): run it again with "
+                         f"--resume to go on from step {len(summary.results) + 1}.")
+        else:
+            self._p.remove(self.dir, self.fp)
