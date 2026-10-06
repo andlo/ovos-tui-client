@@ -152,12 +152,14 @@ def pipeline_plugins(stages: Iterable[str]) -> List[str]:
 # --- one entry -----------------------------------------------------------------------
 
 DEVICE_NOTE = "measured on this device, with everything it has installed loaded"
+LAST_RESORT_NOTE = ("a fallback of last resort: on this install its golden utterances reach other "
+                    "skills and fallbacks first, as they should, so they don't measure it")
 
 
 def entry(runtime_id: str, kind: str, version: Optional[str], *, installed: bool,
           loaded: Dict[str, Optional[bool]], pipeline: Iterable[str], left_out: Iterable[str],
           routing: Optional[Dict[str, Tuple[int, int]]] = None, keeps_talking: Iterable[str] = (),
-          now: Optional[str] = None) -> Dict:
+          last_resort: Iterable[str] = (), now: Optional[str] = None) -> Dict:
     """One row, with a store's rules for state and label."""
     row = {"runtime_id": runtime_id, "kind": kind}
     if version:
@@ -179,6 +181,11 @@ def entry(runtime_id: str, kind: str, version: Optional[str], *, installed: bool
         return {**row, "state": "fail", "label": "✗ doesn't load", "level": 1}
     if loaded.get(runtime_id) is False:
         return {**row, "state": "warn", "label": "✓ loads · deactivated", "level": 2}
+    if runtime_id in set(last_resort):
+        # e.g. fallback-unknown ("I don't know"): its golden utterances only
+        # reach it when it's the only fallback, never on a real install
+        return {**row, "state": "pass", "label": "✓ loads · last-resort fallback", "level": 2,
+                "note": LAST_RESORT_NOTE}
     counts = (routing or {}).get(runtime_id)
     if not counts or not counts[1]:
         return {**row, "state": "pass", "label": "✓ loads", "level": 2}
@@ -267,9 +274,32 @@ def left_out_stages(log_lines: Iterable[str]) -> List[str]:
     return pipeline_plugins(re.findall(r"'([A-Za-z0-9_.\-]+)'", last.split("invalid pipeline", 1)[1]))
 
 
+def fallback_skills(log_lines: Iterable[str]) -> set:
+    """Skills that registered a fallback handler since OVOS last started
+    ('registering fallback handler -> ovos.skills.fallback.<skill_id>')."""
+    out = set()
+    for line in log_lines:
+        if "ovos-core is ready" in line or "Skills Manager is ready" in line:
+            continue   # registrations come before 'ready'; keep them
+        m = re.search(r"registering fallback handler -> ovos\.skills\.fallback\.(\S+)", line)
+        if m:
+            out.add(m.group(1))
+    return out
+
+
+def last_resort_fallbacks(registered: Iterable[str], taken: Dict[str, Tuple[int, int]]) -> set:
+    """Fallback skills whose golden utterances mostly went to something
+    else: a last resort ("I don't know") on this install, so level 3 can't
+    measure them. taken: {skill: (steps something else took, steps)}."""
+    registered = set(registered)
+    return {s for s, (by_fallback, counted) in taken.items()
+            if s in registered and counted and by_fallback * 2 >= counted}
+
+
 def build_report(channel: str, profiles: List[Dict], *, loaded: Dict[str, Optional[bool]],
                  pipeline: List[str], left_out: List[str], routing: Optional[Dict] = None,
-                 keeps_talking: Iterable[str] = (), constraints_url: Optional[str] = None,
+                 keeps_talking: Iterable[str] = (), last_resort: Iterable[str] = (),
+                 constraints_url: Optional[str] = None,
                  sources: Optional[Dict[str, str]] = None, manifest: Optional[Dict] = None,
                  tool: str = "ovos-tui-client", installed: Callable[[str], bool] = None,
                  version_of: Callable[[str, Optional[str]], Optional[str]] = None,
@@ -284,7 +314,8 @@ def build_report(channel: str, profiles: List[Dict], *, loaded: Dict[str, Option
             is_installed = installed(pkg) if pkg else plugin_package(rid) is not None
             rows.append(entry(rid, kind, version_of(rid, pkg) if is_installed else None,
                               installed=is_installed, loaded=loaded, pipeline=pipeline, left_out=left_out,
-                              routing=routing, keeps_talking=keeps_talking, now=stamp))
+                              routing=routing, keeps_talking=keeps_talking, last_resort=last_resort,
+                              now=stamp))
         out_profiles.append({"id": p["id"], "name": p["name"], "builds_on": p["builds_on"],
                              "source": (sources or {}).get(p["id"]), "entries": rows, "summary": summary(rows)})
     report = {

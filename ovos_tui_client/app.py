@@ -1895,19 +1895,20 @@ class OVOSTUIApp(App):
         from ovos_tui_client import profile_report as pr
         from ovos_tui_client.channel import CONSTRAINTS_URL
         from ovos_tui_client.diagnose import local_context
-        from ovos_tui_client.headless import _log_lines, profile_inputs, resolve_steps, routing_from
+        from ovos_tui_client.headless import _log_lines, fallback_taken, profile_inputs, resolve_steps, routing_from
         installed = dict(self.installed_skills or {})
         ctx = local_context(installed, self.log_dir)
         default, extra, custom, sources = profile_inputs(
             self.profile, log=lambda line: self.call_from_thread(self._write_status, line, ok=False))
         profiles = pr.profile_members(default, extra, custom, ctx.pipeline)
 
-        def _finish(routing=None, talking=()):
+        def _finish(routing=None, talking=(), last_resort=()):
             manifest = build_manifest(self.host, self.bus.lang, [], installed_skills=installed,
                                       channel=channel, tool_version=_ovos_tui_version())
             report = pr.build_report(
                 channel, profiles, loaded=installed, pipeline=ctx.pipeline,
                 left_out=pr.left_out_stages(_log_lines(self.log_dir)), routing=routing, keeps_talking=talking,
+                last_resort=last_resort,
                 constraints_url=CONSTRAINTS_URL.format(channel=channel), sources=sources, manifest=manifest,
                 tool=f"ovos-tui-client {_ovos_tui_version()}")
             md = pr.report_markdown(report)
@@ -1941,7 +1942,12 @@ class OVOSTUIApp(App):
                                   "level 3 not measured.", ok=False)
             _finish()
             return
-        self._run_steps("Profile report: routes", steps, then=lambda summary: _finish(*routing_from(summary)))
+        def _routes_done(summary):
+            routing, talking = routing_from(summary)
+            last_resort = pr.last_resort_fallbacks(pr.fallback_skills(_log_lines(self.log_dir)),
+                                                   fallback_taken(summary))
+            _finish(routing, talking, last_resort)
+        self._run_steps("Profile report: routes", steps, then=_routes_done)
 
     # 'Test: Compare results' (#49): pick A, pick B, compare, classes, save
     def compare_results(self) -> None:

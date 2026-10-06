@@ -478,6 +478,24 @@ def routing_from(summary) -> tuple:
     return routing, talking
 
 
+def fallback_taken(summary) -> Dict[str, tuple]:
+    """{skill: (steps something else took, steps)} from a run of golden
+    utterances, by the failed steps' diagnosis (#48): another skill or
+    stage would match the sentence (m2v, another fallback ...). For a
+    fallback below all others that is what should happen; a broken one
+    points at itself or at nothing instead."""
+    out = {}
+    for _, step, result in summary.results:
+        if not step.skill_id or not step.has_expectation:
+            continue
+        taken, counted = out.get(step.skill_id, (0, 0))
+        would = ((getattr(result, "diagnosis", None) or {}).get("evidence") or {}).get("would_match") or {}
+        by_other = (result.status != PASS and bool(would.get("intent_service"))
+                    and would.get("skill_id") != step.skill_id)
+        out[step.skill_id] = (taken + by_other, counted + 1)
+    return out
+
+
 def run_profile_report(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=sys.stderr,
                        tool_version: str = "unknown", fetch=None) -> int:
     """`ovos-tui --profile-report [--profile FILE] [--routes]`."""
@@ -521,12 +539,13 @@ def run_profile_report(args, bus_factory=OVOSBusConnection, out=sys.stdout, err=
     default, extra, custom, sources = profile_inputs(args.profile, fetch, log)
     profiles = pr.profile_members(default, extra, custom, ctx.pipeline)
 
-    routing, talking = None, set()
+    routing, talking, last_resort = None, set(), set()
     if args.routes:
-        routing, talking = _route_profiles(args, bus, installed, profiles, log)
+        routing, talking, taken = _route_profiles(args, bus, installed, profiles, log)
+        last_resort = pr.last_resort_fallbacks(pr.fallback_skills(_log_lines(log_dir)), taken)
 
     report = pr.build_report(channel, profiles, loaded=installed, pipeline=ctx.pipeline, left_out=left_out,
-                             routing=routing, keeps_talking=talking,
+                             routing=routing, keeps_talking=talking, last_resort=last_resort,
                              constraints_url=CONSTRAINTS_URL.format(channel=channel), sources=sources,
                              manifest=manifest, tool=f"ovos-tui-client {tool_version}")
     _close(bus)
@@ -567,7 +586,7 @@ def _route_profiles(args, bus, installed, profiles, log):
         steps += [x for x in s if x.has_expectation]
     if not steps:
         log("No golden utterances found for the profiles' skills - level 3 not measured.")
-        return {}, set()
+        return {}, set(), {}
     log(f"Routes: {len(steps)} golden utterances for {len(skills)} skills - this takes a while "
         "(Ctrl+C stops after the current step).")
     saver = PartialRun(args, "Profile report: routes", steps, installed, log)
@@ -604,7 +623,7 @@ def _route_profiles(args, bus, installed, profiles, log):
     routing, talking = routing_from(summary)
     if summary.halted_by:
         talking.add(summary.halted_by)
-    return routing, talking
+    return routing, talking, fallback_taken(summary)
 
 
 class PartialRun:
