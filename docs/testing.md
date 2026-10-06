@@ -325,8 +325,16 @@ Each skill or pipeline plugin gets a level, measured here:
 
 The labels follow a store's rules: `✓ loads`, `✓ 177/184 golden`,
 `✓ loads · 7/10 golden` (below 80 %), `· doesn't stop` (a skill that
-kept talking after stop), `✗ doesn't load`, `not installed here`. The
-JSON is `ovos-profile-report/1`, the format a store's own profile report
+kept talking after stop), `✗ doesn't load`, `not installed here`.
+
+`✓ loads · last-resort fallback` is a fallback skill whose golden
+utterances went to other skills and fallbacks first, like
+fallback-unknown ("I don't know"): on a real install that is what should
+happen, so those utterances can't measure it, and it is graded by level
+2. One that is broken (its handler fails, or it says nothing) isn't
+marked so: there the failures point at the skill itself.
+
+The JSON is `ovos-profile-report/1`, the format a store's own profile report
 uses, keyed by skill id and plugin id, so this device's report compares
 row by row with a store's. The counts are this device's, with
 everything it has installed loaded, and the report says so.

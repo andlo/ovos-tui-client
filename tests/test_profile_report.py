@@ -164,3 +164,46 @@ async def test_palette_profile_report_needs_the_channel(tmp_path):
         await pilot.pause()
         text = "\n".join(str(l) for l in app.query_one("#conversation", RichLog).lines)
         assert "A profile report is per release channel" in text
+
+
+# --- a last-resort fallback --------------------------------------------------------
+
+def test_registered_fallbacks_from_the_log():
+    lines = ["... register_fallback:170 - INFO - registering fallback handler -> "
+             "ovos.skills.fallback.ovos-skill-ddg.openvoiceos",
+             "... registering fallback handler -> ovos.skills.fallback.ovos-skill-fallback-unknown.openvoiceos",
+             "... ovos-core is ready! additional skills can now be loaded"]
+    assert pr.fallback_skills(lines) == {"ovos-skill-ddg.openvoiceos", "ovos-skill-fallback-unknown.openvoiceos"}
+
+
+def test_last_resort_is_a_fallback_whose_golden_went_to_another_fallback():
+    registered = {"unknown.x", "ddg.x"}
+    taken = {"unknown.x": (7, 9), "ddg.x": (0, 3), "weather.x": (9, 9)}
+    # weather.x isn't a fallback skill; ddg.x routes itself
+    assert pr.last_resort_fallbacks(registered, taken) == {"unknown.x"}
+
+
+def test_a_last_resort_fallback_is_graded_by_level_2():
+    e = _e("s.x", routing={"s.x": (0, 9)}, last_resort={"s.x"})
+    assert (e["state"], e["label"], e["level"]) == ("pass", "✓ loads · last-resort fallback", 2)
+    assert "golden" not in e and "a fallback of last resort" in e["note"]
+    # level 2 still decides: one that doesn't load still fails
+    assert _e("s.x", loaded={}, last_resort={"s.x"})["label"] == "✗ doesn't load"
+
+
+def test_fallback_taken_reads_the_diagnosis():
+    from ovos_tui_client.headless import fallback_taken
+    from ovos_tui_client.scripts import FAIL, PASS, RunSummary, ScriptStep, StepResult
+    step = ScriptStep(utterance="what did", skill_id="unknown.x", intent_label="", lang="en-US")
+    other = {"evidence": {"would_match": {"skill_id": "ddg.x",
+                                          "intent_service": "ovos-fallback-pipeline-plugin-medium"}}}
+    m2v = {"evidence": {"would_match": {"skill_id": "personal.x", "intent_service": "ovos-m2v-pipeline-high"}}}
+    itself = {"evidence": {"would_match": {"skill_id": "unknown.x",
+                                           "intent_service": "ovos-fallback-pipeline-plugin-low"}}}
+    s = RunSummary(title="t", total=5)
+    s.results = [(1, step, StepResult(FAIL, "x", diagnosis=other)),
+                 (2, step, StepResult(FAIL, "x", diagnosis=m2v)),
+                 (3, step, StepResult(FAIL, "x", diagnosis=itself)),     # broken, not outranked
+                 (4, step, StepResult(FAIL, "x")),                       # no diagnosis: nothing known
+                 (5, step, StepResult(PASS, "ok"))]
+    assert fallback_taken(s) == {"unknown.x": (2, 5)}
