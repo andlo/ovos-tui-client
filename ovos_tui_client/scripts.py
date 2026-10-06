@@ -676,6 +676,9 @@ class RunSummary:
     # per step index: how it matched - {"stage", "slots", "conf"} - so two
     # runs on two installs can be compared step by step (#49)
     matches: dict = field(default_factory=dict)
+    # the run ended early because this skill kept talking after stop (#74):
+    # what came after couldn't be trusted
+    halted_by: Optional[str] = None
 
     def count(self, status: str) -> int:
         return sum(1 for _, _, r in self.results if r.status == status)
@@ -716,6 +719,7 @@ class ScriptRunner:
                  diagnose: Callable[[ScriptStep, "StepResult", "StepObservation", float], Optional[dict]] = None,
                  match_conf: Callable[[ScriptStep, "StepObservation"], Optional[float]] = None,
                  on_stuck: Callable[[int, int, ScriptStep, str], None] = None,
+                 stop_all: Callable[[], None] = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
         self.steps = list(steps)
         self.title = title
@@ -724,6 +728,8 @@ class ScriptRunner:
         # ovos-workshop 9 rejects). Every later step then waits on its
         # speech, so they are flagged until it goes quiet.
         self._on_stuck = on_stuck or (lambda *a: None)
+        self._stop_all = stop_all     # a stop for every session, when a skill ignores its own
+        self.halted_by = None         # the skill that kept talking after both stops: the run ended
         self._last_speaker = None   # the skill behind the last speak, any session
         self._stuck = None          # the skill that didn't stop, while it still talks
         self._audio_busy = False    # audio playing now; unlike _speaking never reset per step
@@ -944,10 +950,13 @@ class ScriptRunner:
                 silent = not (self._obs and (self._obs.intents or self._obs.skills or self._obs.failed))
                 asking = bool(self._pending_response)
             # a skill waiting for an answer isn't "core still busy": it
-            # would wait out BUSY_WAIT for nothing - the cancel below ends it
-            if not asking:
+            # would wait out BUSY_WAIT for nothing - the cancel below ends it.
+            # Nor is a skill that matched and is still talking (#74: counting
+            # to 500): it is stopped below instead of waited on for minutes.
+            if silent and not asking:
                 late, busy_gave_up = self._wait_until_core_is_done(index, total, step)
 
+        second_stop_worked = False   # #74: silenced only by the stop for everything
         if not self._cancel.is_set():
             # the reading pipeline fetches from its provider after the
             # handler is done - wait for that before judging the step
@@ -973,8 +982,10 @@ class ScriptRunner:
                 self._end_step_session(step)
                 with self._lock:
                     # audio actually playing at the stop: a short reply that
-                    # just ended mustn't cost every step an extra wait
-                    talking = self._audio_busy
+                    # just ended mustn't cost every step an extra wait. A step
+                    # that talked until it timed out (counting to 500) is caught
+                    # between two numbers too.
+                    talking = self._audio_busy or (timed_out and self._talking_now())
             # #74: did it stop? A skill that ignores stop keeps talking, and
             # every later step waits on its speech.
             if talking and self._kept_talking_after_stop() and not self._cancel.is_set():
@@ -984,6 +995,23 @@ class ScriptRunner:
                     stuck_now = self._stuck
                 if first:
                     self._on_stuck(index, total, step, stuck_now)
+                # Ask again, in its session and everywhere. Still talking after
+                # that: the rest of the run can't be trusted (seen live: a
+                # count_to_n going on for core's whole 300 s handler timeout,
+                # then the next one), so the run ends here.
+                self._stop_step_session()
+                if self._stop_all:
+                    try:
+                        self._stop_all()
+                    except Exception:  # noqa: BLE001
+                        pass
+                if self._kept_talking_after_stop():
+                    with self._lock:
+                        self.halted_by = stuck_now
+                else:
+                    with self._lock:
+                        self._stuck = None   # the second stop worked: later steps aren't affected
+                    second_stop_worked = True
             else:
                 stuck_now = None
             if self.settle:
@@ -1005,6 +1033,9 @@ class ScriptRunner:
         # #74: warnings, whatever the verdict
         if affected:
             result.notes.append(f"possibly affected: {affected} was still speaking when this step started")
+        elif stuck_now and second_stop_worked:
+            result.notes.append(f"did not stop: {stuck_now} was still speaking {self.stop_wait:g} s after stop; "
+                                "a stop for everything ended it")
         elif stuck_now:
             result.notes.append(f"did not stop: {stuck_now} was still speaking {self.stop_wait:g} s after stop")
         return result, obs
@@ -1120,7 +1151,10 @@ class ScriptRunner:
                 summary.matches[i] = {"stage": obs.stage, "slots": dict(obs.slots),
                                       "conf": round(conf, 3) if conf is not None else None}
             self._on_step_done(i, len(self.steps), step, result, obs)
-        summary.cancelled = self._cancel.is_set()
+            if self.halted_by:
+                summary.halted_by = self.halted_by
+                break
+        summary.cancelled = self._cancel.is_set() or bool(self.halted_by)
         summary.duration = self._clock() - start
         summary.session_ids = list(self.session_ids)
         return summary

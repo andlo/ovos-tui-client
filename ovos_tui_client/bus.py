@@ -174,6 +174,11 @@ class OVOSBusConnection:
             return None
         return reply.data if reply is not None else None
 
+    def stop_all(self):
+        """mycroft.stop with no session: what saying 'stop' does. For a skill
+        that ignored the stop to its own session (#74)."""
+        self._client.emit(Message("mycroft.stop", {}, self._tui_context()))
+
     def stop_session(self, session_id: str):
         """mycroft.stop scoped to one session - stops whatever a test step
         started there. A stop in the default session doesn't reach it."""
