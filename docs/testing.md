@@ -80,6 +80,27 @@ After a chosen run, two more entries appear in the palette:
 You can also start tests from a skill's About window: `t` for All, `c`
 for Choose. See [Skills and About windows](skills.md).
 
+## A run cut short
+
+While a run runs, what it has measured is saved every 10 steps (and at
+once when a step gets a warning) as `partial_<id>.report.json` and
+`partial_<id>.md` in the results folder. If the run ends early, closing
+the TUI, the device restarting, a skill that won't stop, Ctrl+C, the
+measured part is there, and the `.md` says how far it got.
+
+Start the **same** run again (the same script, skill or profile, so the
+same steps in the same order) and the TUI asks:
+
+> This run was cut short at step **450/770** … **Resume from step 451** · Start over
+
+Resuming keeps the saved steps and goes on from the next one; the
+finished result is one run, saying when it was resumed. From a shell,
+add `--resume` (`ovos-tui --run … --resume`, `ovos-tui --profile-report
+--routes --resume`); without it, the run starts over and says a saved
+part exists. A saved part is only used for exactly the same steps: if
+the steps changed (a skill updated its golden utterances), it starts
+over. A run that finishes removes its partial files.
+
 ## Save the result
 
 After a run, `Ctrl+P` → **`Test: Save result… (<title>)`**. A small window
