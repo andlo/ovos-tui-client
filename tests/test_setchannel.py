@@ -241,23 +241,41 @@ def test_health_markdown_lists_what_and_points_to_set_channel():
 
 
 @pytest.mark.asyncio
-async def test_header_gets_the_health_after_the_channel(tmp_path):
+async def test_startup_says_the_channel_and_its_health_on_one_line_before_ok_ready(tmp_path):
+    """One OVOS line at startup, health included, and 'OK ready.' last."""
+    from textual.widgets import RichLog
+    import threading
     app = _app(tmp_path)
-    async with app.run_test() as pilot:
-        await app.workers.wait_for_complete()   # the app's own startup check first
-        res = {"channel": "alpha", "constraints": {"alpha": ALPHA}}
-        app.channel_result = res
-        app._channel_short = "OVOS alpha"
-        with patch("ovos_tui_client.setchannel.installed_dists", return_value=DISTS), \
-                patch("ovos_tui_client.setchannel.Pip.check", return_value=[]):
-            h = app._install_health(res)
-        app._apply_install_health(res, h, announce=True)
-        await pilot.pause()
-        assert app._channel_short == "OVOS alpha · 1 behind · 1 pre-release"
-        assert res["health"]["behind"]
-        from textual.widgets import RichLog
-        text = "\n".join(str(l) for l in app.query_one("#conversation", RichLog).lines).lower()
-        assert "not quite alpha: 1 behind, 1 pre-release" in text
+    app.bus.list_skills = MagicMock(side_effect=lambda cb: cb({"s.x": True}))
+    ui_lock = threading.RLock()
+
+    def _serialized(fn, *a, **kw):   # as the other startup tests: the fake bus calls back at once
+        with ui_lock:
+            return fn(*a, **kw)
+    app.call_from_thread = MagicMock(side_effect=_serialized)
+    res = {"channel": "alpha", "source": "ovos-installer", "matches": ["alpha"], "problems": {"alpha": []},
+           "constraints": {"alpha": ALPHA}}
+    said = []
+    real_write = app._write_status
+
+    def _record(text, ok=True):   # the messages as written, not the wrapped pane
+        said.append(str(text))
+        return real_write(text, ok=ok)
+    app._write_status = _record
+    with patch("ovos_tui_client.app.discover_services_with_state", return_value=[]), \
+            patch("ovos_tui_client.app.local_stack", return_value={"ovos-core": "3.7.2a2"}), \
+            patch("ovos_tui_client.app.channel_check", return_value=res), \
+            patch("ovos_tui_client.setchannel.installed_dists", return_value=DISTS), \
+            patch("ovos_tui_client.setchannel.Pip.check", return_value=[]):
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+    ovos = [m for m in said if m.startswith("OVOS")]
+    assert len(ovos) == 1, said
+    assert "OVOS: alpha" in ovos[0] and "but not quite clean: 1 behind, 1 pre-release" in ovos[0]
+    assert said[-1] == "OK ready.", said
+    assert app._channel_short.endswith(" · 1 behind · 1 pre-release")
+    assert res["health"]["behind"]
 
 
 def test_report_manifest_carries_the_health(monkeypatch):

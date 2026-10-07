@@ -96,7 +96,7 @@ from ovos_tui_client.report_screen import ReportScreen, ReportViewScreen, ShareS
 LOG_POLL_INTERVAL = 0.5  # seconds
 # How long "OK ready." waits for the release-channel check at startup (it
 # fetches the constraints files); a slower answer is written when it comes.
-CHANNEL_STARTUP_WAIT = 6.0
+CHANNEL_STARTUP_WAIT = 10.0
 LOG_BUFFER_SIZE = 5000  # lines kept in memory for re-filtering; oldest dropped past this
 
 SOURCE_TAG_WIDTH = max(len(name) for name in KNOWN_LOG_NAMES)
@@ -1812,15 +1812,19 @@ class OVOSTUIApp(App):
             self.channel_result = result
             self._channel_checked = True
             self._channel_short, line = channel_summary(result, stack, remote=not self.is_local)
+            # #64: the install's health on that channel goes on the same line,
+            # so startup says it once, before 'OK ready.'
+            line = self._with_install_health(result, h, line)
             if announce:
                 self._write_status(line)
                 self._channel_startup_step_done()
             self._refresh_sub_title()
-        self.call_from_thread(_done)
-        # #64: how clean the install is on that channel. Worked out after the
-        # channel line is out, so pip check never holds back it or 'OK ready.'
+            if then is not None:
+                then()
+        # how clean the install is on that channel (pip check: seconds), worked
+        # out before the line so it is one line; CHANNEL_STARTUP_WAIT allows for it
         h = self._install_health(result)
-        self.call_from_thread(self._apply_install_health, result, h, announce, then)
+        self.call_from_thread(_done)
 
     def _install_health(self, result):
         """Install health on the detected channel (#64): packages behind the
@@ -1837,20 +1841,20 @@ class OVOSTUIApp(App):
         except Exception:  # noqa: BLE001 - informational only
             return None
 
-    def _apply_install_health(self, result, h, announce: bool = False, then=None) -> None:
-        """Adds ' · 3 conflicts' etc to the header, and at startup says so."""
-        if h is not None and result is not None and self.channel_result is result:
-            from ovos_tui_client.setchannel import health_counts
-            ch = result.get("channel") or result.get("declared")
-            result["health"] = h
-            counts = health_counts(h)
-            self._channel_short = self._channel_short.split(" · ")[0] + "".join(f" · {c}" for c in counts)
-            self._refresh_sub_title()
-            if announce and counts:
-                self._write_status(f"OVOS: not quite {ch}: {', '.join(counts)}. Ctrl+P → 'OVOS: Release "
-                                   f"channel' shows what, and 'Set channel: {ch}…' fixes what it can.")
-        if then is not None:
-            then()
+    def _with_install_health(self, result, h, line: str) -> str:
+        """Keeps the health on the result, adds ' · 3 conflicts' etc to the
+        header, and returns the channel line with it."""
+        if h is None or result is None:
+            return line
+        from ovos_tui_client.setchannel import health_counts
+        ch = result.get("channel") or result.get("declared")
+        result["health"] = h
+        counts = health_counts(h)
+        if not counts:
+            return line
+        self._channel_short = self._channel_short.split(" · ")[0] + "".join(f" · {c}" for c in counts)
+        return (f"{line.rstrip('.')}, but not quite clean: {', '.join(counts)}. Ctrl+P → 'OVOS: Release "
+                f"channel' shows what, and 'Set channel: {ch}…' fixes what it can.")
 
     def _channel_startup_step_done(self) -> None:
         """The channel's part of startup is over: its line is written, or
