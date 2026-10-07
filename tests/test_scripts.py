@@ -881,3 +881,23 @@ def test_list_repo_tags_parses_git_ref_advertisement():
     assert op.call_count == 1
     assert op.call_args[0][0] == "https://github.com/OpenVoiceOS/ovos-skill-weather.git/info/refs?service=git-upload-pack"
     _scripts._TAGS_CACHE.clear()
+
+
+# --- a skill whose package names no repo (ovos-skill-ddg 0.6.0a2) ---------------
+
+def test_guess_repo_url_from_the_skill_id_and_the_package():
+    from ovos_tui_client.scripts import guess_repo_url
+    seen = []
+
+    def exists(url):
+        seen.append(url)
+        return url == "https://github.com/openvoiceos/ovos-skill-ddg"
+    assert guess_repo_url("ovos-skill-ddg.openvoiceos", ["ovos_skill_ddg"], exists) == \
+        "https://github.com/openvoiceos/ovos-skill-ddg"
+    assert seen == ["https://github.com/openvoiceos/ovos-skill-ddg"]
+
+
+def test_guess_repo_url_only_returns_a_repo_that_answers():
+    from ovos_tui_client.scripts import guess_repo_url
+    assert guess_repo_url("ovos-skill-gone.openvoiceos", ["ovos-skill-gone"], lambda url: False) is None
+    assert guess_repo_url("no-owner-suffix", ["x"], lambda url: True) is None

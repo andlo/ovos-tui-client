@@ -285,6 +285,27 @@ def find_repo_url(skill_id: str) -> Optional[str]:
             parsed = parse_github_repo(url)
             if parsed:
                 return f"https://github.com/{parsed[0]}/{parsed[1]}"
+    return guess_repo_url(skill_id, dists)
+
+
+def guess_repo_url(skill_id: str, names: Iterable[str],
+                   exists: Callable[[str], bool] = None) -> Optional[str]:
+    """For a skill whose package metadata names no repo (no Home-page or
+    Project-URL - ovos-skill-ddg 0.6.0a2 is one): the usual layout, the
+    owner from the skill id's suffix ('….openvoiceos' -> OpenVoiceOS on
+    GitHub, which ignores case) and the repo named like the package. Only
+    a repo that answers is returned."""
+    if "." not in (skill_id or ""):
+        return None
+    owner = skill_id.rsplit(".", 1)[1]
+    exists = exists or (lambda url: list_repo_tags(url) is not None)
+    for name in dict.fromkeys(list(names) + repo_dir_candidates(skill_id)):
+        name = re.sub(r"[_.]+", "-", str(name)).lower()
+        if not name:
+            continue
+        url = f"https://github.com/{owner}/{name}"
+        if exists(url):
+            return url
     return None
 
 

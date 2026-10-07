@@ -403,8 +403,13 @@ async def render(name, scene, out_dir: Path):
          patch("ovos_tui_client.app.find_skill_distribution",
                side_effect=lambda sid: (sid.split(".")[0], VERSIONS.get(sid, "1.0.0"))), \
          patch("ovos_tui_client.app.SCRIPTS_DIR", work / "scripts"), \
-         patch("ovos_tui_client.app.GOLDEN_CACHE_DIR", Path("~/.cache/ovos-tui-client/golden")):
+         patch("ovos_tui_client.app.GOLDEN_CACHE_DIR", Path("~/.cache/ovos-tui-client/golden")), \
+         patch("ovos_tui_client.partial.find", return_value=None):
+        # a scene that stops a run mid-way leaves a partial run (autosave);
+        # the next scene must neither be asked to resume it nor find one
+        # from an earlier scene, nor write to the real results folder
         app = OVOSTUIApp(log_dir_override=str(logs), lang="en-us", scripts_dir="~/.config/ovos-tui-client/scripts")
+        app.results_dir = work / "results"
         app.bus = _fake_bus(app)
         async with app.run_test(size=SIZE) as pilot:
             for inp in app.query(Input):              # a blinking cursor makes pictures flaky
