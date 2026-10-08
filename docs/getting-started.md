@@ -98,6 +98,7 @@ Almost everything besides typing lives in the command palette. Press
 | `pipeline` | The intent pipeline in the order OVOS evaluates it |
 | `log` | Log filters: sources, levels, skills |
 | `clear` | `Clear: Logs`, `Conversation`, `Activity`, `All` |
+| `copy`, `save` | `Copy: Logs` / `Conversation` / `Activity` to the clipboard, or `Save: … to file` (next to the results): everything the pane shows, also what scrolled past |
 | `refresh` | `Refresh: Skills and services` - pick up skills installed or removed since the TUI started |
 
 Results are written to the conversation pane rather than to pop-ups.

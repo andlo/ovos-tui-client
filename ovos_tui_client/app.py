@@ -53,6 +53,8 @@ import json
 import importlib.metadata
 import sys
 import tempfile
+import collections
+import io
 import time
 from collections import deque
 from pathlib import Path
@@ -86,6 +88,7 @@ from ovos_tui_client.about import (
     skill_about_markdown, tui_about_markdown,
 )
 from rich.markup import escape
+from rich.text import Text
 from ovos_tui_client.test_picker import TestPickerScreen
 from ovos_tui_client.results import RESULTS_DIR, markdown_meta, save_result, summary_parts
 from ovos_tui_client.channel import channel_markdown, summary as channel_summary
@@ -180,6 +183,54 @@ utterances: "- All", or "- Choose" to pick which) or "script" (your own, in
 ~/.config/ovos-tui-client/scripts/).
 Each step, its result and a final summary appear in the Conversation pane.
 """
+
+
+class TimedLog(RichLog):
+    """A RichLog that also remembers when each write happened and its
+    plain text, so 'Save:' / 'Copy:' can give the conversation and
+    activity with a time on each entry (the log view has OVOS's own),
+    and a long entry as one line rather than cut where the pane wraps."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.entries = collections.deque(maxlen=self.max_lines or None)
+
+    def write(self, content, *args, **kwargs):
+        self.entries.append((time.time(), _plain(content)))
+        return super().write(content, *args, **kwargs)
+
+    def clear(self):
+        self.entries.clear()
+        return super().clear()
+
+    def timed_text(self) -> str:
+        """'14:31:05.401 text' per entry; an entry's later lines are
+        indented under its text, so the times stay a column."""
+        out = []
+        for t, text in self.entries:
+            stamp = time.strftime("%H:%M:%S", time.localtime(t)) + f".{int(t * 1000) % 1000:03d}"
+            lines = text.splitlines() or [""]
+            out.append(f"{stamp} {lines[0]}".rstrip())
+            out.extend((" " * (len(stamp) + 1) + line).rstrip() for line in lines[1:])
+        return "\n".join(out)
+
+
+def _plain(content) -> str:
+    """The text a pane shows for what was written to it, without markup."""
+    if isinstance(content, Text):
+        return content.plain
+    if isinstance(content, str):
+        try:
+            return Text.from_markup(content).plain
+        except Exception:  # noqa: BLE001 - not valid markup: as written
+            return content
+    try:
+        from rich.console import Console
+        console = Console(width=120, color_system=None, record=True, file=io.StringIO())
+        console.print(content)
+        return console.export_text().rstrip("\n")
+    except Exception:  # noqa: BLE001
+        return str(content)
 
 
 class SkillFilterCommandProvider(Provider):
@@ -791,10 +842,10 @@ class OVOSTUIApp(App):
             logs_view.HELP = APP_HELP
             yield logs_view
         with Horizontal(id="middle-row"):
-            conversation = RichLog(id="conversation", wrap=True, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
+            conversation = TimedLog(id="conversation", wrap=True, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
             conversation.HELP = APP_HELP
             yield conversation
-            activity = RichLog(id="activity", wrap=True, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
+            activity = TimedLog(id="activity", wrap=True, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
             activity.HELP = APP_HELP
             yield activity
         utterance_input = Input(placeholder="Type what you'd say to OVOS...", id="utterance-input", select_on_focus=False)
@@ -2237,6 +2288,53 @@ class OVOSTUIApp(App):
             except NoMatches:
                 pass
 
+    # Copy / save a pane: the TUI takes the mouse, so a terminal can't
+    # select its text (unless Shift is held), and what scrolled past is out
+    # of reach anyway. Asked for in the OVOS Matrix room.
+    PANES = {"logs": ("#logs-view", "Logs"), "conversation": ("#conversation", "Conversation"),
+             "activity": ("#activity", "Activity")}
+
+    def pane_text(self, pane: str) -> str:
+        """What the pane shows, as plain text: the log view as filtered
+        (each line has OVOS's time), the conversation and activity with
+        the time each entry was written."""
+        try:
+            view = self.query_one(self.PANES[pane][0], RichLog)
+        except (NoMatches, KeyError):
+            return ""
+        if isinstance(view, TimedLog):
+            return view.timed_text()  # with the time of each entry
+        return "\n".join(strip.text.rstrip() for strip in view.lines).strip("\n")
+
+    def copy_pane(self, pane: str) -> None:
+        name = self.PANES[pane][1]
+        text = self.pane_text(pane)
+        if not text:
+            self._write_status(f"The {name} pane is empty: nothing to copy.")
+            return
+        try:
+            self.copy_to_clipboard(text)
+        except Exception:  # noqa: BLE001 - the clipboard is a convenience
+            pass
+        self._write_status(f"Copied the {name} pane ({len(text.splitlines())} lines) to the clipboard, if your "
+                           f"terminal allows it. If nothing arrives (GNOME Terminal, over ssh): Ctrl+P → "
+                           f"'Save: {name} to file'.")
+
+    def save_pane(self, pane: str) -> None:
+        name = self.PANES[pane][1]
+        text = self.pane_text(pane)
+        if not text:
+            self._write_status(f"The {name} pane is empty: nothing to save.")
+            return
+        path = Path(self.results_dir) / f"{time.strftime('%Y-%m-%d_%H%M%S')}_{pane}.txt"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text + "\n", encoding="utf-8")
+        except OSError as e:
+            self._write_status(f"Could not save the {name} pane: {e}", ok=False)
+            return
+        self._write_status(f"Saved the {name} pane ({len(text.splitlines())} lines) to {path}")
+
     # ----------------------------------------------------------------
     # About windows (#29, #15)
     # ----------------------------------------------------------------
@@ -2436,6 +2534,11 @@ class OVOSTUIApp(App):
         yield SystemCommand("Clear: Conversation", "", partial(self.clear_panes, "conversation"))
         yield SystemCommand("Clear: Activity", "", partial(self.clear_panes, "activity"))
         yield SystemCommand("Clear: All (keeps input history)", "", partial(self.clear_panes, "logs", "conversation", "activity"))
+        for pane, (_, name) in self.PANES.items():
+            yield SystemCommand(f"Copy: {name}", f"Everything the {name} pane shows, to the clipboard",
+                                partial(self.copy_pane, pane))
+            yield SystemCommand(f"Save: {name} to file", f"Everything the {name} pane shows, to a text file",
+                                partial(self.save_pane, pane))
         yield SystemCommand("Settings: Skill store report link", "The link template a skill store gives for test reports - used by 'Share'", self.set_submit_url)
         # #41: pick up skills installed/removed while the TUI is running
         yield SystemCommand("Refresh: Skills and services", "", self.refresh_all)

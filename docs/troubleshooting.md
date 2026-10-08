@@ -12,6 +12,28 @@ may only exist as container output - see
 or the systemd journal instead of a file. That's the install, not this
 tool.
 
+## Scrolling, selecting and copying text
+
+The TUI uses the mouse (to tick filters and press buttons), so the
+terminal's own selection doesn't work by default. Hold a key while
+dragging and the terminal selects as usual: **Shift** in most Linux
+terminals, Windows Terminal and PuTTY; **Fn** in macOS Terminal;
+**Option (⌥)** in iTerm2.
+
+Every pane scrolls back: the mouse wheel, or focus it (`F5` logs, `F6`
+conversation, `F7` activity) and use PgUp/PgDn, Home/End. While you're
+scrolled up, new lines don't pull you back down. Each pane keeps its
+last 5000 lines.
+
+For a whole pane, including what scrolled past: `Ctrl+P` →
+**`Copy: Logs`** (or `Conversation`, `Activity`) puts it on the
+clipboard, if the terminal lets programs do that (GNOME Terminal and
+many ssh setups don't). **`Save: Logs to file`** always works: the text
+lands next to the results, and the TUI says where. Each line carries
+its time (`14:31:05.401`): the log lines OVOS's own, the conversation
+and activity the moment the TUI wrote them, so the files can be lined
+up against each other.
+
 ## Tests
 
 **A step fails with "expected …, got ovos-common-query-pipeline…" or a
