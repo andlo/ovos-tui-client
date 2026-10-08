@@ -176,11 +176,38 @@ def test_registered_fallbacks_from_the_log():
     assert pr.fallback_skills(lines) == {"ovos-skill-ddg.openvoiceos", "ovos-skill-fallback-unknown.openvoiceos"}
 
 
+PRIORITIES = {"unknown.x": 100, "ddg.x": 90, "launcher.x": 4, "wolfie.x": 91}
+
+
 def test_last_resort_is_a_fallback_whose_golden_went_to_another_fallback():
     registered = {"unknown.x", "ddg.x"}
     taken = {"unknown.x": (7, 9), "ddg.x": (0, 3), "weather.x": (9, 9)}
     # weather.x isn't a fallback skill; ddg.x routes itself
-    assert pr.last_resort_fallbacks(registered, taken) == {"unknown.x"}
+    assert pr.last_resort_fallbacks(registered, taken, PRIORITIES.get) == {"unknown.x"}
+
+
+def test_last_resort_must_be_in_the_low_fallback_band():
+    """#83: application-launcher (priority 4) losing all 16 to spelling is
+    intent theft and stays shown; only the low band (> 90) is a last resort."""
+    registered = {"unknown.x", "ddg.x", "launcher.x", "wolfie.x", "nobody-knows.x"}
+    taken = {s: (9, 9) for s in registered}
+    got = pr.last_resort_fallbacks(registered, taken, PRIORITIES.get)
+    assert got == {"unknown.x", "wolfie.x"}          # 100 and 91; not 90, not 4, not unknown
+
+
+def test_priority_from_the_skills_code():
+    assert pr.priority_in_code("@fallback_handler(priority=100)\ndef handle(...)") == 100
+    assert pr.priority_in_code("self.register_fallback(self.handle_fallback, 91)") == 91
+    assert pr.priority_in_code("self.register_fallback(self.handle, priority=4)") == 4
+    assert pr.priority_in_code("@fallback_handler(priority=50)\n@fallback_handler(priority=95)") is None
+    assert pr.priority_in_code("class X(OVOSSkill): pass") is None
+
+
+def test_the_mycroft_conf_override_wins(monkeypatch):
+    monkeypatch.setattr(pr, "priority_override", lambda s: 95 if s == "ddg.x" else None)
+    monkeypatch.setattr(pr, "skill_source", lambda s: "@fallback_handler(priority=90)")
+    assert pr.fallback_priority("ddg.x") == 95
+    assert pr.fallback_priority("other.x") == 90
 
 
 def test_a_last_resort_fallback_is_graded_by_level_2():

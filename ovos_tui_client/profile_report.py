@@ -25,6 +25,7 @@ device's, with everything it has installed loaded, and say so.
 """
 import re
 import time
+from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 SCHEMA = "ovos-profile-report/1"
@@ -287,13 +288,78 @@ def fallback_skills(log_lines: Iterable[str]) -> set:
     return out
 
 
-def last_resort_fallbacks(registered: Iterable[str], taken: Dict[str, Tuple[int, int]]) -> set:
-    """Fallback skills whose golden utterances mostly went to something
-    else: a last resort ("I don't know") on this install, so level 3 can't
-    measure them. taken: {skill: (steps something else took, steps)}."""
+# OVOS's low fallback band (ovos-fallback-pipeline-plugin-low, after
+# everything else): a fallback above this priority is a last resort. ddg is
+# 90 (medium), wolfie 91 and fallback-unknown 100 (low).
+LOW_BAND_ABOVE = 90
+_PRIORITY_IN_CODE = re.compile(r"fallback_handler\(\s*priority\s*=\s*(\d+)"
+                               r"|register_fallback\([^,()]+,\s*(?:priority\s*=\s*)?(\d+)")
+
+
+def priority_override(skill_id: str) -> Optional[int]:
+    """mycroft.conf skills.fallbacks.fallback_priorities: ovos-core uses it
+    before the skill's own value."""
+    try:
+        from ovos_config import Configuration
+        overrides = ((Configuration().get("skills") or {}).get("fallbacks") or {}).get("fallback_priorities") or {}
+        return int(overrides[skill_id]) if skill_id in overrides else None
+    except Exception:  # noqa: BLE001 - no config: no override
+        return None
+
+
+def priority_in_code(source: str) -> Optional[int]:
+    """The priority a skill's code registers its fallback with
+    (@fallback_handler(priority=N), register_fallback(handler, N)). None
+    if it isn't there, or if it registers several with different ones."""
+    found = {int(a or b) for a, b in _PRIORITY_IN_CODE.findall(source or "")}
+    return found.pop() if len(found) == 1 else None
+
+
+def skill_source(skill_id: str) -> str:
+    """The Python source of a skill's installed package."""
+    import importlib.metadata
+    from ovos_tui_client.skill_examples import find_skill_distribution
+    dist = find_skill_distribution(skill_id)
+    if not dist:
+        return ""
+    try:
+        files = importlib.metadata.files(dist[0]) or []
+    except Exception:  # noqa: BLE001
+        return ""
+    parts = []
+    for f in files:
+        if str(f).endswith(".py") and "test" not in str(f).lower():
+            try:
+                parts.append(Path(f.locate()).read_text(errors="replace"))
+            except OSError:
+                continue
+    return "\n".join(parts)
+
+
+def fallback_priority(skill_id: str) -> Optional[int]:
+    """A fallback skill's priority on this install, as ovos-core decides
+    it: the mycroft.conf override, else the skill's own. None if unknown."""
+    override = priority_override(skill_id)
+    return override if override is not None else priority_in_code(skill_source(skill_id))
+
+
+def last_resort_fallbacks(registered: Iterable[str], taken: Dict[str, Tuple[int, int]],
+                          priority_of: Callable[[str], Optional[int]] = None) -> set:
+    """Fallback skills in the low band (priority above 90) whose golden
+    utterances mostly went to something else: a last resort ("I don't
+    know") on this install, so level 3 can't measure them. A higher
+    fallback whose sentences are taken is intent theft and stays shown;
+    an unknown priority isn't marked. taken: {skill: (steps something else
+    took, steps)}. The same rule as the store's (andlo/ovos-klondike-mercantile#76)."""
     registered = set(registered)
-    return {s for s, (by_fallback, counted) in taken.items()
-            if s in registered and counted and by_fallback * 2 >= counted}
+    priority_of = priority_of or fallback_priority
+    out = set()
+    for s, (by_other, counted) in taken.items():
+        if s in registered and counted and by_other * 2 >= counted:
+            prio = priority_of(s)
+            if prio is not None and prio > LOW_BAND_ABOVE:
+                out.add(s)
+    return out
 
 
 def build_report(channel: str, profiles: List[Dict], *, loaded: Dict[str, Optional[bool]],
