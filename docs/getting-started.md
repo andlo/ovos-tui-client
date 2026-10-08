@@ -50,6 +50,10 @@ From the top:
    narrow down. With nothing ticked in a row, everything in that row
    shows. The free-text filter and the `Skills` filter work the same
    way. Scroll up to read, and new lines won't pull you back down.
+   Each line shows its source and the time it was logged, to the
+   millisecond, in columns: `[skills   ] 14:31:05.401 ovos_core…`. A
+   traceback's continuation lines leave the time blank, so the text
+   still lines up.
 2. **Conversation** (left). `You:` in green, `OVOS:` in purple, and grey
    status lines for what the tool itself does (startup, service
    restarts, skill changes).
