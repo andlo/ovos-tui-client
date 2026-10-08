@@ -174,14 +174,29 @@ def line_matches_filter(line: str, filter_text: str) -> bool:
 
 # OVOS's own log lines look like:
 #   2024-12-07 07:51:04.662 - bus - ovos_messagebus.__main__:main:46 - INFO - Starting...
-# i.e. TIMESTAMP - COMPONENT - MODULE:FUNC:LINE - LEVEL - MESSAGE. Both
-# the timestamp and the component name duplicate information the TUI
-# already shows itself (live scroll position, and the [source] prefix
-# format_log_line() adds) - stripping them here declutters the display
-# without losing anything.
+# i.e. TIMESTAMP - COMPONENT - MODULE:FUNC:LINE - LEVEL - MESSAGE. The
+# component duplicates the [source] prefix format_log_line() adds, and the
+# date is the same all day, so the prefix is stripped here; the time of
+# day comes back as its own column (log_time()), for timing.
 _LOG_PREFIX_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\s*-\s*[^-]+\s*-\s*"
 )
+
+
+_LOG_TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T](\d{2}:\d{2}:\d{2})(?:[.,](\d+))?")
+LOG_TIME_WIDTH = len("14:31:05.401")
+
+
+def log_time(line: str) -> str:
+    """The time of day an OVOS log line was written, always the same
+    width ('14:31:05.401'), so it lines up as a column in the log view;
+    blanks of that width for a line without one (a traceback's
+    continuation lines), so the text after it still lines up."""
+    m = _LOG_TIME_RE.match(line or "")
+    if not m:
+        return " " * LOG_TIME_WIDTH
+    frac = (m.group(2) or "").ljust(3, "0")[:3]
+    return f"{m.group(1)}.{frac}"
 
 
 def strip_log_prefix(line: str) -> str:

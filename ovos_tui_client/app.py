@@ -68,7 +68,7 @@ from textual.widgets import Header, Footer, Input, RichLog, Checkbox, Label, Lis
 
 from ovos_tui_client.bus import OVOSBusConnection, TUI_CONTEXT_KEY, describe_speaker
 from ovos_tui_client.logs import (
-    find_log_dir, discover_log_sources, line_matches_filter, strip_log_prefix,
+    find_log_dir, discover_log_sources, line_matches_filter, strip_log_prefix, log_time,
     is_stdout_only_logging,
     extract_log_level, extract_skill_id, KNOWN_LOG_NAMES, KNOWN_LOG_LEVELS,
 )
@@ -141,13 +141,16 @@ REDIRECT_TO_INPUT_IDS = {"logs-view", "conversation", "activity"}
 def format_log_line(source_name: str, line: str) -> str:
     """Colors a log line by its source, bolding it if it contains
     'ERROR'. Strips OVOS's own 'TIMESTAMP - COMPONENT - ' prefix first
-    (both redundant here), pads the source tag to a fixed width so
-    message text starts at the same column regardless of source name
-    length."""
+    and shows the time of day as its own fixed-width column instead
+    ('14:31:05.401', blank for a line without one), and pads the source
+    tag to a fixed width, so message text starts at the same column
+    whatever the source or the line."""
     clean_line = strip_log_prefix(line)
     color = LOG_SOURCE_COLORS.get(source_name, DEFAULT_LOG_COLOR)
     padded_name = source_name.ljust(SOURCE_TAG_WIDTH)
-    text = f"[{color}]\\[{padded_name}][/{color}] {clean_line}"
+    # the time of day as a fixed-width column after the source, so lines
+    # line up whatever their source or whether they carry a time
+    text = f"[{color}]\\[{padded_name}][/{color}] [dim]{log_time(line)}[/dim] {clean_line}"
     if "ERROR" in clean_line:
         text = f"[bold]{text}[/bold]"
     return text

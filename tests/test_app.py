@@ -263,17 +263,17 @@ async def test_is_local_false_for_a_remote_host():
 
 def test_format_log_line_colors_by_known_source():
     line = format_log_line("skills", "loaded ovos-skill-grimm-tales")
-    assert line == "[green]\\[skills   ][/green] loaded ovos-skill-grimm-tales"
+    assert line == "[green]\\[skills   ][/green] [dim]            [/dim] loaded ovos-skill-grimm-tales"
 
 
 def test_format_log_line_falls_back_to_default_color_for_unknown_source():
     line = format_log_line("mystery-service", "hello")
-    assert line == "[white]\\[mystery-service][/white] hello"
+    assert line == "[white]\\[mystery-service][/white] [dim]            [/dim] hello"
 
 
 def test_format_log_line_bolds_error_lines():
     line = format_log_line("skills", "ERROR: could not load skill")
-    assert line == "[bold][green]\\[skills   ][/green] ERROR: could not load skill[/bold]"
+    assert line == "[bold][green]\\[skills   ][/green] [dim]            [/dim] ERROR: could not load skill[/bold]"
 
 
 def test_format_log_line_does_not_bold_normal_lines():
@@ -294,7 +294,27 @@ def test_format_log_line_strips_timestamp_and_component_prefix():
     raw = "2026-07-22 21:13:03.456 - skills - some_module:func:12 - INFO - handling intent"
     line = format_log_line("skills", raw)
     assert "2026-07-22" not in line
-    assert line == "[green]\\[skills   ][/green] some_module:func:12 - INFO - handling intent"
+    assert line == "[green]\\[skills   ][/green] [dim]21:13:03.456[/dim] some_module:func:12 - INFO - handling intent"
+
+
+def test_log_time_is_a_fixed_width_column():
+    """goldyfruit asked for the time, for timing; it must stand in a column,
+    not jump about: always HH:MM:SS.mmm, blanks of that width otherwise."""
+    from ovos_tui_client.logs import LOG_TIME_WIDTH, log_time
+    assert log_time("2026-10-08 14:31:05.401 - skills - m:f:1 - INFO - x") == "14:31:05.401"
+    assert log_time("2026-10-08 14:31:05.4 - skills - x") == "14:31:05.400"         # padded
+    assert log_time("2026-10-08 14:31:05,401234 - skills - x") == "14:31:05.401"    # cut
+    assert log_time("2026-10-08T14:31:05 - skills - x") == "14:31:05.000"
+    assert log_time("    raise KeyError('tz')") == " " * LOG_TIME_WIDTH         # a traceback line
+    assert LOG_TIME_WIDTH == 12
+
+
+def test_message_text_starts_in_the_same_column_with_or_without_a_time():
+    import re
+    with_time = format_log_line("skills", "2026-10-08 14:31:05.401 - skills - m:f:1 - INFO - x")
+    without = format_log_line("audio", "  File \"x.py\", line 3")
+    plain = lambda t: re.sub(r"\[/?[a-z ]+\]", "", t).replace("\\[", "[")
+    assert plain(with_time).index("m:f:1") == plain(without).index("  File")
 
 
 # --- conversation pane: full-line color, not just the label ---
