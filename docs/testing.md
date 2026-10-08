@@ -327,12 +327,19 @@ The labels follow a store's rules: `✓ loads`, `✓ 177/184 golden`,
 `✓ loads · 7/10 golden` (below 80 %), `· doesn't stop` (a skill that
 kept talking after stop), `✗ doesn't load`, `not installed here`.
 
-`✓ loads · last-resort fallback` is a fallback skill whose golden
+`✓ loads · last-resort fallback` is a fallback skill in OVOS's low
+fallback band (priority above 90, after everything else) whose golden
 utterances went to other skills and fallbacks first, like
-fallback-unknown ("I don't know"): on a real install that is what should
-happen, so those utterances can't measure it, and it is graded by level
-2. One that is broken (its handler fails, or it says nothing) isn't
-marked so: there the failures point at the skill itself.
+fallback-unknown ("I don't know", priority 100): on a real install that
+is what should happen, so those utterances can't measure it, and it is
+graded by level 2. The priority is the one ovos-core uses: a
+`skills.fallbacks.fallback_priorities` override in mycroft.conf, else
+the skill's own `@fallback_handler(priority=…)`. A higher fallback
+whose sentences are taken (application-launcher, priority 4) isn't
+marked: that is intent theft and stays shown as `0/16 golden`. Neither
+is a fallback whose priority isn't known, nor one that is broken (its
+handler fails, or it says nothing), where the failures point at the
+skill itself.
 
 The JSON is `ovos-profile-report/1`, the format a store's own profile report
 uses, keyed by skill id and plugin id, so this device's report compares
