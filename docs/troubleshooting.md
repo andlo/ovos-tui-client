@@ -12,6 +12,20 @@ may only exist as container output - see
 or the systemd journal instead of a file. That's the install, not this
 tool.
 
+## Selecting and copying text
+
+The TUI uses the mouse (to tick filters and press buttons), so the
+terminal's own selection doesn't work by default. Hold a key while
+dragging and the terminal selects as usual: **Shift** in most Linux
+terminals, Windows Terminal and PuTTY; **Fn** in macOS Terminal;
+**Option (⌥)** in iTerm2.
+
+For a whole pane, including what scrolled past: `Ctrl+P` →
+**`Copy: Logs`** (or `Conversation`, `Activity`) puts it on the
+clipboard, if the terminal lets programs do that (GNOME Terminal and
+many ssh setups don't). **`Save: Logs to file`** always works: the text
+lands next to the results, and the TUI says where.
+
 ## Tests
 
 **A step fails with "expected …, got ovos-common-query-pipeline…" or a

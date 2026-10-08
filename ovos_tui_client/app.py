@@ -2237,6 +2237,49 @@ class OVOSTUIApp(App):
             except NoMatches:
                 pass
 
+    # Copy / save a pane: the TUI takes the mouse, so a terminal can't
+    # select its text (unless Shift is held), and what scrolled past is out
+    # of reach anyway. Asked for in the OVOS Matrix room.
+    PANES = {"logs": ("#logs-view", "Logs"), "conversation": ("#conversation", "Conversation"),
+             "activity": ("#activity", "Activity")}
+
+    def pane_text(self, pane: str) -> str:
+        """What the pane shows, as plain text (the log view as filtered)."""
+        try:
+            view = self.query_one(self.PANES[pane][0], RichLog)
+        except (NoMatches, KeyError):
+            return ""
+        return "\n".join(strip.text.rstrip() for strip in view.lines).strip("\n")
+
+    def copy_pane(self, pane: str) -> None:
+        name = self.PANES[pane][1]
+        text = self.pane_text(pane)
+        if not text:
+            self._write_status(f"The {name} pane is empty: nothing to copy.")
+            return
+        try:
+            self.copy_to_clipboard(text)
+        except Exception:  # noqa: BLE001 - the clipboard is a convenience
+            pass
+        self._write_status(f"Copied the {name} pane ({len(text.splitlines())} lines) to the clipboard, if your "
+                           f"terminal allows it. If nothing arrives (GNOME Terminal, over ssh): Ctrl+P → "
+                           f"'Save: {name} to file'.")
+
+    def save_pane(self, pane: str) -> None:
+        name = self.PANES[pane][1]
+        text = self.pane_text(pane)
+        if not text:
+            self._write_status(f"The {name} pane is empty: nothing to save.")
+            return
+        path = Path(self.results_dir) / f"{time.strftime('%Y-%m-%d_%H%M%S')}_{pane}.txt"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text + "\n", encoding="utf-8")
+        except OSError as e:
+            self._write_status(f"Could not save the {name} pane: {e}", ok=False)
+            return
+        self._write_status(f"Saved the {name} pane ({len(text.splitlines())} lines) to {path}")
+
     # ----------------------------------------------------------------
     # About windows (#29, #15)
     # ----------------------------------------------------------------
@@ -2436,6 +2479,11 @@ class OVOSTUIApp(App):
         yield SystemCommand("Clear: Conversation", "", partial(self.clear_panes, "conversation"))
         yield SystemCommand("Clear: Activity", "", partial(self.clear_panes, "activity"))
         yield SystemCommand("Clear: All (keeps input history)", "", partial(self.clear_panes, "logs", "conversation", "activity"))
+        for pane, (_, name) in self.PANES.items():
+            yield SystemCommand(f"Copy: {name}", f"Everything the {name} pane shows, to the clipboard",
+                                partial(self.copy_pane, pane))
+            yield SystemCommand(f"Save: {name} to file", f"Everything the {name} pane shows, to a text file",
+                                partial(self.save_pane, pane))
         yield SystemCommand("Settings: Skill store report link", "The link template a skill store gives for test reports - used by 'Share'", self.set_submit_url)
         # #41: pick up skills installed/removed while the TUI is running
         yield SystemCommand("Refresh: Skills and services", "", self.refresh_all)
