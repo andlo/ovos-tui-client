@@ -53,6 +53,8 @@ import json
 import importlib.metadata
 import sys
 import tempfile
+import collections
+import io
 import time
 from collections import deque
 from pathlib import Path
@@ -86,6 +88,7 @@ from ovos_tui_client.about import (
     skill_about_markdown, tui_about_markdown,
 )
 from rich.markup import escape
+from rich.text import Text
 from ovos_tui_client.test_picker import TestPickerScreen
 from ovos_tui_client.results import RESULTS_DIR, markdown_meta, save_result, summary_parts
 from ovos_tui_client.channel import channel_markdown, summary as channel_summary
@@ -180,6 +183,54 @@ utterances: "- All", or "- Choose" to pick which) or "script" (your own, in
 ~/.config/ovos-tui-client/scripts/).
 Each step, its result and a final summary appear in the Conversation pane.
 """
+
+
+class TimedLog(RichLog):
+    """A RichLog that also remembers when each write happened and its
+    plain text, so 'Save:' / 'Copy:' can give the conversation and
+    activity with a time on each entry (the log view has OVOS's own),
+    and a long entry as one line rather than cut where the pane wraps."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.entries = collections.deque(maxlen=self.max_lines or None)
+
+    def write(self, content, *args, **kwargs):
+        self.entries.append((time.time(), _plain(content)))
+        return super().write(content, *args, **kwargs)
+
+    def clear(self):
+        self.entries.clear()
+        return super().clear()
+
+    def timed_text(self) -> str:
+        """'14:31:05.401 text' per entry; an entry's later lines are
+        indented under its text, so the times stay a column."""
+        out = []
+        for t, text in self.entries:
+            stamp = time.strftime("%H:%M:%S", time.localtime(t)) + f".{int(t * 1000) % 1000:03d}"
+            lines = text.splitlines() or [""]
+            out.append(f"{stamp} {lines[0]}".rstrip())
+            out.extend((" " * (len(stamp) + 1) + line).rstrip() for line in lines[1:])
+        return "\n".join(out)
+
+
+def _plain(content) -> str:
+    """The text a pane shows for what was written to it, without markup."""
+    if isinstance(content, Text):
+        return content.plain
+    if isinstance(content, str):
+        try:
+            return Text.from_markup(content).plain
+        except Exception:  # noqa: BLE001 - not valid markup: as written
+            return content
+    try:
+        from rich.console import Console
+        console = Console(width=120, color_system=None, record=True, file=io.StringIO())
+        console.print(content)
+        return console.export_text().rstrip("\n")
+    except Exception:  # noqa: BLE001
+        return str(content)
 
 
 class SkillFilterCommandProvider(Provider):
@@ -791,10 +842,10 @@ class OVOSTUIApp(App):
             logs_view.HELP = APP_HELP
             yield logs_view
         with Horizontal(id="middle-row"):
-            conversation = RichLog(id="conversation", wrap=True, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
+            conversation = TimedLog(id="conversation", wrap=True, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
             conversation.HELP = APP_HELP
             yield conversation
-            activity = RichLog(id="activity", wrap=True, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
+            activity = TimedLog(id="activity", wrap=True, markup=True, auto_scroll=True, max_lines=MAX_PANE_LINES)
             activity.HELP = APP_HELP
             yield activity
         utterance_input = Input(placeholder="Type what you'd say to OVOS...", id="utterance-input", select_on_focus=False)
@@ -2244,11 +2295,15 @@ class OVOSTUIApp(App):
              "activity": ("#activity", "Activity")}
 
     def pane_text(self, pane: str) -> str:
-        """What the pane shows, as plain text (the log view as filtered)."""
+        """What the pane shows, as plain text: the log view as filtered
+        (each line has OVOS's time), the conversation and activity with
+        the time each entry was written."""
         try:
             view = self.query_one(self.PANES[pane][0], RichLog)
         except (NoMatches, KeyError):
             return ""
+        if isinstance(view, TimedLog):
+            return view.timed_text()  # with the time of each entry
         return "\n".join(strip.text.rstrip() for strip in view.lines).strip("\n")
 
     def copy_pane(self, pane: str) -> None:

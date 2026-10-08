@@ -1,5 +1,6 @@
 """Copy / save a pane: the TUI takes the mouse, so the terminal can't
 select its text, and what scrolled past is out of reach."""
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -29,8 +30,28 @@ async def test_copy_a_pane_to_the_clipboard(tmp_path):
         await pilot.pause()
         app.copy_to_clipboard = MagicMock()
         app.copy_pane("activity")
-        app.copy_to_clipboard.assert_called_once_with(
-            "→ heard: what time is it\n▶ ovos-skill-date-time.openvoiceos:what_time_is_it")
+        copied = app.copy_to_clipboard.call_args[0][0].splitlines()
+    # each entry with the time it was written, as a column
+    assert len(copied) == 2
+    assert re.fullmatch(r"\d\d:\d\d:\d\d\.\d{3} → heard: what time is it", copied[0])
+    assert re.fullmatch(r"\d\d:\d\d:\d\d\.\d{3} ▶ ovos-skill-date-time.openvoiceos:what_time_is_it", copied[1])
+
+
+@pytest.mark.asyncio
+async def test_a_long_entry_is_one_line_and_later_lines_stay_under_the_text(tmp_path):
+    app = _app(tmp_path)
+    async with app.run_test(size=(60, 30)) as pilot:
+        await app.workers.wait_for_complete()
+        conv = app.query_one("#conversation", RichLog)
+        conv.clear()
+        conv.write("[purple]OVOS:[/purple] " + "word " * 40)   # wraps in a 60-wide pane
+        conv.write("Summary\n  3 passed")
+        await pilot.pause()
+        text = app.pane_text("conversation").splitlines()
+    assert len(text) == 3
+    assert text[0].endswith("OVOS: " + ("word " * 40).strip())
+    assert re.fullmatch(r"\d\d:\d\d:\d\d\.\d{3} Summary", text[1])
+    assert text[2] == " " * 13 + "  3 passed"
 
 
 @pytest.mark.asyncio
