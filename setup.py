@@ -48,7 +48,7 @@ setup(
     },
     author="Andreas Lorensen",
     author_email="andlo@outlook.dk",
-    license="GPL-3.0-or-later",
+    license="Apache-2.0",
     python_requires=">=3.9",
     packages=find_packages(include=["ovos_tui_client", "ovos_tui_client.*"]),
     install_requires=get_requirements("requirements.txt"),
